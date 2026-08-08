@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec npx \"@playwright/mcp@0.0.41\" --isolated --storage-state=\"${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/.claude/testbed-storage-state.app.json\""
+      ]
+    }
+  }
+}

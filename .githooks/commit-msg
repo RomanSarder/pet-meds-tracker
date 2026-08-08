@@ -1,0 +1,31 @@
+#!/bin/sh
+# Enforce two rules on every commit message in this repo:
+#   1. no Co-Authored-By (or any co-authorship) trailer
+#   2. exactly one line
+#
+# Enable in a fresh clone with:  git config core.hooksPath .githooks
+# `git commit --no-verify` bypasses this. That is a floor against accident,
+# not a lock against intent.
+
+msg_file="$1"
+
+# Drop comment lines and blank lines; what remains is the real message.
+body=$(grep -v '^#' "$msg_file" | grep -v '^[[:space:]]*$')
+
+# Empty message: let git's own empty-message check report it.
+if [ -z "$body" ]; then
+	exit 0
+fi
+
+if printf '%s\n' "$body" | grep -qi 'co-authored-by'; then
+	echo "commit-msg: rejected - Co-Authored-By trailer is not allowed." >&2
+	exit 1
+fi
+
+line_count=$(printf '%s\n' "$body" | wc -l | tr -d '[:space:]')
+if [ "$line_count" -ne 1 ]; then
+	echo "commit-msg: rejected - message must be exactly one line (got $line_count)." >&2
+	exit 1
+fi
+
+exit 0
