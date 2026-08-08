@@ -403,16 +403,8 @@ describe("course lifecycle: resume and stop", () => {
       expect(updated?.status).toBe("stopped");
     });
     expect(spy).toHaveBeenCalledWith(COURSE_CLOVER_METACAM.id, "stopped");
-    // NOTE: the brief (B-course-form.md, "COURSE LIFECYCLE") states that
-    // `stopped` setting `endDate = today` happens inside the repository, so
-    // the call site above deliberately passes only {id, status} and this
-    // test does not set endDate itself. But `setCourseStatus` in
-    // `frontend/src/data/memoryRepo.ts` (frozen, outside this unit's
-    // exclusive surface) only ever assigns `resumedAt` on a paused->active
-    // transition — it never touches `endDate` on any transition. That half
-    // of the contract cannot be observed here; the fixture's original
-    // endDate ("2026-08-12") is left untouched by Stop. Reported as a
-    // pre-existing gap in memoryRepo.ts rather than worked around in the UI.
+    const stopped = await repo.getCourse(COURSE_CLOVER_METACAM.id);
+    expect(stopped?.endDate).toBe(TODAY);
   });
 });
 
