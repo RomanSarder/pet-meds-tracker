@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { cloneFixtures, fixtures } from "./fixtures";
+import { occurrenceKeyFor } from "./keys";
 
 describe("fixtures", () => {
   it("resolves every course's petId and medicationId", () => {
@@ -68,8 +69,31 @@ describe("fixtures", () => {
 
   it("gives every DoseEvent an occurrenceKey matching `${courseId}|${scheduledFor ?? \"-\"}`", () => {
     for (const event of fixtures.doseEvents) {
-      const expected = `${event.courseId}|${event.scheduledFor ?? "-"}`;
-      expect(event.occurrenceKey).toBe(expected);
+      expect(event.occurrenceKey).toBe(occurrenceKeyFor(event.courseId, event.scheduledFor));
+    }
+
+    // The loop above compares fixtures.ts against the very helper it is built
+    // with, so it can't catch a bug shared by both sides (e.g. occurrenceKeyFor
+    // itself drifting from the documented `${courseId}|${scheduledFor ?? "-"}`
+    // format). These two hard-coded literals are an independent oracle that
+    // pins the format directly, not through the helper, for one row with a
+    // scheduledFor and the one row without.
+    const scheduled = fixtures.doseEvents.find(
+      (e) => e.id === "d0000000-0000-4000-8000-000000000001",
+    );
+    expect(scheduled?.occurrenceKey).toBe(
+      "c0000000-0000-4000-8000-000000000001|2026-08-06T07:00:00.000Z",
+    );
+    const unscheduled = fixtures.doseEvents.find(
+      (e) => e.id === "d0000000-0000-4000-8000-000000000004",
+    );
+    expect(unscheduled?.occurrenceKey).toBe("c0000000-0000-4000-8000-000000000002|-");
+  });
+
+  it("pins fixtures.doseEvents to the single occurrenceKeyFor construction site", () => {
+    expect(fixtures.doseEvents.length).toBeGreaterThan(0);
+    for (const event of fixtures.doseEvents) {
+      expect(event.occurrenceKey).toBe(occurrenceKeyFor(event.courseId, event.scheduledFor));
     }
   });
 
