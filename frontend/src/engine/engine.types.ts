@@ -15,7 +15,7 @@ export type DoseState =
   | "notStarted";
 
 export interface Occurrence {
-  /** `${courseId}|${scheduledFor ?? "interval"}`. */
+  /** `${courseId}|${scheduledFor ?? "-"}` — built by `occurrenceKeyFor` in `@/domain`. */
   key: string;
   courseId: string;
   petId: string;
