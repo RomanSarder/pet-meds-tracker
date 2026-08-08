@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
-import { cloneFixtures, FIXTURE_NOW, fixtures, localDayKey, type DoseEvent } from "@/domain";
+import {
+  cloneFixtures,
+  FIXTURE_NOW,
+  fixtures,
+  localDayKey,
+  occurrenceKeyFor,
+  type Course,
+  type DoseEvent,
+} from "@/domain";
 import { courseProgress, describeSchedule } from "@/engine";
 import { DoseRow } from "@/components/ds";
 import { ageLabel } from "./age";
@@ -59,17 +67,138 @@ describe("PetDetailView", () => {
     renderWithProviders(<PetDetailView petId={pet.id} />);
 
     // Clover has one active fixedTimes course with two configured times
-    // (08:00, 20:00) and one active fromLastDose course (which the stub
-    // `getOccurrences` never generates occurrences for) — two occurrences today.
+    // (08:00, 20:00, "due" and "later" respectively at FIXTURE_NOW) and one
+    // active fromLastDose course whose next due falls on a different day —
+    // two occurrences today, neither with a matching DoseEvent.
+    const scheduleLabel = await screen.findByText("Schedule");
     expect(await screen.findByText("2 today")).toBeInTheDocument();
-    const giveButtons = screen.getAllByText("Give");
-    expect(giveButtons).toHaveLength(2);
-    // The Courses section below wraps each card `role="button"` for
-    // navigation; the Schedule rows must not be nested inside one of those —
-    // proof that this page added no click handler of its own to a row.
-    giveButtons.forEach((btn) => {
-      expect(btn.closest('[role="button"]')).toBeNull();
-    });
+    const scheduleCard = scheduleLabel.closest("div")!.nextElementSibling as HTMLElement;
+
+    // SPEC §5.3: the Schedule block is read-only — no "Give" text, and no
+    // interactive control of any kind, even though both occurrences here are
+    // actionable states (due/later) that the DS `DoseRow` would otherwise
+    // render with a clickable "Give" button.
+    expect(within(scheduleCard).queryByText("Give")).not.toBeInTheDocument();
+    expect(scheduleCard.querySelector("button")).toBeNull();
+    expect(scheduleCard.querySelector("[role='button']")).toBeNull();
+
+    // "due" and "later" show their due time as plain text (SPEC §4).
+    expect(within(scheduleCard).getByText("08:00")).toBeInTheDocument();
+    expect(within(scheduleCard).getByText("20:00")).toBeInTheDocument();
+  });
+
+  it("renders every dose state in the Schedule block as read-only text, with no interactive control anywhere in it", async () => {
+    // Builds one occurrence of each of the six states Pet detail can show
+    // today (given, skipped, overdue, due, later, notStarted) on top of
+    // Clover's existing fixture courses, so a single render proves the whole
+    // block — not just one state at a time — never contains a button. A
+    // text-only assertion would not have caught the original defect (the DS
+    // `DoseRow` always renders a real `<button>`, regardless of its label),
+    // so this test also asserts on `querySelectorAll("button")` directly.
+    const custom = cloneFixtures();
+    const pet = custom.pets.find((p) => p.name === "Clover")!;
+    const medicationId = custom.medications[0].id;
+
+    function course(id: string, schedule: Course["schedule"]): Course {
+      return {
+        id,
+        petId: pet.id,
+        medicationId,
+        doseAmount: 1,
+        doseUnit: "ml",
+        instructions: null,
+        schedule,
+        startDate: "2026-08-01",
+        endDate: null,
+        status: "active",
+        notes: null,
+        resumedAt: null,
+        createdAt: "2026-08-01T08:00:00.000Z",
+        updatedAt: "2026-08-01T08:00:00.000Z",
+        deletedAt: null,
+      };
+    }
+
+    const givenCourseId = "test-course-given";
+    const skippedCourseId = "test-course-skipped";
+    const overdueCourseId = "test-course-overdue";
+    const notStartedCourseId = "test-course-not-started";
+
+    // FIXTURE_NOW is 2026-08-08T07:00:00.000Z = 08:00 BST.
+    const givenScheduledFor = "2026-08-08T05:00:00.000Z"; // 06:00 BST
+    const skippedScheduledFor = "2026-08-08T05:30:00.000Z"; // 06:30 BST
+
+    custom.courses = [
+      // Clover's existing Metacam course (08:00/20:00 fixedTimes, no event
+      // today) already supplies "due" and "later" — reused as-is.
+      ...custom.courses,
+      course(givenCourseId, { kind: "fixedTimes", times: ["06:00"] }),
+      course(skippedCourseId, { kind: "fixedTimes", times: ["06:30"] }),
+      // 04:00 BST: more than the 60-minute fixedTimes grace window before
+      // FIXTURE_NOW (08:00 BST), with no DoseEvent — "overdue".
+      course(overdueCourseId, { kind: "fixedTimes", times: ["04:00"] }),
+      course(notStartedCourseId, { kind: "fromLastDose", intervalHours: 8 }),
+    ];
+
+    function event(courseId: string, scheduledFor: string, status: DoseEvent["status"]): DoseEvent {
+      return {
+        id: `test-event-${courseId}`,
+        courseId,
+        scheduledFor,
+        status,
+        loggedAt: scheduledFor,
+        givenAt: scheduledFor,
+        amount: 1,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(courseId, scheduledFor),
+        supersedesId: null,
+        createdAt: scheduledFor,
+        updatedAt: scheduledFor,
+        deletedAt: null,
+      };
+    }
+
+    custom.doseEvents = [
+      ...custom.doseEvents,
+      event(givenCourseId, givenScheduledFor, "given"),
+      event(skippedCourseId, skippedScheduledFor, "skipped"),
+    ];
+
+    const repo = createMemoryRepo(custom);
+    renderWithProviders(<PetDetailView petId={pet.id} />, { repo });
+
+    const scheduleLabel = await screen.findByText("Schedule");
+    const scheduleCard = scheduleLabel.closest("div")!.nextElementSibling as HTMLElement;
+    await waitFor(() => expect(within(scheduleCard).getByText("Not started")).toBeInTheDocument());
+
+    // Not a single interactive control anywhere in the block, across every state.
+    expect(scheduleCard.querySelectorAll("button")).toHaveLength(0);
+    expect(scheduleCard.querySelectorAll("[role='button']")).toHaveLength(0);
+    expect(within(scheduleCard).queryByText("Give")).not.toBeInTheDocument();
+
+    // given: 55% opacity, strikethrough, its time as text.
+    const givenTime = within(scheduleCard).getByText("06:00");
+    const givenRow = givenTime.closest("div")!.parentElement as HTMLElement;
+    expect(givenRow.style.opacity).toBe("0.55");
+    const givenName = within(givenRow).getByText(/Metacam/);
+    expect(givenName.style.textDecoration).toBe("line-through");
+
+    // skipped: 55% opacity, "Skipped" in place of the time, no strikethrough.
+    const skippedText = within(scheduleCard).getByText("Skipped");
+    const skippedRow = skippedText.closest("div")!.parentElement as HTMLElement;
+    expect(skippedRow.style.opacity).toBe("0.55");
+    const skippedName = within(skippedRow).getByText(/Metacam/);
+    expect(skippedName.style.textDecoration).not.toBe("line-through");
+
+    // overdue: carries the literal word "Overdue" — not colour alone (SPEC §9).
+    expect(within(scheduleCard).getByText("Overdue")).toBeInTheDocument();
+
+    // due / later: their due time as plain text.
+    expect(within(scheduleCard).getByText("08:00")).toBeInTheDocument();
+    expect(within(scheduleCard).getByText("20:00")).toBeInTheDocument();
+
+    // notStarted: literal "Not started" text.
+    expect(within(scheduleCard).getByText("Not started")).toBeInTheDocument();
   });
 
   it("shows a never-started fromLastDose course as read-only 'Not started' text, with no button of any label", async () => {

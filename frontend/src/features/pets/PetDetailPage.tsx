@@ -4,7 +4,7 @@
 // are the ones CONTRACT.md §4 and this slice's brief spell out explicitly.
 import { useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { Badge, Button, Card, DoseRow, IconButton, PetAvatar, SectionLabel } from "@/components/ds";
+import { Badge, Button, Card, IconButton, PetAvatar, SectionLabel } from "@/components/ds";
 import { localDayKey, now } from "@/domain";
 import { courseProgress, describeSchedule, getDoseState, getOccurrences } from "@/engine";
 import { useCourses, useDoseEvents, useMedications } from "@/features/courses/hooks";
@@ -12,6 +12,7 @@ import { ageLabel } from "./age";
 import { doseRowPropsFor } from "./doseRow";
 import { courseLabel, eventWhenLabel, joinMeta, speciesLabel, weightLabel } from "./format";
 import { usePet, useSetPetArchived } from "./hooks";
+import { ScheduleRow } from "./ScheduleRow";
 
 /** Route adapter: reads the URL, renders the view. Not tested directly. */
 export function PetDetailPage() {
@@ -149,48 +150,24 @@ export function PetDetailView({ petId }: { petId: string }) {
               instructions: o.instructions,
               progress: course ? courseProgress(course, today) : "",
             });
-            // Read-only (CONTRACT.md §4 item 4): no `onGive`, the kit's own
-            // `PetDetailScreen` passes none either.
-            //
-            // `notStarted` is special-cased: the DS `DoseRow` hard-codes a
-            // "Give" button for every non-`given` state, which would read as
-            // actionable for a course that has never been started. SPEC §3b's
-            // "Start course" action belongs to Today (`TodayDoseRow.tsx`),
-            // which already owns it correctly — duplicating that button here
-            // would put an action in a block SPEC §5.3 calls read-only. So
-            // this block shows no action at all for a not-started row: same
-            // layout as `DoseRow`, composed from primitives (DS is frozen),
-            // with `rowProps.time` (already "Not started" from
-            // `doseRowPropsFor`) as plain text where the button would be.
-            if (state === "notStarted") {
-              return (
-                <div
-                  key={o.key}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    padding: "2px 0",
-                    borderTop: i > 0 ? "1px solid var(--line-quiet)" : "none",
-                    paddingTop: i > 0 ? 12 : 2,
-                    fontFamily: "var(--font-sans)",
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 16, fontWeight: 600, color: "var(--ink-1)" }}>
-                      {rowProps.medication}
-                    </div>
-                    {rowProps.detail ? (
-                      <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
-                        {rowProps.detail}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div style={{ fontSize: 13, color: "var(--ink-3)" }}>{rowProps.time}</div>
-                </div>
-              );
-            }
-            return <DoseRow key={o.key} {...rowProps} divider={i > 0} />;
+            // Read-only (SPEC §5.3): no `onGive`, and never the DS `DoseRow`
+            // itself — it hard-codes a "Give" `Button` for every non-`given`
+            // state regardless of whether a handler is passed, which reads as
+            // a false affordance here (SPEC §9). `ScheduleRow` is the
+            // locally-composed, always-inert replacement: same layout and
+            // tokens as `DoseRow`, but every state (including `notStarted`,
+            // whose SPEC §3b "Start course" action belongs to Today, which
+            // already owns it) renders as information only.
+            return (
+              <ScheduleRow
+                key={o.key}
+                state={state}
+                medication={rowProps.medication}
+                detail={rowProps.detail}
+                time={rowProps.time}
+                divider={i > 0}
+              />
+            );
           })}
         </Card>
 
