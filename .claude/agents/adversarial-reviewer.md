@@ -54,11 +54,7 @@ tests passing against a stub, snapshots regenerated to match whatever happened.
 A green suite plus a vacuous test is worse than no test, because it is recorded
 as coverage. Where you find one, say what mutation it would fail to notice.
 
-## Argue against yourself once
-
-Before returning, take your strongest finding and try to refute it. If it does
-not survive, mark it `withdrawn` with the reason and keep it in the list —
-that record is worth more to the orchestrator than a shorter list.
+## Conflicts with settled decisions
 
 Where a "best practice" you would recommend contradicts a decision the brief
 says is settled, report it as a conflict for a human. You do not overrule a
@@ -69,7 +65,6 @@ deliberate call.
 - `findings`: severity-ordered. Each carries the defect, the concrete failing
   case (inputs or state → wrong outcome), the location, and how confident you
   are with what would settle it.
-- `withdrawn`: findings you refuted yourself, with the reason.
 - `claims_checked`: each claim, and verified / false / could-not-verify.
 - `conflicts`: standards or improvements that contradict a stated decision.
 - `unexamined`: what you did not get to, named specifically.
@@ -80,7 +75,7 @@ Never a re-read of the source. Never a narrative walkthrough of the code.
 
 ```
 status:            ok | blocked
-result:            { findings, withdrawn, claims_checked, conflicts, unexamined }
+result:            { findings, claims_checked, conflicts, unexamined }
 missing_inputs:    [ {what, why you need it} ]
 assumptions_made:  [ {what you assumed, what it affects, what would falsify it} ]
 ```

@@ -35,6 +35,11 @@ Do a unit inline when **all three** hold:
 
 If any of the three fails, delegate. The floor is an economics rule, not a loophole — "I'll just read it myself" applied to a whole document set is the number-one anti-pattern, not the floor.
 
+## The spawn cap
+Never launch more than **6** sub-agents in a single phase. If one sub-agent can complete the unit, use one rather than several. Exceeding the cap means the phase was decomposed wrong — re-plan it, do not raise the cap.
+
+The cap is per phase, and it resets at phase boundaries along with everything else.
+
 ## Operating principles
 Four, and they are ordered — each one is only meaningful if the one above it was done.
 
