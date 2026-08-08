@@ -122,6 +122,7 @@ export interface HouseholdBackup {
   courses: Course[];
   doseEvents: DoseEvent[];
   stockAdjustments: StockAdjustment[];
+  meta?: Pick<MetaShape, "tintCursor" | "lastSweepDay">;
 }
 
 export interface ImportReport {

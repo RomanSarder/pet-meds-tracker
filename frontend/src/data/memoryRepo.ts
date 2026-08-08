@@ -461,6 +461,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       courses,
       doseEvents,
       stockAdjustments,
+      meta: { tintCursor: meta.tintCursor, lastSweepDay: meta.lastSweepDay },
     });
   }
 
@@ -491,8 +492,11 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       doseEvents = structuredClone(b.doseEvents);
       stockAdjustments = structuredClone(b.stockAdjustments);
       meta.schemaVersion = b.schemaVersion;
-      meta.tintCursor = pets.length;
-      meta.lastSweepDay = null;
+      // Transport the real cursor/sweep-day when the backup carries them
+      // (a v1 backup written after this fix); fall back to the old,
+      // re-derived behaviour for backups written before `meta` existed.
+      meta.tintCursor = b.meta?.tintCursor ?? pets.length;
+      meta.lastSweepDay = b.meta?.lastSweepDay ?? null;
       return {
         mode,
         pets: pets.length,
@@ -515,6 +519,13 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     courses = coursesR.merged;
     doseEvents = eventsR.merged;
     stockAdjustments = stockR.merged;
+
+    // Merge only ever moves the cursor forward, and only when the incoming
+    // backup actually carries one — an old backup without `meta` must not
+    // reset or otherwise perturb the current cursor.
+    if (b.meta) {
+      meta.tintCursor = Math.max(meta.tintCursor, b.meta.tintCursor);
+    }
 
     return {
       mode,

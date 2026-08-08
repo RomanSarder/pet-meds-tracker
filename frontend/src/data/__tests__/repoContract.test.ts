@@ -75,6 +75,25 @@ function emptyBackup(overrides: Partial<HouseholdBackup> = {}): HouseholdBackup 
   };
 }
 
+/**
+ * Creates 4 pets, then merges in a backup holding 2 further pets exported
+ * from a fresh repo of the same kind — the exact sequence that decouples
+ * `tintCursor` from `pets.length` (merge inserts unseen rows without
+ * touching the cursor). Returns the repo after the merge.
+ */
+async function fourPetsPlusMergedTwo(makeRepo: () => Repo): Promise<Repo> {
+  const repo = makeRepo();
+  for (let i = 0; i < 4; i++) {
+    await repo.createPet({ name: `Pet ${i}`, species: "cat" });
+  }
+  const source = makeRepo();
+  await source.createPet({ name: "Extra 1", species: "dog" });
+  await source.createPet({ name: "Extra 2", species: "dog" });
+  const backup = await source.exportHousehold();
+  await repo.importHousehold(backup, "merge");
+  return repo;
+}
+
 describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
   // --- 1. logging any number of doses leaves stockUnits unchanged --------
 
@@ -365,5 +384,28 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
 
     await repo.setMeta("lastSweepDay", "2026-08-08");
     expect(await repo.getMeta("lastSweepDay")).toBe("2026-08-08");
+  });
+
+  // --- 14. tintCursor transports through export/import(replace), matching merge --
+
+  it("importHousehold(replace) restores the real tintCursor instead of re-deriving it from pets.length, matching the merge path", async () => {
+    setClock(fixedClock("2026-08-08T07:00:00.000Z"));
+
+    // Control path: merge decouples tintCursor (4) from pets.length (6);
+    // the next createPet must use the real cursor, tint 1.
+    const controlRepo = await fourPetsPlusMergedTwo(makeRepo);
+    const controlPet = await controlRepo.createPet({ name: "Control", species: "cat" });
+    expect(controlPet.tint).toBe(1);
+
+    // Round-trip path: the identical sequence, exported and replace-imported
+    // into a third fresh repo. Pre-fix, replace re-derived the cursor from
+    // pets.length (6), giving tint 3 and colliding with the existing pet.
+    const roundTripSource = await fourPetsPlusMergedTwo(makeRepo);
+    const backup = await roundTripSource.exportHousehold();
+    const roundTripRepo = makeRepo();
+    await roundTripRepo.importHousehold(backup, "replace");
+    const roundTripPet = await roundTripRepo.createPet({ name: "Round Trip", species: "cat" });
+
+    expect(roundTripPet.tint).toBe(controlPet.tint);
   });
 });

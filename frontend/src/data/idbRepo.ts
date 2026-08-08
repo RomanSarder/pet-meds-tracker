@@ -577,14 +577,17 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "meta"],
       "readonly",
     );
-    const [pets, meds, courses, doseEvents, stockAdjustments, schemaVersionRec] = await Promise.all([
-      tx.objectStore("pets").getAll(),
-      tx.objectStore("medications").getAll(),
-      tx.objectStore("courses").getAll(),
-      tx.objectStore("doseEvents").getAll(),
-      tx.objectStore("stockAdjustments").getAll(),
-      tx.objectStore("meta").get("schemaVersion"),
-    ]);
+    const [pets, meds, courses, doseEvents, stockAdjustments, schemaVersionRec, tintCursorRec, lastSweepDayRec] =
+      await Promise.all([
+        tx.objectStore("pets").getAll(),
+        tx.objectStore("medications").getAll(),
+        tx.objectStore("courses").getAll(),
+        tx.objectStore("doseEvents").getAll(),
+        tx.objectStore("stockAdjustments").getAll(),
+        tx.objectStore("meta").get("schemaVersion"),
+        tx.objectStore("meta").get("tintCursor"),
+        tx.objectStore("meta").get("lastSweepDay"),
+      ]);
     await tx.done;
     // Includes soft-deleted rows in every array — a backup that drops
     // tombstones cannot later sync (SPEC §8).
@@ -596,6 +599,10 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       courses,
       doseEvents,
       stockAdjustments,
+      meta: {
+        tintCursor: (tintCursorRec?.value as number | undefined) ?? 0,
+        lastSweepDay: (lastSweepDayRec?.value as MetaShape["lastSweepDay"] | undefined) ?? null,
+      },
     };
   }
 
@@ -626,9 +633,12 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       for (const e of b.doseEvents) await eventsStore.put(e);
       for (const a of b.stockAdjustments) await stockStore.put(a);
 
-      await metaStore.put({ key: "tintCursor", value: b.pets.length });
+      // Transport the real cursor/sweep-day when the backup carries them
+      // (a v1 backup written after this fix); fall back to the old,
+      // re-derived behaviour for backups written before `meta` existed.
+      await metaStore.put({ key: "tintCursor", value: b.meta?.tintCursor ?? b.pets.length });
       await metaStore.put({ key: "schemaVersion", value: b.schemaVersion });
-      await metaStore.put({ key: "lastSweepDay", value: null });
+      await metaStore.put({ key: "lastSweepDay", value: b.meta?.lastSweepDay ?? null });
       await tx.done;
 
       return {
@@ -667,6 +677,16 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       (id) => stockStore.get(id),
       (row) => stockStore.put(row),
     );
+
+    // Merge only ever moves the cursor forward, and only when the incoming
+    // backup actually carries one — an old backup without `meta` must not
+    // reset or otherwise perturb the current cursor.
+    if (b.meta) {
+      const cursorRec = await metaStore.get("tintCursor");
+      const currentCursor = (cursorRec?.value as number | undefined) ?? 0;
+      await metaStore.put({ key: "tintCursor", value: Math.max(currentCursor, b.meta.tintCursor) });
+    }
+
     await tx.done;
 
     return {
