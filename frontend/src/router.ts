@@ -1,27 +1,29 @@
 import { createRouter, createRoute, createRootRoute, Outlet, redirect } from "@tanstack/react-router";
 import type { SessionUser } from "@pet-tracker/shared";
+import { qk } from "@/domain";
 import { apiClient, ApiError } from "./shared/api";
-import { HomePage } from "./pages/HomePage";
+import { queryClient } from "./queryClient";
+import { AppShell } from "./app/AppShell";
 import { SignInPage } from "./auth/SignInPage";
 import { VerifyPage } from "./auth/VerifyPage";
+import { TodayPage } from "./features/today/TodayPage";
+import { PetsPage } from "./features/pets/PetsPage";
+import { PetDetailPage } from "./features/pets/PetDetailPage";
+import { PetFormPage } from "./features/pets/PetFormPage";
+import { CourseFormPage } from "./features/courses/CourseFormPage";
+import { SuppliesPage } from "./features/supplies/SuppliesPage";
+import { SettingsPage } from "./features/settings/SettingsPage";
+
+// Marks routes that should not render the tab bar / app chrome (full-screen
+// forms). Augments the router's own (empty by default) staticData shape, so
+// every other route keeps `staticData` optional.
+declare module "@tanstack/react-router" {
+  interface StaticDataRouteOption {
+    chrome?: "none";
+  }
+}
 
 const rootRoute = createRootRoute({ component: Outlet });
-
-const indexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/",
-  component: HomePage,
-  beforeLoad: async () => {
-    try {
-      await apiClient<SessionUser>("/auth/me");
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        throw redirect({ to: "/sign-in" });
-      }
-      throw err;
-    }
-  },
-});
 
 const signInRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -35,7 +37,115 @@ const verifyRoute = createRoute({
   component: VerifyPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, signInRoute, verifyRoute]);
+// Pathless layout route: no `path`, so children keep top-level paths
+// (`/today`, not `/app/today`). Every route under it is gated by the same
+// session check, run exactly once per navigation into the app shell.
+const appLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: "app",
+  component: AppShell,
+  beforeLoad: async () => {
+    try {
+      await queryClient.ensureQueryData({
+        queryKey: qk.session(),
+        queryFn: () => apiClient<SessionUser>("/auth/me"),
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        throw redirect({ to: "/sign-in" });
+      }
+      throw err;
+    }
+  },
+});
+
+const appIndexRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/today" });
+  },
+});
+
+const todayRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/today",
+  component: TodayPage,
+});
+
+const petsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/pets",
+  component: PetsPage,
+});
+
+const petsNewRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/pets/new",
+  component: PetFormPage,
+  staticData: { chrome: "none" },
+});
+
+const petDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/pets/$petId",
+  component: PetDetailPage,
+});
+
+const petEditRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/pets/$petId/edit",
+  component: PetFormPage,
+  staticData: { chrome: "none" },
+});
+
+interface CourseFormSearch {
+  petId?: string;
+}
+
+const courseNewRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/courses/new",
+  component: CourseFormPage,
+  staticData: { chrome: "none" },
+  validateSearch: (search: Record<string, unknown>): CourseFormSearch => ({
+    petId: typeof search.petId === "string" ? search.petId : undefined,
+  }),
+});
+
+const courseDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/courses/$courseId",
+  component: CourseFormPage,
+  staticData: { chrome: "none" },
+});
+
+const suppliesRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/supplies",
+  component: SuppliesPage,
+});
+
+const settingsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
+const appRoute = appLayoutRoute.addChildren([
+  appIndexRoute,
+  todayRoute,
+  petsRoute,
+  petsNewRoute,
+  petDetailRoute,
+  petEditRoute,
+  courseNewRoute,
+  courseDetailRoute,
+  suppliesRoute,
+  settingsRoute,
+]);
+
+const routeTree = rootRoute.addChildren([signInRoute, verifyRoute, appRoute]);
 
 export const router = createRouter({ routeTree });
 
