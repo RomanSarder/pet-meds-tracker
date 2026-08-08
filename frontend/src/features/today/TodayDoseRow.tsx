@@ -16,11 +16,28 @@
 //     on it (components/ds/pets/DoseRow.tsx:67), which is precisely what keeps
 //     a Give tap from bubbling to the card wrapper and navigating. A second
 //     guard here would duplicate that contract in two files and let them drift.
+//
+// WHAT THIS FILE MUST GUARD: EVERYTHING THAT IS NOT THE GIVE BUTTON.
+// `TodayPage` renders each card inside a clickable wrapper that opens Pet
+// detail. React synthetic events propagate through the REACT tree, not the DOM
+// tree, so a portal is not an escape hatch: `Menu.Portal` and the dialog's
+// `Dialog.Portal` below are React children of that wrapper, and a click on a
+// menu item or anywhere in the dialog reaches the card handler and navigates
+// away — breaking SPEC §5.1's rule that logging a dose never leaves the
+// dashboard. So the guard is on three surfaces, not one:
+//   * `Menu.Trigger`,
+//   * the `Menu.Popup` subtree (click AND pointer-down: the card handler can be
+//     reached through either path independently),
+//   * the dialog's popup and backdrop, guarded inside `LogAtTimeDialog`.
+// The long-press has the same problem from a different direction — releasing
+// the hold makes the browser synthesise a click on the row text — so the timer
+// sets `suppressClickRef` and `onClickCapture` swallows exactly that one click.
 import {
   useCallback,
   useEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
 } from "react";
@@ -109,6 +126,9 @@ export function TodayDoseRow({
   const rowRef = useRef<HTMLDivElement | null>(null);
   const timerRef = useRef<number | null>(null);
   const originRef = useRef<{ x: number; y: number } | null>(null);
+  // Set when the long-press timer fires, cleared by the next press or by the
+  // click it exists to swallow. See `handleClickCapture`.
+  const suppressClickRef = useRef(false);
 
   const cancelLongPress = useCallback(() => {
     if (timerRef.current !== null) {
@@ -121,6 +141,11 @@ export function TodayDoseRow({
   useEffect(() => cancelLongPress, [cancelLongPress]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    // Every new press starts a new gesture, so the previous one's suppression
+    // is spent. Cleared ahead of the guards below, not after them: a press that
+    // lands on a button returns early, and a flag left set there would swallow
+    // the next ordinary tap on the card body instead.
+    suppressClickRef.current = false;
     // The long-press belongs to the text region only. A press that starts on a
     // button (Give, Start course, the overflow trigger) is that button's.
     const target = event.target;
@@ -131,8 +156,24 @@ export function TodayDoseRow({
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       originRef.current = null;
+      // The hold has become a long-press, so the click the browser will
+      // synthesise when the finger lifts is part of THIS gesture, not a tap.
+      suppressClickRef.current = true;
       setMenuOpen(true);
     }, LONG_PRESS_MS);
+  }
+
+  /**
+   * SPEC §5.1 grants navigation to "tapping the card body (not a button)". A
+   * long-press is a distinct gesture, so the click its release synthesises must
+   * not reach the card wrapper — otherwise the menu opens and Pet detail opens
+   * underneath it. Capture phase, so it is stopped before anything acts on it;
+   * and one click only, so the very next tap navigates normally.
+   */
+  function handleClickCapture(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!suppressClickRef.current) return;
+    suppressClickRef.current = false;
+    event.stopPropagation();
   }
 
   function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -229,6 +270,7 @@ export function TodayDoseRow({
             ? `${dose.title}, ${dose.state === "skipped" ? "skipped" : "given"}`
             : dose.title
         }
+        onClickCapture={handleClickCapture}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={cancelLongPress}
@@ -264,6 +306,14 @@ export function TodayDoseRow({
       <Menu.Portal>
         <Menu.Positioner anchor={rowRef} sideOffset={4} align="end">
           <Menu.Popup
+            // The popup is a DOM portal but a REACT child of the card wrapper,
+            // so without these every item would log its dose *and* navigate to
+            // Pet detail. Both handlers are needed: the card is reachable
+            // through the click and through the pointer-down independently.
+            // Stopping here rather than on each item keeps the three callbacks
+            // below — which run first, on the item — untouched.
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
             style={{
               minWidth: 220,
               padding: "6px 0",

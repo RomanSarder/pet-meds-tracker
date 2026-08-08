@@ -145,13 +145,16 @@ export function TodayPage(): ReactElement {
   );
 
   // SPEC §3b: starting a `fromLastDose` course logs its first dose now. The
-  // chain has no scheduled instant yet, so `scheduledFor` is null — and the
-  // occurrence's own key is already `${courseId}|-`, so the two still agree.
+  // chain has no scheduled instant yet, so `scheduledFor` is null — but that is
+  // read off the occurrence by `scheduledForOf`, never asserted here. Writing
+  // `scheduledFor: null` over `identityOf` would restate a scheduling rule
+  // locally, which SPEC §10 puts out of this slice's reach, and would break
+  // `identityOf`'s invariant that the key and `scheduledFor` come from the same
+  // occurrence the moment the engine ever gives a notStarted one an instant.
   const startCourse = useCallback(
     (dose: TodayDose) =>
       log({
         ...identityOf(dose),
-        scheduledFor: null,
         status: "given",
         toastMessage: `${dose.medicationName} logged`,
       }),

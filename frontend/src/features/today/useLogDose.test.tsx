@@ -206,6 +206,10 @@ describe("useLogDose", () => {
     const eventsBefore = await repo.listDoseEvents({});
     const medicationsBefore = await repo.listMedications();
     const stockBefore = await repo.listStockAdjustments();
+    // `listDoseEvents` filters `deletedAt === null` (memoryRepo.ts:285), so it
+    // cannot see a tombstone. `exportHousehold` copies the dose-event array raw
+    // (memoryRepo.ts:454-464), so it can.
+    const backupBefore = (await repo.exportHousehold()).doseEvents;
 
     renderWithProviders(<Harness vars={vars} />, { repo });
     await waitReady();
@@ -225,11 +229,17 @@ describe("useLogDose", () => {
     });
 
     // SPEC §11: "leaves history exactly as before" — a full deep equality over
-    // every surviving row, not just a count. This only holds because
-    // `retractDoseEvent` is a bounded hard delete rather than a soft delete or
-    // a compensating row.
+    // every surviving row, not just a count.
     const eventsAfter = await repo.listDoseEvents({});
     expect(eventsAfter).toEqual(eventsBefore);
+
+    // The two assertions fail for different reasons, so both are needed. The
+    // one above would still pass against a soft delete: the tombstoned row is
+    // filtered out of this view and looks gone. Only the unfiltered export can
+    // tell "the row was removed" from "the row is still there, hidden" — which
+    // is what makes `retractDoseEvent` a bounded HARD delete, and not a soft
+    // delete or a compensating row, an actually tested claim.
+    expect((await repo.exportHousehold()).doseEvents).toEqual(backupBefore);
 
     // SPEC §11: "logging any number of doses leaves `stockUnits` unchanged".
     const medicationsAfter = await repo.listMedications();

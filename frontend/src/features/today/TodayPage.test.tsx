@@ -4,10 +4,18 @@
 //
 // THE GOVERNING PRODUCT RULE (SPEC §5.1): "Give logs the dose at the current
 // time. The row animates to its given state in place. The tap must not
-// navigate." A `pathname` probe is rendered alongside the page in every test
-// so that rule is asserted rather than assumed — and one test navigates on
-// purpose (card-body tap → Pet detail), so the probe is demonstrably capable
-// of changing and the "unchanged" assertions are not vacuous.
+// navigate."
+//
+// WHY EVERY LOGGING TEST READS THE PATHNAME. `renderWithProviders` mounts the
+// page under a catch-all `$` route, so the component stays mounted whatever
+// the location is. A navigation is therefore *invisible* to every DOM query in
+// this file — the card, the rows and the toast all look exactly the same on
+// `/today` as on `/pets/…`. The `LocationProbe` below is the only thing that
+// can see it, so every test that logs, skips, starts a course or drives the
+// dialog asserts the path is still `/today` afterwards. Two tests navigate on
+// purpose (card-body tap → Pet detail, menu *Open course* → the course), which
+// is what keeps the probe demonstrably capable of changing and the "unchanged"
+// assertions non-vacuous.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { useRouterState } from "@tanstack/react-router";
@@ -343,6 +351,7 @@ describe("TodayPage", () => {
 
     renderToday(repo);
     const card = await cardFor("Clover");
+    expect(pathname()).toBe("/today");
     await user.click(within(card).getByRole("button", { name: "Give" }));
 
     // The log really landed, so the undo below is undoing something.
@@ -371,6 +380,9 @@ describe("TodayPage", () => {
       medicationsBefore.map((m) => m.stockUnits),
     );
     expect(medicationsAfter).toEqual(medicationsBefore);
+
+    // Neither the log nor the undo is allowed to leave the dashboard.
+    expect(pathname()).toBe("/today");
   });
 
   it("logs exactly the earliest overdue dose from the banner", async () => {
@@ -390,6 +402,7 @@ describe("TodayPage", () => {
 
     expect(await screen.findByText("2 doses overdue")).toBeInTheDocument();
     expect(screen.getByText("Clover · Metacam, 08:00")).toBeInTheDocument();
+    expect(pathname()).toBe("/today");
 
     await user.click(screen.getByRole("button", { name: "Log" }));
 
@@ -402,6 +415,8 @@ describe("TodayPage", () => {
     expect(created[0].courseId).toBe(cloverMetacam.id);
     expect(created[0].occurrenceKey).toBe(earliest.key);
     expect(created[0].status).toBe("given");
+
+    expect(pathname()).toBe("/today");
   });
 
   it("renders a skipped dose at 55% opacity with 'Skipped' where the time goes", async () => {
@@ -416,6 +431,7 @@ describe("TodayPage", () => {
 
     renderToday(repo);
     await cardFor("Clover");
+    expect(pathname()).toBe("/today");
 
     await user.click(screen.getByRole("button", { name: /more options/i }));
     await user.click(await screen.findByRole("menuitem", { name: "Skip this dose" }));
@@ -424,6 +440,99 @@ describe("TodayPage", () => {
     const skipped = within(row).getByText("Skipped");
     expect(skipped.parentElement).toHaveStyle({ opacity: "0.55" });
     expect(within(row).queryByText("08:00")).toBeNull();
+
+    // Skipping is a log, and a log never leaves the dashboard. Without this the
+    // dose is skipped correctly *and* the app is sitting on Pet detail, which
+    // every other assertion in this test is blind to.
+    expect(pathname()).toBe("/today");
+  });
+
+  it("opens the course — and only the course — from the menu's Open course", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    renderToday(repo);
+    await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Open course" }));
+
+    // The one menu item that is allowed to route. If the click also reaches the
+    // card wrapper, two navigations fire and the wrapper's lands last — so the
+    // user ends up on Pet detail and this pathname is the only witness.
+    await waitFor(() => {
+      expect(pathname()).toBe(`/courses/${course.id}`);
+    });
+  });
+
+  it("logs at a different time through the dialog without leaving the dashboard", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
+
+    // Every step of the dialog is a click inside a portal that is a React child
+    // of the card wrapper, so each one is checked, not just the last.
+    await screen.findByRole("dialog");
+    expect(pathname()).toBe("/today");
+
+    const input = screen.getByLabelText("Time given");
+    await user.clear(input);
+    await user.type(input, "09:15");
+    expect(pathname()).toBe("/today");
+
+    await user.click(screen.getByRole("button", { name: "Log" }));
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+
+    const created = newEvents(before, await repo.listDoseEvents({}));
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("given");
+    expect(new Date(created[0].givenAt).getHours()).toBe(9);
+    expect(new Date(created[0].givenAt).getMinutes()).toBe(15);
+
+    expect(pathname()).toBe("/today");
+  });
+
+  it("cancels the dialog without logging and without leaving the dashboard", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const occurrence = makeOccurrence(courseOf(data, "Clover", "Metacam"), {
+      day: DAY,
+      scheduledFor: AT_0800,
+    });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    await cardFor("Clover");
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await repo.listDoseEvents({})).toEqual(before);
+    expect(pathname()).toBe("/today");
   });
 
   it("offers Start course for a never-started interval course and logs it now", async () => {
@@ -449,6 +558,7 @@ describe("TodayPage", () => {
     // "Not started" — SPEC §3b wants the phrase on the dose itself.
     expect(await screen.findByText(/^Not started ·/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Give" })).toBeNull();
+    expect(pathname()).toBe("/today");
 
     await user.click(screen.getByRole("button", { name: "Start course" }));
 
@@ -462,6 +572,8 @@ describe("TodayPage", () => {
     // The injected clock, not a wall-clock read (SPEC §9).
     expect(created.givenAt).toBe(FIXTURE_NOW);
     expect(created.occurrenceKey).toBe(occurrence.key);
+
+    expect(pathname()).toBe("/today");
   });
 
   it("shows the empty state with the next due time when nothing is pending", async () => {
@@ -502,6 +614,8 @@ describe("TodayPage", () => {
     expect(occurrenceKeyFor(created[0].courseId, created[0].scheduledFor)).toBe(
       occurrence.key,
     );
+
+    expect(pathname()).toBe("/today");
   });
 
   it("opens Pet detail when the card body is tapped", async () => {

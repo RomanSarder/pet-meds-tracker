@@ -9,10 +9,32 @@
 // never assembled by hand and never routed through UTC: `atLocalTime` builds it
 // with the wall-clock `new Date(y, m, d, hh, mm)` constructor, which is what
 // keeps a dose logged at 08:00 on a DST-shift day mean 08:00 local (SPEC §3d).
-import { useEffect, useId, useState, type ReactElement } from "react";
+import {
+  useEffect,
+  useId,
+  useState,
+  type ReactElement,
+  type SyntheticEvent,
+} from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@/components/ds";
 import { atLocalTime, type LocalDate } from "@/domain";
+
+/**
+ * Keeps the dialog's interactions inside the dialog.
+ *
+ * The caller renders this from inside `TodayPage`'s clickable pet-card wrapper.
+ * React synthetic events propagate through the REACT tree, not the DOM tree, so
+ * `Dialog.Portal` moving the markup to the end of `<body>` changes nothing:
+ * without this, typing in the time field, pressing Cancel, dismissing the
+ * backdrop or confirming with Log each bubble to that wrapper and navigate to
+ * Pet detail — with the dialog left floating over the wrong screen. Pointer-down
+ * is stopped alongside click because the card handler is reachable through
+ * either path on its own.
+ */
+function stopBubbling(event: SyntheticEvent): void {
+  event.stopPropagation();
+}
 
 export interface LogAtTimeDialogProps {
   open: boolean;
@@ -52,6 +74,8 @@ export function LogAtTimeDialog({
     <Dialog.Root open={open} onOpenChange={(next) => onOpenChange(next)}>
       <Dialog.Portal>
         <Dialog.Backdrop
+          onClick={stopBubbling}
+          onPointerDown={stopBubbling}
           style={{
             position: "fixed",
             inset: 0,
@@ -59,6 +83,8 @@ export function LogAtTimeDialog({
           }}
         />
         <Dialog.Popup
+          onClick={stopBubbling}
+          onPointerDown={stopBubbling}
           style={{
             position: "fixed",
             left: "50%",
