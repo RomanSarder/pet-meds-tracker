@@ -3,18 +3,20 @@
 // `new IdbRepo()` directly — so that W1 (slice 2) can flip the default below
 // from `createMemoryRepo()` to `createIdbRepo()` in this one file, and the
 // change is invisible to every UI worker.
-import { fixtures } from "@/domain";
-import { createMemoryRepo } from "./memoryRepo";
+import { createIdbRepo } from "./idbRepo";
 import type { Repo } from "./repo.types";
 
 export type { Repo } from "./repo.types";
-export { createMemoryRepo, RetractWindowExpiredError } from "./memoryRepo";
+export { createMemoryRepo } from "./memoryRepo";
+export { RetractWindowExpiredError } from "./errors";
+export { createIdbRepo } from "./idbRepo";
+export { liveDoseEvent, liveDoseEvents } from "./doseEvents";
 
 let repo: Repo | null = null;
 
 export function getRepo(): Repo {
   if (!repo) {
-    repo = createMemoryRepo(fixtures);
+    repo = createIdbRepo();
   }
   return repo;
 }

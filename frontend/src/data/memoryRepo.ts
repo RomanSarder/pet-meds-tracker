@@ -24,6 +24,7 @@ import type {
 } from "@/domain";
 import {
   cloneFixtures,
+  localDayKey,
   newId,
   now,
   occurrenceKeyFor,
@@ -32,19 +33,9 @@ import {
   RETRACT_GRACE_MS,
 } from "@/domain";
 import type { Repo } from "./repo.types";
+import { RetractWindowExpiredError } from "./errors";
 
-/**
- * Thrown by `retractDoseEvent` when the row is older than
- * `UNDO_WINDOW_MS + RETRACT_GRACE_MS` (brief §7 item 1). A named error so
- * callers (the undo toast) can distinguish "too late" from any other
- * failure rather than pattern-matching a message string.
- */
-export class RetractWindowExpiredError extends Error {
-  constructor(id: string) {
-    super(`Dose event ${id} is outside the retract window`);
-    this.name = "RetractWindowExpiredError";
-  }
-}
+export { RetractWindowExpiredError } from "./errors";
 
 function stamp(): IsoDateTime {
   return now().toISOString();
@@ -164,8 +155,10 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
   }
 
   async function findMedicationByName(name: string): Promise<Medication | null> {
-    const needle = name.toLowerCase();
-    const m = medications.find((med) => med.deletedAt === null && med.name.toLowerCase() === needle);
+    const needle = name.trim().toLowerCase();
+    const m = medications.find(
+      (med) => med.deletedAt === null && med.name.trim().toLowerCase() === needle,
+    );
     return m ? structuredClone(m) : null;
   }
 
@@ -200,7 +193,10 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     patch: Partial<Omit<Medication, "id" | "stockUnits" | keyof Timestamped>>,
   ): Promise<Medication> {
     const medication = requireAlive(medications, id, "Medication");
-    Object.assign(medication, patch, { updatedAt: stamp() });
+    // `stockUnits` is a derived cache only `adjustStock`/`setStockOnHand` may
+    // write; guard at runtime since the patch type omits it but callers can
+    // still smuggle it through an untyped boundary.
+    Object.assign(medication, patch, { stockUnits: medication.stockUnits, updatedAt: stamp() });
     return structuredClone(medication);
   }
 
@@ -266,6 +262,11 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     // as "resuming".
     if (course.status === "paused" && status === "active") {
       course.resumedAt = stamp();
+    }
+    // SPEC §3c: `stopped` is a user action (medication discontinued); it sets
+    // endDate = today, the local day key of `now()`.
+    if (status === "stopped") {
+      course.endDate = localDayKey(now());
     }
     course.status = status;
     course.updatedAt = stamp();
@@ -460,6 +461,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       courses,
       doseEvents,
       stockAdjustments,
+      meta: { tintCursor: meta.tintCursor, lastSweepDay: meta.lastSweepDay },
     });
   }
 
@@ -490,8 +492,11 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       doseEvents = structuredClone(b.doseEvents);
       stockAdjustments = structuredClone(b.stockAdjustments);
       meta.schemaVersion = b.schemaVersion;
-      meta.tintCursor = pets.length;
-      meta.lastSweepDay = null;
+      // Transport the real cursor/sweep-day when the backup carries them
+      // (a v1 backup written after this fix); fall back to the old,
+      // re-derived behaviour for backups written before `meta` existed.
+      meta.tintCursor = b.meta?.tintCursor ?? pets.length;
+      meta.lastSweepDay = b.meta?.lastSweepDay ?? null;
       return {
         mode,
         pets: pets.length,
@@ -514,6 +519,13 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     courses = coursesR.merged;
     doseEvents = eventsR.merged;
     stockAdjustments = stockR.merged;
+
+    // Merge only ever moves the cursor forward, and only when the incoming
+    // backup actually carries one — an old backup without `meta` must not
+    // reset or otherwise perturb the current cursor.
+    if (b.meta) {
+      meta.tintCursor = Math.max(meta.tintCursor, b.meta.tintCursor);
+    }
 
     return {
       mode,
