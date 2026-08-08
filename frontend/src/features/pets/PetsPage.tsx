@@ -3,7 +3,7 @@
 // CONTRACT.md §1/§4 and briefs-w3/B-pets-roster.md for the exact mapping.
 import { useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Badge, Button, Card, EmptyState, PetAvatar, ScreenHeader } from "@/components/ds";
+import { Badge, Button, Card, EmptyState, Icon, PetAvatar, ScreenHeader } from "@/components/ds";
 import { describeSchedule } from "@/engine";
 import type { Course, Medication } from "@/domain";
 import { localDayKey, now } from "@/domain";
@@ -45,6 +45,10 @@ export function PetsPage() {
 
   function openPet(petId: string) {
     navigate({ to: "/pets/$petId", params: { petId } });
+  }
+
+  function addPet() {
+    navigate({ to: "/pets/new" });
   }
 
   return (
@@ -129,6 +133,35 @@ export function PetsPage() {
               </Card>
             );
           })}
+          <Card
+            tone="dashed"
+            onClick={addPet}
+            role="button"
+            tabIndex={0}
+            aria-label="Add a pet"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                addPet();
+              } else if (e.key === " ") {
+                e.preventDefault();
+                addPet();
+              }
+            }}
+            style={{
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              minHeight: "var(--tap-min)",
+              color: "var(--ink-3)",
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            <Icon name="plus" size={18} />
+            <span>Add a pet</span>
+          </Card>
         </div>
       )}
     </div>

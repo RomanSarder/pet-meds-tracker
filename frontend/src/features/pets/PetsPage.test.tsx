@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { screen } from "@testing-library/react";
+import { useRouterState } from "@tanstack/react-router";
 // `@/test` has no barrel (index) file yet, so this imports the concrete
 // module directly rather than the bare `@/test` specifier the brief
 // describes — see the final report for why.
@@ -9,6 +10,28 @@ import type { Pet } from "@/domain";
 import { fixtures } from "@/domain";
 import { ageLabel } from "./age";
 import { PetsPage } from "./PetsPage";
+
+// The harness's router is a catch-all and does not hand the test its router
+// instance, so the current path is read back out of the tree instead — the
+// same pattern TodayPage.test.tsx uses.
+function LocationProbe() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return <span data-testid="pathname">{pathname}</span>;
+}
+
+function renderPets(opts?: Parameters<typeof renderWithProviders>[1]) {
+  return renderWithProviders(
+    <>
+      <PetsPage />
+      <LocationProbe />
+    </>,
+    opts,
+  );
+}
+
+function pathname(): string {
+  return screen.getByTestId("pathname").textContent ?? "";
+}
 
 // The router underlying `renderWithProviders` resolves its first match
 // asynchronously (see renderWithProviders.test.tsx), so the first query in
@@ -97,5 +120,35 @@ describe("PetsPage", () => {
     renderWithProviders(<PetsPage />);
     await screen.findByText("Pets");
     expect(screen.getByRole("button", { name: "plus" })).toBeInTheDocument();
+  });
+
+  it("shows an 'Add a pet' control at the end of the roster when pets exist", async () => {
+    renderWithProviders(<PetsPage />);
+    await screen.findByText("Clover");
+    expect(screen.getByRole("button", { name: "Add a pet" })).toBeInTheDocument();
+  });
+
+  it("navigates to /pets/new when the roster's 'Add a pet' control is activated", async () => {
+    renderPets();
+    await screen.findByText("Clover");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add a pet" }));
+
+    expect(pathname()).toBe("/pets/new");
+  });
+
+  it("does not duplicate the empty-state 'Add a pet' action when there are no pets", async () => {
+    const repo = createMemoryRepo({
+      pets: [],
+      medications: [],
+      courses: [],
+      doseEvents: [],
+      stockAdjustments: [],
+    });
+    renderWithProviders(<PetsPage />, { repo });
+
+    await screen.findByText("No pets yet");
+    expect(screen.getAllByRole("button", { name: "Add a pet" })).toHaveLength(1);
   });
 });
