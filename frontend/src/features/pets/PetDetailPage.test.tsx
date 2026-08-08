@@ -16,6 +16,10 @@ function clover() {
   return fixtures.pets.find((p) => p.name === "Clover")!;
 }
 
+function biscuit() {
+  return fixtures.pets.find((p) => p.name === "Biscuit")!;
+}
+
 describe("PetDetailView", () => {
   // The router underlying `renderWithProviders` resolves its first match
   // asynchronously (see renderWithProviders.test.tsx), so the first query in
@@ -66,6 +70,31 @@ describe("PetDetailView", () => {
     giveButtons.forEach((btn) => {
       expect(btn.closest('[role="button"]')).toBeNull();
     });
+  });
+
+  it("shows a never-started fromLastDose course as read-only 'Not started' text, with no button of any label", async () => {
+    // COURSE_BISCUIT_METOCLOPRAMIDE (fixtures.ts) is fromLastDose with no
+    // `given` DoseEvent at all, so `getDoseState` reports "notStarted" for
+    // it (SPEC §3b) every day it's requested. Pet detail's Schedule block
+    // is read-only (SPEC §5.3); the "Start course" action SPEC §3b wants
+    // belongs to Today, which already owns it — so this row must show
+    // neither the DS `DoseRow`'s hard-coded "Give" nor a duplicate "Start
+    // course" button, only plain text.
+    const pet = biscuit();
+    renderWithProviders(<PetDetailView petId={pet.id} />);
+
+    const scheduleLabel = await screen.findByText("Schedule");
+    const scheduleCard = scheduleLabel.closest("div")!.nextElementSibling as HTMLElement;
+
+    // Biscuit's other occurrence today (Ivermectin) is already given, so no
+    // "Give"/"Start course" text — nor any `<button>` at all — should appear
+    // anywhere in the Schedule card.
+    expect(within(scheduleCard).queryByText("Give")).not.toBeInTheDocument();
+    expect(within(scheduleCard).queryByText("Start course")).not.toBeInTheDocument();
+    expect(scheduleCard.querySelector("button")).toBeNull();
+
+    const notStartedText = within(scheduleCard).getByText("Not started");
+    expect(notStartedText).toBeInTheDocument();
   });
 
   it("renders the skipped state as 55% opacity with 'Skipped' in place of the clock time", () => {

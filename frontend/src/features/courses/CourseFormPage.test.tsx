@@ -448,3 +448,23 @@ describe("accessibility", () => {
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 });
+
+describe("pets loading state (SPEC §5.5 item 1 — the pet picker is the form's required first field)", () => {
+  it("shows an accessible pending placeholder instead of an empty gap while pets are still loading", async () => {
+    const repo = createMemoryRepo();
+    // A promise that never resolves within the test keeps `usePets()` in its
+    // `isPending` state for the whole test, exactly like the moment right
+    // after a cold load before IndexedDB has answered.
+    vi.spyOn(repo, "listPets").mockReturnValue(new Promise(() => {}));
+    renderWithProviders(<CourseFormView />, { repo });
+
+    const pending = await screen.findByRole("status");
+    expect(pending).toHaveAttribute("aria-busy", "true");
+    expect(pending).toHaveTextContent("Loading pets");
+
+    // The real pet picker (an actual, selectable pet button) must not be
+    // present yet — only the placeholder region should be.
+    expect(screen.queryByText("Clover")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clover" })).not.toBeInTheDocument();
+  });
+});

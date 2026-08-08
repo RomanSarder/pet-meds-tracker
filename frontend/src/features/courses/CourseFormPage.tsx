@@ -243,52 +243,96 @@ export function CourseFormView({
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionLabel rule={false}>For</SectionLabel>
-          <div style={{ display: "flex", gap: 10, overflowX: "auto" }}>
-            {pets.map((p) => {
-              const selected = petId === p.id;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => {
-                    if (!isEdit) setPetId(p.id);
-                  }}
-                  disabled={isEdit}
-                  aria-pressed={selected}
+          {petsQuery.isPending ? (
+            <div role="status" aria-busy="true" style={{ display: "flex", gap: 10, overflowX: "auto" }}>
+              <span
+                style={{
+                  position: "absolute",
+                  width: 1,
+                  height: 1,
+                  padding: 0,
+                  margin: -1,
+                  overflow: "hidden",
+                  clip: "rect(0, 0, 0, 0)",
+                  whiteSpace: "nowrap",
+                  border: 0,
+                }}
+              >
+                Loading pets
+              </span>
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  aria-hidden="true"
                   style={{
-                    background: "none",
-                    border: "none",
-                    cursor: isEdit ? "default" : "pointer",
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "center",
                     gap: 6,
-                    padding: 0,
-                    opacity: isEdit ? 0.4 : 1,
                   }}
                 >
+                  <div style={{ borderRadius: 999, padding: 3, border: "2px solid transparent" }}>
+                    <PetAvatar name="" tint={1} size={48} muted />
+                  </div>
                   <div
                     style={{
-                      borderRadius: 999,
-                      padding: 3,
-                      border: selected ? "2px solid var(--accent)" : "2px solid transparent",
+                      width: 32,
+                      height: 13,
+                      borderRadius: 4,
+                      background: "var(--surface-sunk)",
                     }}
-                  >
-                    <PetAvatar name={p.name} tint={p.tint} size={48} muted={!selected} />
-                  </div>
-                  <span
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 10, overflowX: "auto" }}>
+              {pets.map((p) => {
+                const selected = petId === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      if (!isEdit) setPetId(p.id);
+                    }}
+                    disabled={isEdit}
+                    aria-pressed={selected}
                     style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: selected ? "var(--ink-1)" : "var(--ink-3)",
+                      background: "none",
+                      border: "none",
+                      cursor: isEdit ? "default" : "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: 0,
+                      opacity: isEdit ? 0.4 : 1,
                     }}
                   >
-                    {p.name}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+                    <div
+                      style={{
+                        borderRadius: 999,
+                        padding: 3,
+                        border: selected ? "2px solid var(--accent)" : "2px solid transparent",
+                      }}
+                    >
+                      <PetAvatar name={p.name} tint={p.tint} size={48} muted={!selected} />
+                    </div>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: selected ? "var(--ink-1)" : "var(--ink-3)",
+                      }}
+                    >
+                      {p.name}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {errors.pet ? <div style={{ fontSize: 13, color: "var(--alert)" }}>{errors.pet}</div> : null}
         </div>
 
