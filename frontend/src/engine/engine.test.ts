@@ -32,13 +32,13 @@ describe("courseProgress", () => {
     // COURSE_CLOVER_METACAM: startDate 2026-08-06, endDate 2026-08-12.
     const course = fixtures.courses[0];
     expect(course.schedule.kind).toBe("fixedTimes");
-    expect(courseProgress(course, "2026-08-08")).toBe("Day 3 of 7");
+    expect(courseProgress(course, "2026-08-08")).toBe("day 3 of 7");
   });
 
-  it("returns a non-numeric string for fromLastDose courses (no DoseEvent[] in this signature)", () => {
+  it("returns 'ongoing' for fromLastDose courses (no DoseEvent[] in this signature)", () => {
     const course = fixtures.courses.find((c) => c.schedule.kind === "fromLastDose")!;
     const text = courseProgress(course, "2026-08-08");
-    expect(text).not.toMatch(/^Day \d/);
-    expect(text).toContain("from last dose");
+    expect(text).not.toMatch(/^day \d/);
+    expect(text).toBe("ongoing");
   });
 });
