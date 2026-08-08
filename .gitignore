@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+.playwright-mcp/
+.claude/testbed-storage-state.*.json
+*.log
+npm-debug.log*
+.DS_Store
+.vite/
+coverage/

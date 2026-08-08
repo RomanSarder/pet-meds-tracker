@@ -1,0 +1,5 @@
+{
+  "name": "pet-tracker",
+  "private": true,
+  "workspaces": ["backend", "frontend", "packages/*"]
+}

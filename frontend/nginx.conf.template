@@ -1,0 +1,48 @@
+server {
+    listen ${PORT};
+    root /usr/share/nginx/html;
+    index index.html;
+
+    resolver [fd12::10] ipv6=off valid=30s;
+
+    # SPA fallback — all unmatched routes serve index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Proxy /api/ to backend, stripping the /api/ prefix.
+    # Matches the Vite dev-server proxy rewrite: path.replace(/^\/api/, "")
+    # BACKEND_URL is substituted at container start by entrypoint.sh via envsubst.
+    location /api/ {
+        set $backend "${BACKEND_URL}";
+        rewrite ^/api/(.*) /$1 break;
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 3600s;
+        proxy_buffering off;
+        proxy_cache off;
+    }
+
+    # Lightweight health probe used by Docker HEALTHCHECK
+    location /health {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Vite produces content-hashed filenames — cache aggressively
+    location ~* \.(js|css|woff2?|ttf|eot|svg|png|ico)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/javascript image/svg+xml;
+}
