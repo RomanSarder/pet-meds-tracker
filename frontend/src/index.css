@@ -105,3 +105,18 @@
     font-family: var(--font-sans), sans-serif;
   }
 }
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* Warm paper, hard-coded to match --paper in components/ds/tokens/colors.css
+   (#F6F3EC, exposed inside .ds-root as --bg-app). DS tokens are deliberately
+   scoped to .ds-root and must not be hoisted to :root (see components/ds/README.md),
+   so the literal value is repeated here to keep the area outside .ds-root — e.g.
+   rubber-band overscroll — from flashing white. */
+body {
+  background-color: #f6f3ec;
+}
