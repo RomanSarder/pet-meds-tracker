@@ -25,6 +25,28 @@ import type { SessionUser } from "@pet-tracker/shared";
 import { router as appRouter } from "./router";
 import { queryClient as appQueryClient } from "./queryClient";
 
+/**
+ * How this file recognises that the Today screen is mounted.
+ *
+ * It used to look for the literal text "Today", which was the heading of the
+ * W0 route stub (`<EmptyState title="Today" />`). SPEC §5.1 requires that
+ * heading to be the time-of-day greeting instead, so slice 5 removed the word
+ * "Today" from the screen — the assertion was pinning a stub, not a
+ * requirement, and failed precisely because the code became correct.
+ *
+ * The regex covers all three greetings because these tests run on the system
+ * clock, not an injected one. Anchored with `^…$` so it matches the heading
+ * itself and not a longer string containing it. Every one of these tests also
+ * asserts `router.state.location.pathname`, which is the stable, slice-proof
+ * half of the check.
+ *
+ * The tab bar would be the other natural anchor, but the design system's
+ * `TabBar` (frozen this wave) marks its active tab with colour alone — no
+ * `aria-selected`, no `aria-current` — so there is nothing to assert against.
+ * That is worth fixing upstream in the DS; it is not fixable from here.
+ */
+const TODAY_HEADING = /^Good (morning|afternoon|evening)$/;
+
 const SESSION_USER: SessionUser = { id: "user-1", email: "owner@example.com" };
 const originalFetch = globalThis.fetch;
 
@@ -109,14 +131,14 @@ describe("router", () => {
     it("redirects / to /today", async () => {
       const { router } = renderApp("/");
 
-      await screen.findByText("Today", { selector: "div" });
+      await screen.findByText(TODAY_HEADING);
       expect(router.state.location.pathname).toBe("/today");
     });
 
-    it("renders the Today stub at /today", async () => {
+    it("renders the Today screen at /today", async () => {
       renderApp("/today");
 
-      const title = await screen.findByText("Today", { selector: "div" });
+      const title = await screen.findByText(TODAY_HEADING);
       expect(title).toBeInTheDocument();
       expect(screen.queryByText("Pets", { selector: "div" })).not.toBeInTheDocument();
       expect(screen.queryByText("Supplies", { selector: "div" })).not.toBeInTheDocument();
@@ -143,7 +165,7 @@ describe("router", () => {
     it("switches screens via the tab bar", async () => {
       const user = userEvent.setup();
       const { router } = renderApp("/today");
-      await screen.findByText("Today", { selector: "div" });
+      await screen.findByText(TODAY_HEADING);
 
       const nav = screen.getByRole("navigation");
 
