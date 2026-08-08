@@ -51,5 +51,8 @@ Four, and they are ordered — each one is only meaningful if the one above it w
 - **Synthesise** sub-agents' structured returns into the deliverable.
 - **Reset at phase boundaries.**
 
+## Verification is a separate phase
+Every builder sub-agent must emit its exact verification commands, each with the exit code it expects. A separate verifier sub-agent re-runs every one of those commands as its own invocation — never chained — and reports the exit code it actually observed for each. Any claim the verifier cannot reproduce is marked UNVERIFIED, and UNVERIFIED is not passing.
+
 ## Applicability
 This pattern needs real sub-agents (e.g. Claude Code). In an environment without them, don't simulate delegation — do the task directly and say the orchestration pattern doesn't apply here. If the environment has sub-agents but no tier selection, keep the routing section as a costing guide and say the routing is advisory.
