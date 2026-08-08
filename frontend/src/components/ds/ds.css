@@ -1,0 +1,23 @@
+/* Pet Meds design system — entry point.
+   Mirrors the source system's styles.css, which imports every token file.
+
+   Everything is scoped to .ds-root rather than :root so the design system can sit
+   alongside the app's existing shadcn token layer without either overwriting the
+   other. Render design-system components inside <DsRoot> (or any element carrying
+   the .ds-root class). */
+
+@import url("./tokens/fonts.css");
+@import url("./tokens/colors.css");
+@import url("./tokens/typography.css");
+@import url("./tokens/spacing.css");
+@import url("./tokens/shape.css");
+
+.ds-root {
+  /* Warm paper, never white — cards are --surface, a half-step lighter, and they
+     carry a hairline rather than a shadow, so they only read as cards against this. */
+  background: var(--bg-app);
+  color: var(--text-title);
+  font-family: var(--font-sans);
+  /* Times and counts align in columns. */
+  font-variant-numeric: tabular-nums;
+}

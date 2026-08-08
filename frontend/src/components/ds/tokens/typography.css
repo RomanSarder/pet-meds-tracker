@@ -1,0 +1,34 @@
+/* Ported from the Pet Meds design system (tokens/typography.css).
+   Port note: scoped to .ds-root — see colors.css. --font-sans in particular would
+   otherwise override the app's Geist Variable face globally. */
+.ds-root {
+  --font-sans: 'Nunito', system-ui, -apple-system, sans-serif;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-display: 800;
+
+  /* Sizes — mobile-first scale */
+  --text-display: 28px;   /* screen titles */
+  --text-title: 18px;     /* pet name, card title */
+  --text-body-lg: 16px;   /* medication name, buttons */
+  --text-body: 15px;
+  --text-meta: 13px;      /* schedule, dose detail */
+  --text-label: 12px;     /* uppercase section labels */
+  --text-micro: 11px;     /* tab bar */
+
+  --leading-tight: 1.1;
+  --leading-snug: 1.3;
+  --leading-body: 1.5;
+
+  --tracking-display: -0.01em;
+  --tracking-label: 0.12em;
+
+  /* Roles */
+  --type-display: var(--weight-display) var(--text-display)/var(--leading-tight) var(--font-sans);
+  --type-title: var(--weight-semibold) var(--text-title)/var(--leading-snug) var(--font-sans);
+  --type-body: var(--weight-regular) var(--text-body)/var(--leading-body) var(--font-sans);
+  --type-meta: var(--weight-regular) var(--text-meta)/var(--leading-snug) var(--font-sans);
+}

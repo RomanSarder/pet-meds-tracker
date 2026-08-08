@@ -1,0 +1,57 @@
+/* Ported from the Pet Meds design system (tokens/colors.css).
+   Port note: the source declares these on :root. They are scoped to .ds-root here
+   so they cannot collide with the app's existing shadcn token layer. */
+.ds-root {
+  /* Base neutrals — warm paper */
+  --paper: #F6F3EC;
+  --paper-deep: #EDE9E0;
+  --surface: #FFFDF8;
+  --surface-sunk: #F1EEE6;
+  --line: #E4DFD5;
+  --line-strong: #DCD6CA;
+  --line-quiet: #EDE7DA;
+
+  --ink-1: #1D1B18;
+  --ink-2: #6E6961;
+  --ink-3: #8B857A;
+  --ink-inverse: #F6F3EC;
+
+  /* Brand accent — terracotta */
+  --accent: #C25A3C;
+  --accent-press: #9C4127;
+  --accent-tint: #F2DFD7;
+  --accent-ink: #A34A2E;
+
+  /* Status */
+  --alert: #8C2F39;
+  --alert-deep: #7A2733;
+  --alert-quiet: #9C6670;
+  --alert-tint: #F8ECED;
+  --alert-line: #E9CDD1;
+
+  --warn: #C2872F;
+  --warn-tint: #F7EEDC;
+
+  --ok: #5E8A63;
+  --ok-tint: #E4EDE3;
+
+  /* Pet identity tints — assigned in order pets are added */
+  --pet-1-bg: #F2DFD7;  --pet-1-ink: #A34A2E;
+  --pet-2-bg: #E7E0CF;  --pet-2-ink: #8A6B22;
+  --pet-3-bg: #E4DFD5;  --pet-3-ink: #6E6961;
+  --pet-4-bg: #DEE6E1;  --pet-4-ink: #4C6B58;
+
+  /* Semantic aliases */
+  --bg-app: var(--paper);
+  --bg-card: var(--surface);
+  --bg-card-quiet: var(--surface-sunk);
+  --text-title: var(--ink-1);
+  --text-body: var(--ink-2);
+  --text-muted: var(--ink-3);
+  --border-card: var(--line);
+  --action-bg: var(--accent);
+  --action-fg: var(--ink-inverse);
+  --state-overdue: var(--alert);
+  --state-low: var(--warn);
+  --state-good: var(--ok);
+}

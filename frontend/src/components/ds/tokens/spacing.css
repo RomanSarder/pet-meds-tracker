@@ -1,0 +1,21 @@
+/* Ported from the Pet Meds design system (tokens/spacing.css).
+   Port note: scoped to .ds-root — see colors.css. */
+.ds-root {
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-9: 20px;
+  --space-10: 22px;  /* screen gutter */
+  --space-11: 26px;
+  --space-12: 32px;
+
+  --gutter: var(--space-10);
+  --card-pad: var(--space-8);
+  --stack-gap: var(--space-7);
+  --row-gap: var(--space-6);
+}

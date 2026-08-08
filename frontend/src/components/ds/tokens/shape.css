@@ -1,0 +1,27 @@
+/* Ported from the Pet Meds design system (tokens/shape.css).
+   Port note: scoped to .ds-root — see colors.css. --radius-sm/md/lg in particular
+   are also read by the app's shadcn primitives, so they must not leak to :root. */
+.ds-root {
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 18px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+  --radius-device: 38px;
+
+  --border-hairline: 1px solid var(--line);
+  --border-strong: 1px solid var(--line-strong);
+  --border-alert: 1px solid var(--alert-line);
+
+  /* Cards sit on paper with a hairline, not a shadow. Shadow is reserved for
+     elements that float above the page: sheets, the device frame, toasts. */
+  --shadow-none: none;
+  --shadow-sheet: 0 -8px 32px -16px rgba(29, 27, 24, 0.28);
+  --shadow-float: 0 10px 30px -14px rgba(29, 27, 24, 0.35);
+  --shadow-device: 0 24px 60px -30px rgba(29, 27, 24, 0.4);
+
+  --tap-min: 44px;
+  --ease: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+}
