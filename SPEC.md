@@ -28,7 +28,9 @@ Screens designed after the original UI kit live as separate files and are equall
 
 **In scope (v1).** Pets, medication courses, a daily dashboard, logging a dose, a per-pet
 
-event log, a supply/shopping view, and a shared household several people can join.
+event log, a supply/shopping view, a shared household several people can join, and a fully
+
+localized interface in Ukrainian and English.
 
 **Out of scope (v1).** Vet appointments, weight tracking, photos, belonging to more than one
 
@@ -694,6 +696,64 @@ needed     = max(0, dailyUse × horizonDays − remaining)   rounded up to whole
 
 - Time-dependent logic must be injectable (a `now()` provider) so it is testable.
 
+### 10a. Language and formatting
+
+**Ukrainian is the default language. English is secondary.** A first-run user sees Ukrainian
+
+without choosing it; English is available and switchable from Settings, and the choice persists
+
+per device. Neither language is a machine translation of the other at runtime — both are
+
+authored, and every string ships in both.
+
+- **No user-facing string is hard-coded in a component.** Every one resolves through the
+
+  translation layer, including validation messages, empty states, notification copy, accessible
+
+  names, and text the user never sees rendered but a screen reader speaks.
+
+- **The scheduling engine returns data, never prose.** `describeSchedule`, `courseProgress` and
+
+  `summariseDay` currently emit finished English strings (`2× daily · 08:00, 20:00`,
+
+  `day 3 of 7`). Under localization they must return structured values and the interface layer
+
+  formats them. The engine stays pure and language-agnostic; §11's slice-3 contract is unchanged
+
+  in spirit — it still owns all time logic, it just stops owning wording.
+
+- **Pluralization is a rule, not a suffix.** Ukrainian has one/few/many forms where English has
+
+  one/other, so counts (`N doses left today`, `Household · N people`, `1 animal`) must resolve
+
+  through real plural rules per language. A string built by appending "s" is a defect in both
+
+  languages.
+
+- **Dates and weekday names localize. Times do not.** Times stay 24-hour with a leading zero
+
+  (`08:00`, `14:10`) in both languages — §3b requires real clock times including minutes, and
+
+  24-hour is already the Ukrainian norm. Dates follow the locale (`Wed 12 Aug` / `ср, 12 серп.`).
+
+- **Dose amounts never localize.** §1 is absolute: doses are stored and displayed exactly as
+
+  entered, with no conversion, rounding or normalising. A dose entered `0.4` renders `0.4` in
+
+  Ukrainian too — the decimal separator is part of what the user typed, not a formatting choice.
+
+  Unit strings (`ml`, `mg`, `tab`) are likewise entered by the user and are not translated.
+
+- **Medication names, pet names and user-entered notes are never translated.** They are data.
+
+- **Nothing is truncated to fit.** Ukrainian runs longer than English; a layout that only works
+
+  at English width is not finished. The 360–430px constraint applies in both languages.
+
+- The document language must be declared correctly for assistive technology, and must change
+
+  when the user switches language.
+
 ---
 
 ## 11. Suggested work slices
@@ -739,6 +799,14 @@ Each slice is independently assignable and ends in something testable.
 10. **Notifications** — service worker, scheduling for both kinds, notification actions.
 
 11. **PWA &amp; polish** — install manifest, offline shell, reduced-motion, accessibility audit.
+
+12. **Localization** — the translation layer, Ukrainian and English message catalogues, plural
+
+    rules, locale-aware dates, the language switch in Settings, and the engine refactor that
+
+    moves wording out of `describeSchedule` / `courseProgress` / `summariseDay` (§10a). Touches
+
+    every screen, so it lands last; every earlier slice must be merged first.
 
 **Slice contracts.**
 
@@ -791,4 +859,18 @@ Each slice is independently assignable and ends in something testable.
 - The event log shows a course pause even though pausing produces no DoseEvent.
 
 - Offline logs from two devices reconcile without duplicating or losing events.
+
+- A first-run user with no stored preference sees Ukrainian.
+
+- Switching language re-renders every screen and survives a reload.
+
+- No user-facing string renders in the wrong language after a switch, including notification
+
+  copy, validation messages and accessible names.
+
+- A count renders with the correct Ukrainian plural form for 1, 2, 5 and 21.
+
+- A dose entered as `0.4` renders as `0.4` in both languages, never `0,4`.
+
+- Every screen holds its layout at 360px in Ukrainian with nothing truncated or overflowing.
 
