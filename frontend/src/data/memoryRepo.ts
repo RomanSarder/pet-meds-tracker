@@ -2,17 +2,19 @@
 // workers develop and test against; W1 (slice 2) later ships `createIdbRepo`
 // against the same interface. Every invariant enforced here (append-only
 // dose history, cached stockUnits, monotonic tint cursor, bounded-window
-// retraction) is the same invariant the IndexedDB repo must enforce, so
-// nothing here is "just for tests".
+// retraction, the concurrent-log dedup guard) is the same invariant the
+// IndexedDB repo must enforce, so nothing here is "just for tests".
 import type {
   Course,
   CourseStatus,
   DoseEvent,
   DoseEventStatus,
   FixtureData,
+  Household,
   HouseholdBackup,
   ImportReport,
   IsoDateTime,
+  JoinCode,
   Medication,
   MedicationForm,
   MetaShape,
@@ -21,9 +23,13 @@ import type {
   StockAdjustment,
   StockReason,
   Timestamped,
+  User,
 } from "@/domain";
 import {
   cloneFixtures,
+  DEFAULT_SELF_DISPLAY_NAME,
+  GRACE_FIXED_MIN,
+  GRACE_INTERVAL_MIN,
   localDayKey,
   newId,
   now,
@@ -33,9 +39,9 @@ import {
   RETRACT_GRACE_MS,
 } from "@/domain";
 import type { Repo } from "./repo.types";
-import { RetractWindowExpiredError } from "./errors";
+import { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 
-export { RetractWindowExpiredError } from "./errors";
+export { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 
 function stamp(): IsoDateTime {
   return now().toISOString();
@@ -45,18 +51,47 @@ function notFound(label: string, id: string): never {
   throw new Error(`${label} not found: ${id}`);
 }
 
-export function createMemoryRepo(seed?: FixtureData): Repo {
+function mintHousehold(): Household {
+  const ts = stamp();
+  return { id: newId(), name: null, createdAt: ts, updatedAt: ts, deletedAt: null };
+}
+
+function mintSelfUser(householdId: string): User {
+  const ts = stamp();
+  return {
+    id: newId(),
+    householdId,
+    email: null,
+    displayName: DEFAULT_SELF_DISPLAY_NAME,
+    tint: 1,
+    isSelf: true,
+    joinedAt: ts,
+    createdAt: ts,
+    updatedAt: ts,
+    deletedAt: null,
+  };
+}
+
+export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
   // `structuredClone` on the caller's seed (or `cloneFixtures()` for the
   // default fixture constant) so the shared source can never be mutated by
   // this store, and so the store can never be mutated by anyone holding a
   // reference to the object they passed in.
-  const source: FixtureData = seed ? structuredClone(seed) : cloneFixtures();
+  const source: Partial<FixtureData> = seed ? structuredClone(seed) : cloneFixtures();
 
-  let pets: Pet[] = source.pets;
-  let medications: Medication[] = source.medications;
-  let courses: Course[] = source.courses;
-  let doseEvents: DoseEvent[] = source.doseEvents;
-  let stockAdjustments: StockAdjustment[] = source.stockAdjustments;
+  let pets: Pet[] = source.pets ?? [];
+  let medications: Medication[] = source.medications ?? [];
+  let courses: Course[] = source.courses ?? [];
+  let doseEvents: DoseEvent[] = source.doseEvents ?? [];
+  let stockAdjustments: StockAdjustment[] = source.stockAdjustments ?? [];
+  let joinCodes: JoinCode[] = source.joinCodes ?? [];
+
+  // A seed that omits `household`/`users` (the ~20 pre-existing call sites
+  // that only ever passed the five original arrays) mints them exactly as
+  // the v1->v2 migration does, rather than pulling in the fixture
+  // household/members it never asked for.
+  let household: Household = source.household ?? mintHousehold();
+  let users: User[] = source.users ?? [mintSelfUser(household.id)];
 
   // Cursor starts consistent with however many pets were seeded, assuming
   // (as our own fixtures do) that they were assigned tints 1..N in creation
@@ -64,9 +99,11 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
   // different tint layout gets a cursor that is merely a reasonable guess,
   // documented here rather than silently "fixed".
   const meta: MetaShape = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     tintCursor: pets.length,
     lastSweepDay: null,
+    selfUserId: users.find((u) => u.isSelf)?.id ?? null,
+    householdId: household.id,
   };
 
   // --- small internal helpers ------------------------------------------
@@ -79,6 +116,35 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     const row = arr.find((r) => r.id === id && r.deletedAt === null);
     if (!row) notFound(label, id);
     return row;
+  }
+
+  // --- identity: current actor / household -------------------------------
+
+  async function currentHouseholdId(): Promise<string> {
+    if (meta.householdId && meta.householdId === household.id) {
+      return meta.householdId;
+    }
+    // Absent in practice (the constructor above always sets one), but never
+    // throws — a repo caught without one mints it on demand.
+    household = mintHousehold();
+    meta.householdId = household.id;
+    return household.id;
+  }
+
+  async function currentActorId(): Promise<string> {
+    if (meta.selfUserId && users.some((u) => u.id === meta.selfUserId)) {
+      return meta.selfUserId;
+    }
+    const existing = users.find((u) => u.isSelf);
+    if (existing) {
+      meta.selfUserId = existing.id;
+      return existing.id;
+    }
+    const householdId = await currentHouseholdId();
+    const user = mintSelfUser(householdId);
+    users.push(user);
+    meta.selfUserId = user.id;
+    return user.id;
   }
 
   // --- pets ---------------------------------------------------------------
@@ -104,6 +170,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     const tint = ((meta.tintCursor % TINT_COUNT) + 1) as Pet["tint"];
     meta.tintCursor += 1;
     const ts = stamp();
+    const householdId = await currentHouseholdId();
     const pet: Pet = {
       id: newId(),
       name: input.name,
@@ -112,6 +179,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       weightGrams: input.weightGrams ?? null,
       tint,
       archived: false,
+      householdId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -297,6 +365,27 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     return structuredClone(result);
   }
 
+  /**
+   * SPEC §5 concurrent-log dedup guard, live per CONTRACT.md §6: rows for
+   * this course that are not soft-deleted, not superseded by a later
+   * `correctDose` row, and whose status is `given` or `skipped` (a `missed`
+   * row written by the sweep never blocks a real log).
+   */
+  function liveDoseEventsForCourse(courseId: string): DoseEvent[] {
+    const superseded = new Set(
+      doseEvents
+        .filter((e) => e.deletedAt === null && e.supersedesId !== null)
+        .map((e) => e.supersedesId as string),
+    );
+    return doseEvents.filter(
+      (e) =>
+        e.courseId === courseId &&
+        e.deletedAt === null &&
+        !superseded.has(e.id) &&
+        (e.status === "given" || e.status === "skipped"),
+    );
+  }
+
   async function logDose(input: {
     courseId: string;
     status: "given" | "skipped";
@@ -305,18 +394,36 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     amount: number;
     note?: string;
   }): Promise<DoseEvent> {
+    const course = requireAlive(courses, input.courseId, "Course");
+    const actorId = await currentActorId();
     const ts = stamp();
+    const givenAt = input.givenAt ?? ts;
+
+    const graceMin = course.schedule.kind === "fixedTimes" ? GRACE_FIXED_MIN : GRACE_INTERVAL_MIN;
+    const graceMs = graceMin * 60_000;
+    const givenAtMs = new Date(givenAt).getTime();
+    const duplicate = liveDoseEventsForCourse(input.courseId).find((e) => {
+      if (input.scheduledFor !== null && e.scheduledFor === input.scheduledFor) {
+        return true;
+      }
+      return Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs;
+    });
+    if (duplicate) {
+      throw new DuplicateDoseError(duplicate);
+    }
+
     const event: DoseEvent = {
       id: newId(),
       courseId: input.courseId,
       scheduledFor: input.scheduledFor,
       status: input.status,
       loggedAt: ts,
-      givenAt: input.givenAt ?? ts,
+      givenAt,
       amount: input.amount,
       note: input.note ?? null,
       occurrenceKey: occurrenceKeyFor(input.courseId, input.scheduledFor),
       supersedesId: null,
+      actorId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -331,6 +438,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
   ): Promise<DoseEvent> {
     const original = doseEvents.find((e) => e.id === originalId);
     if (!original) notFound("DoseEvent", originalId);
+    const actorId = await currentActorId();
     const ts = stamp();
     const corrected: DoseEvent = {
       ...structuredClone(original),
@@ -341,6 +449,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       note: patch.note ?? original.note,
       loggedAt: ts,
       supersedesId: originalId,
+      actorId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -364,13 +473,16 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       throw new Error(`Dose event ${id} has already been corrected and cannot be retracted`);
     }
     // The sole exception to append-only (brief §7 item 1): a bounded hard
-    // delete, not a soft delete and not a compensating row.
+    // delete, not a soft delete and not a compensating row. Because the row
+    // is truly gone, the dedup guard above cannot see it either — retracting
+    // never permanently poisons an occurrence.
     doseEvents.splice(idx, 1);
   }
 
   async function recordMissed(
     inputs: Array<{ courseId: string; scheduledFor: IsoDateTime; amount: number }>,
   ): Promise<DoseEvent[]> {
+    const actorId = await currentActorId();
     const created: DoseEvent[] = [];
     for (const input of inputs) {
       const occurrenceKey = occurrenceKeyFor(input.courseId, input.scheduledFor);
@@ -390,6 +502,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
         note: null,
         occurrenceKey,
         supersedesId: null,
+        actorId,
         createdAt: ts,
         updatedAt: ts,
         deletedAt: null,
@@ -422,6 +535,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     reason: StockReason;
     note?: string;
   }): Promise<StockAdjustment> {
+    const actorId = await currentActorId();
     const ts = stamp();
     const adjustment: StockAdjustment = {
       id: newId(),
@@ -429,6 +543,7 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       deltaUnits: input.deltaUnits,
       reason: input.reason,
       note: input.note ?? null,
+      actorId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -450,12 +565,143 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     });
   }
 
+  // --- household -----------------------------------------------------
+
+  async function getHousehold(id: string): Promise<Household | null> {
+    return household.id === id && household.deletedAt === null ? structuredClone(household) : null;
+  }
+
+  async function getCurrentHousehold(): Promise<Household> {
+    await currentHouseholdId();
+    return structuredClone(household);
+  }
+
+  async function updateHousehold(
+    id: string,
+    patch: Partial<Pick<Household, "name">>,
+  ): Promise<Household> {
+    if (household.id !== id || household.deletedAt !== null) notFound("Household", id);
+    Object.assign(household, patch, { updatedAt: stamp() });
+    return structuredClone(household);
+  }
+
+  // --- users -----------------------------------------------------------
+
+  async function listUsers(opts?: { includeRemoved?: boolean }): Promise<User[]> {
+    const includeRemoved = opts?.includeRemoved ?? false;
+    return structuredClone(users.filter((u) => includeRemoved || u.deletedAt === null));
+  }
+
+  async function getUser(id: string): Promise<User | null> {
+    const u = findAlive(users, id);
+    return u ? structuredClone(u) : null;
+  }
+
+  async function getCurrentUser(): Promise<User> {
+    const id = await currentActorId();
+    const u = users.find((x) => x.id === id);
+    if (!u) notFound("User", id);
+    return structuredClone(u);
+  }
+
+  async function upsertUser(user: User): Promise<User> {
+    const cloned = structuredClone(user);
+    const idx = users.findIndex((u) => u.id === user.id);
+    if (idx === -1) {
+      users.push(cloned);
+    } else {
+      users[idx] = cloned;
+    }
+    return structuredClone(cloned);
+  }
+
+  async function updateUser(
+    id: string,
+    patch: Partial<Pick<User, "displayName" | "tint">>,
+  ): Promise<User> {
+    const user = requireAlive(users, id, "User");
+    Object.assign(user, patch, { updatedAt: stamp() });
+    return structuredClone(user);
+  }
+
+  async function removeUser(id: string): Promise<void> {
+    // Soft delete: history keeps `actorId`, and `displayNameFor` still
+    // resolves the name via `listUsers({ includeRemoved: true })`. Never
+    // splice the row out.
+    const user = requireAlive(users, id, "User");
+    const ts = stamp();
+    user.deletedAt = ts;
+    user.updatedAt = ts;
+  }
+
+  // --- join codes --------------------------------------------------------
+
+  async function listJoinCodes(): Promise<JoinCode[]> {
+    return structuredClone(joinCodes.filter((c) => c.deletedAt === null));
+  }
+
+  async function getJoinCodeByCode(code: string): Promise<JoinCode | null> {
+    const c = joinCodes.find((jc) => jc.code === code && jc.deletedAt === null);
+    return c ? structuredClone(c) : null;
+  }
+
+  async function createJoinCode(input: { code: string; expiresAt: IsoDateTime }): Promise<JoinCode> {
+    const householdId = await currentHouseholdId();
+    const createdBy = await currentActorId();
+    const ts = stamp();
+    // SPEC §5: one live code at a time — revoke any other live code for the
+    // household before minting the new one.
+    for (const jc of joinCodes) {
+      if (
+        jc.householdId === householdId &&
+        jc.deletedAt === null &&
+        jc.revokedAt === null &&
+        jc.usedBy === null
+      ) {
+        jc.revokedAt = ts;
+        jc.updatedAt = ts;
+      }
+    }
+    const joinCode: JoinCode = {
+      id: newId(),
+      householdId,
+      code: input.code,
+      createdBy,
+      expiresAt: input.expiresAt,
+      usedBy: null,
+      revokedAt: null,
+      createdAt: ts,
+      updatedAt: ts,
+      deletedAt: null,
+    };
+    joinCodes.push(joinCode);
+    return structuredClone(joinCode);
+  }
+
+  async function markJoinCodeUsed(id: string, usedBy: string): Promise<JoinCode> {
+    const jc = joinCodes.find((c) => c.id === id);
+    if (!jc) notFound("JoinCode", id);
+    jc.usedBy = usedBy;
+    jc.updatedAt = stamp();
+    return structuredClone(jc);
+  }
+
+  async function revokeJoinCode(id: string): Promise<JoinCode> {
+    const jc = joinCodes.find((c) => c.id === id);
+    if (!jc) notFound("JoinCode", id);
+    jc.revokedAt = stamp();
+    jc.updatedAt = stamp();
+    return structuredClone(jc);
+  }
+
   // --- backup / restore ---------------------------------------------------
 
   async function exportHousehold(): Promise<HouseholdBackup> {
     return structuredClone({
       schemaVersion: meta.schemaVersion,
       exportedAt: stamp(),
+      households: [household],
+      users,
       pets,
       medications,
       courses,
@@ -485,18 +731,39 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
   }
 
   async function importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport> {
+    // Backfill targets are read BEFORE any household/user replacement, so a
+    // v1-shaped backup (no `households`/`users` keys) backfills against the
+    // identity this repo already has, not one import is about to discard.
+    const fallbackHouseholdId = await currentHouseholdId();
+    const fallbackActorId = await currentActorId();
+
+    const backfillPets = (rows: Pet[]): Pet[] =>
+      rows.map((p) => (p.householdId ? p : { ...p, householdId: fallbackHouseholdId }));
+    const backfillEvents = (rows: DoseEvent[]): DoseEvent[] =>
+      rows.map((e) => (e.actorId ? e : { ...e, actorId: fallbackActorId }));
+    const backfillAdjustments = (rows: StockAdjustment[]): StockAdjustment[] =>
+      rows.map((a) => (a.actorId ? a : { ...a, actorId: fallbackActorId }));
+
     if (mode === "replace") {
-      pets = structuredClone(b.pets);
+      if (b.households && b.households[0]) {
+        household = structuredClone(b.households[0]);
+      }
+      if (b.users) {
+        users = structuredClone(b.users);
+      }
+      pets = backfillPets(structuredClone(b.pets));
       medications = structuredClone(b.medications);
       courses = structuredClone(b.courses);
-      doseEvents = structuredClone(b.doseEvents);
-      stockAdjustments = structuredClone(b.stockAdjustments);
+      doseEvents = backfillEvents(structuredClone(b.doseEvents));
+      stockAdjustments = backfillAdjustments(structuredClone(b.stockAdjustments));
       meta.schemaVersion = b.schemaVersion;
       // Transport the real cursor/sweep-day when the backup carries them
       // (a v1 backup written after this fix); fall back to the old,
       // re-derived behaviour for backups written before `meta` existed.
       meta.tintCursor = b.meta?.tintCursor ?? pets.length;
       meta.lastSweepDay = b.meta?.lastSweepDay ?? null;
+      meta.householdId = household.id;
+      meta.selfUserId = users.find((u) => u.isSelf)?.id ?? meta.selfUserId;
       return {
         mode,
         pets: pets.length,
@@ -508,17 +775,24 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
       };
     }
 
-    const petsR = mergeArray(pets, b.pets);
+    const petsR = mergeArray(pets, backfillPets(b.pets));
     const medsR = mergeArray(medications, b.medications);
     const coursesR = mergeArray(courses, b.courses);
-    const eventsR = mergeArray(doseEvents, b.doseEvents);
-    const stockR = mergeArray(stockAdjustments, b.stockAdjustments);
+    const eventsR = mergeArray(doseEvents, backfillEvents(b.doseEvents));
+    const stockR = mergeArray(stockAdjustments, backfillAdjustments(b.stockAdjustments));
 
     pets = petsR.merged;
     medications = medsR.merged;
     courses = coursesR.merged;
     doseEvents = eventsR.merged;
     stockAdjustments = stockR.merged;
+
+    if (b.users) {
+      users = mergeArray(users, b.users).merged;
+    }
+    if (b.households && b.households[0]) {
+      household = mergeArray([household], b.households).merged[0] ?? household;
+    }
 
     // Merge only ever moves the cursor forward, and only when the incoming
     // backup actually carries one — an old backup without `meta` must not
@@ -577,5 +851,21 @@ export function createMemoryRepo(seed?: FixtureData): Repo {
     importHousehold,
     getMeta,
     setMeta,
+    currentActorId,
+    currentHouseholdId,
+    getHousehold,
+    getCurrentHousehold,
+    updateHousehold,
+    listUsers,
+    getUser,
+    getCurrentUser,
+    upsertUser,
+    updateUser,
+    removeUser,
+    listJoinCodes,
+    getJoinCodeByCode,
+    createJoinCode,
+    markJoinCodeUsed,
+    revokeJoinCode,
   };
 }

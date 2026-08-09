@@ -8,7 +8,7 @@ import type { Repo } from "./repo.types";
 
 export type { Repo } from "./repo.types";
 export { createMemoryRepo } from "./memoryRepo";
-export { RetractWindowExpiredError } from "./errors";
+export { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 export { createIdbRepo } from "./idbRepo";
 export { liveDoseEvent, liveDoseEvents } from "./doseEvents";
 

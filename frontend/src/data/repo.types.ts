@@ -9,9 +9,11 @@ import type {
   CourseStatus,
   DoseEvent,
   DoseEventStatus,
+  Household,
   HouseholdBackup,
   ImportReport,
   IsoDateTime,
+  JoinCode,
   LocalDate,
   Medication,
   MedicationForm,
@@ -21,6 +23,7 @@ import type {
   StockAdjustment,
   StockReason,
   Timestamped,
+  User,
 } from "@/domain";
 
 /**
@@ -131,4 +134,33 @@ export interface Repo {
 
   getMeta<K extends keyof MetaShape>(key: K): Promise<MetaShape[K] | null>;
   setMeta<K extends keyof MetaShape>(key: K, value: MetaShape[K]): Promise<void>;
+
+  /**
+   * SPEC §11: the current actor, stubbed to a single local user until slice 8 replaces the
+   * source. Never null, never throws — a repo with no self user creates one on demand.
+   */
+  currentActorId(): Promise<string>;
+  /** The local household id. Same non-null guarantee. */
+  currentHouseholdId(): Promise<string>;
+
+  getHousehold(id: string): Promise<Household | null>;
+  getCurrentHousehold(): Promise<Household>;
+  updateHousehold(id: string, patch: Partial<Pick<Household, "name">>): Promise<Household>;
+
+  /** Members of the local household, soft-deleted ones excluded unless `includeRemoved`. */
+  listUsers(opts?: { includeRemoved?: boolean }): Promise<User[]>;
+  getUser(id: string): Promise<User | null>;
+  getCurrentUser(): Promise<User>;
+  /** Insert or replace a member row wholesale — how slice 8 lands members it learns from the server. */
+  upsertUser(user: User): Promise<User>;
+  updateUser(id: string, patch: Partial<Pick<User, "displayName" | "tint">>): Promise<User>;
+  /** Soft-delete. History keeps the `actorId`; the name still resolves. Never hard-deletes. */
+  removeUser(id: string): Promise<void>;
+
+  listJoinCodes(): Promise<JoinCode[]>;
+  getJoinCodeByCode(code: string): Promise<JoinCode | null>;
+  /** Revokes any other live code for the household first — SPEC §5: one live code at a time. */
+  createJoinCode(input: { code: string; expiresAt: IsoDateTime }): Promise<JoinCode>;
+  markJoinCodeUsed(id: string, usedBy: string): Promise<JoinCode>;
+  revokeJoinCode(id: string): Promise<JoinCode>;
 }
