@@ -370,4 +370,68 @@ describe("v1 -> v2 migration", () => {
       db.close();
     }
   });
+
+  it("mints a fresh household and self user when meta points at rows that don't exist", async () => {
+    const name = crypto.randomUUID();
+    await seedV1Database(name);
+
+    const DANGLING_HOUSEHOLD_ID = "dangling-household-11111111-1111-1111-1111-111111111111";
+    const DANGLING_SELF_USER_ID = "dangling-user-2222222222-2222-2222-2222-222222222222";
+    const database = await openV1Database(name);
+    await putAll(database, "meta", [
+      { key: "householdId", value: DANGLING_HOUSEHOLD_ID },
+      { key: "selfUserId", value: DANGLING_SELF_USER_ID },
+    ]);
+    database.close();
+
+    const db = await openPetMedsDb(name);
+    try {
+      const householdId = await getMetaValue(db, "householdId");
+      const selfUserId = await getMetaValue(db, "selfUserId");
+
+      // The dangling ids were replaced, not trusted.
+      expect(householdId).not.toBe(DANGLING_HOUSEHOLD_ID);
+      expect(selfUserId).not.toBe(DANGLING_SELF_USER_ID);
+
+      // A real household and self user now genuinely exist.
+      const households = await db.getAll("households");
+      const users = await db.getAll("users");
+      expect(households).toHaveLength(1);
+      expect(users).toHaveLength(1);
+      expect(households[0].id).toBe(householdId);
+      expect(users[0].id).toBe(selfUserId);
+      expect(users[0].isSelf).toBe(true);
+
+      // Every pet's householdId resolves to a row that actually exists.
+      const migratedPets = await db.getAll("pets");
+      expect(migratedPets).toHaveLength(2);
+      for (const pet of migratedPets) {
+        expect(pet.householdId).toBe(householdId);
+        expect(await db.get("households", pet.householdId as string)).toBeTruthy();
+      }
+
+      // Every doseEvent/stockAdjustment actorId resolves to a row that
+      // actually exists — not merely a non-empty string.
+      const migratedDoseEvents = await db.getAll("doseEvents");
+      const migratedStockAdjustments = await db.getAll("stockAdjustments");
+      expect(migratedDoseEvents).toHaveLength(3);
+      expect(migratedStockAdjustments).toHaveLength(2);
+      for (const doseEvent of migratedDoseEvents) {
+        expect(doseEvent.actorId).toBe(selfUserId);
+        expect(await db.get("users", doseEvent.actorId as string)).toBeTruthy();
+      }
+      for (const stockAdjustment of migratedStockAdjustments) {
+        expect(stockAdjustment.actorId).toBe(selfUserId);
+        expect(await db.get("users", stockAdjustment.actorId as string)).toBeTruthy();
+      }
+
+      // No pre-existing row was dropped.
+      const migratedMedications = await db.getAll("medications");
+      const migratedCourses = await db.getAll("courses");
+      expect(migratedMedications).toHaveLength(1);
+      expect(migratedCourses).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
 });

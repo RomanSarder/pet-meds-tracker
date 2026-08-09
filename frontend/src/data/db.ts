@@ -128,7 +128,18 @@ export function openPetMedsDb(dbName: string = DB_NAME): Promise<IDBPDatabase<Pe
           let householdId = householdIdRecord?.value as string | null | undefined;
           let selfUserId = selfUserIdRecord?.value as string | null | undefined;
 
-          if (!householdId || !selfUserId) {
+          // A meta id alone is not proof of a live row: `households` and
+          // `users` are created fresh in this very branch, so a stale or
+          // hand-written meta id would otherwise slip past this check and
+          // get backfilled onto every pet/event, pointing at nothing.
+          const existingHousehold = householdId
+            ? await transaction.objectStore("households").get(householdId)
+            : undefined;
+          const existingSelfUser = selfUserId
+            ? await transaction.objectStore("users").get(selfUserId)
+            : undefined;
+
+          if (!householdId || !selfUserId || !existingHousehold || !existingSelfUser) {
             householdId = newId();
             selfUserId = newId();
             const ts = now().toISOString();
