@@ -411,7 +411,7 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
   it("getMeta returns null for an unset key and the seeded defaults for a fresh empty household; setMeta round-trips", async () => {
     const repo = makeRepo();
 
-    expect(await repo.getMeta("schemaVersion")).toBe(2);
+    expect(await repo.getMeta("schemaVersion")).toBe(3);
     expect(await repo.getMeta("tintCursor")).toBe(0);
     expect(await repo.getMeta("lastSweepDay")).toBeNull();
 

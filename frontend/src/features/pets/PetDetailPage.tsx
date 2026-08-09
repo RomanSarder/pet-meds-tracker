@@ -5,9 +5,11 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { Badge, Button, Card, IconButton, PetAvatar, SectionLabel } from "@/components/ds";
-import { localDayKey, now } from "@/domain";
+import { displayNameLookup, localDayKey, now } from "@/domain";
 import { courseProgress, describeSchedule, getDoseState, getOccurrences } from "@/engine";
 import { useCourses, useDoseEvents, useMedications } from "@/features/courses/hooks";
+import { buildLogEntries } from "@/features/history/logModel";
+import { useCourseEventLog, useUsers } from "@/features/history/hooks";
 import { ageLabel } from "./age";
 import { doseRowPropsFor } from "./doseRow";
 import { courseLabel, eventWhenLabel, joinMeta, speciesLabel, weightLabel } from "./format";
@@ -36,6 +38,14 @@ export function PetDetailView({ petId }: { petId: string }) {
   // firing an unfiltered query in the meantime.
   const courseIds = courses.data?.map((c) => c.id) ?? [];
   const events = useDoseEvents({ courseIds, limit: 10, newestFirst: true });
+  // Recent (SPEC §6.3) widened to the same event-log model History (§6.4)
+  // uses, so a course pause/resume with no DoseEvent still shows up here.
+  // Bounding each source query to the last 10 and letting `buildLogEntries`
+  // merge+sort them is safe: any entry within the true merged top 10 can
+  // have at most 9 same-kind entries ranked above it, so it is necessarily
+  // within its own kind's top 10 too.
+  const courseEventsForRecent = useCourseEventLog({ courseIds, limit: 10, newestFirst: true });
+  const users = useUsers();
   const setPetArchived = useSetPetArchived();
 
   if (!pet.data) return null;
@@ -43,6 +53,13 @@ export function PetDetailView({ petId }: { petId: string }) {
   const activeCourses = courses.data ?? [];
   const medicationList = medications.data ?? [];
   const recentEvents = events.data ?? [];
+  const nameFor = displayNameLookup(users.data ?? []);
+  const recentLog = buildLogEntries({
+    courses: activeCourses,
+    medications: medicationList,
+    doseEvents: recentEvents,
+    courseEvents: courseEventsForRecent.data ?? [],
+  }).slice(0, 10);
 
   // `getOccurrences` decides which courses generate occurrences (it skips
   // non-`active` ones) — the context below hands it this pet's courses and
