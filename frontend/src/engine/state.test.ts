@@ -39,6 +39,7 @@ function makeEvent(
     amount: 1,
     note: null,
     supersedesId: null,
+    actorId: "test-actor-id",
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
     deletedAt: null,

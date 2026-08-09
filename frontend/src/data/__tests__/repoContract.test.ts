@@ -9,10 +9,15 @@
 // counts differ legitimately between the two.
 import { describe, expect, it, afterEach } from "vitest";
 import type { Repo } from "@/data";
-import { createIdbRepo, createMemoryRepo } from "@/data";
-import type { HouseholdBackup, Medication, MetaShape } from "@/domain";
+import { createIdbRepo, createMemoryRepo, DuplicateDoseError } from "@/data";
+import type { HouseholdBackup, JoinCode, Medication, MetaShape, User } from "@/domain";
 import {
+  displayNameFor,
   fixedClock,
+  GRACE_FIXED_MIN,
+  GRACE_INTERVAL_MIN,
+  isJoinCodeUsable,
+  JOIN_CODE_TTL_MS,
   localDayKey,
   occurrenceKeyFor,
   RETRACT_GRACE_MS,
@@ -62,6 +67,26 @@ async function setupCourse(repo: Repo): Promise<{ petId: string; medicationId: s
   return { petId: pet.id, medicationId: medication.id, courseId: course.id };
 }
 
+/** Same as `setupCourse` but `fromLastDose` — for dedup-guard cases keyed on `scheduledFor: null`. */
+async function setupIntervalCourse(
+  repo: Repo,
+): Promise<{ petId: string; medicationId: string; courseId: string }> {
+  const pet = await repo.createPet({ name: "Nugget", species: "guinea_pig" });
+  const medication = await repo.createMedication({ name: "Metoclopramide", form: "liquid", unit: "ml" });
+  const course = await repo.createCourse({
+    petId: pet.id,
+    medicationId: medication.id,
+    doseAmount: 0.5,
+    doseUnit: "ml",
+    instructions: null,
+    schedule: { kind: "fromLastDose", intervalHours: 8 },
+    startDate: "2026-08-01",
+    endDate: null,
+    notes: null,
+  });
+  return { petId: pet.id, medicationId: medication.id, courseId: course.id };
+}
+
 function emptyBackup(overrides: Partial<HouseholdBackup> = {}): HouseholdBackup {
   return {
     schemaVersion: 1,
@@ -103,12 +128,23 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     await repo.adjustStock({ medicationId, deltaUnits: 10, reason: "purchase" });
     const before = await repo.getMedication(medicationId);
 
+    // `setupCourse` schedules `fixedTimes`, so the concurrent-log dedup guard
+    // (CONTRACT.md §6) grades on GRACE_FIXED_MIN: four logs at one instant
+    // are one dose repeated, not four distinct ones. Advance the injected
+    // clock past the grace window between iterations so all four are
+    // genuinely distinct occurrences and the guard has nothing to reject —
+    // keeping this test's actual intent (stockUnits is untouched by logging)
+    // free of an incidental collision with the dedup guard.
+    let t = new Date("2026-08-08T07:00:00.000Z");
     for (let i = 0; i < 4; i++) {
+      setClock(fixedClock(t.toISOString()));
       await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+      t = new Date(t.getTime() + GRACE_FIXED_MIN * 60_000 + 60_000);
     }
 
     const after = await repo.getMedication(medicationId);
     expect(after?.stockUnits).toBe(before?.stockUnits);
+    expect(await repo.listDoseEvents({ courseId })).toHaveLength(4);
   });
 
   // --- 2. logging then undoing leaves history exactly as before ----------
@@ -375,7 +411,7 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
   it("getMeta returns null for an unset key and the seeded defaults for a fresh empty household; setMeta round-trips", async () => {
     const repo = makeRepo();
 
-    expect(await repo.getMeta("schemaVersion")).toBe(1);
+    expect(await repo.getMeta("schemaVersion")).toBe(2);
     expect(await repo.getMeta("tintCursor")).toBe(0);
     expect(await repo.getMeta("lastSweepDay")).toBeNull();
 
@@ -407,5 +443,345 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     const roundTripPet = await roundTripRepo.createPet({ name: "Round Trip", species: "cat" });
 
     expect(roundTripPet.tint).toBe(controlPet.tint);
+  });
+
+  // --- 15. currentActorId / currentHouseholdId: non-null and stable --------
+
+  it("currentActorId and currentHouseholdId are non-empty strings, stable across a second call", async () => {
+    const repo = makeRepo();
+    const actorId = await repo.currentActorId();
+    const householdId = await repo.currentHouseholdId();
+    expect(actorId.length).toBeGreaterThan(0);
+    expect(householdId.length).toBeGreaterThan(0);
+    expect(await repo.currentActorId()).toBe(actorId);
+    expect(await repo.currentHouseholdId()).toBe(householdId);
+  });
+
+  // --- 16. every write path stamps actorId without caller involvement ------
+
+  it("logDose, correctDose, recordMissed, adjustStock and setStockOnHand each stamp actorId === currentActorId(), with no caller involvement", async () => {
+    const repo = makeRepo();
+    const { medicationId, courseId } = await setupCourse(repo);
+    const actorId = await repo.currentActorId();
+    expect(actorId.length).toBeGreaterThan(0);
+
+    const dose = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    expect(dose.actorId).toBe(actorId);
+
+    const corrected = await repo.correctDose(dose.id, { amount: 0.5 });
+    expect(corrected.actorId).toBe(actorId);
+
+    const [missed] = await repo.recordMissed([
+      { courseId, scheduledFor: "2026-08-09T08:00:00.000Z", amount: 0.4 },
+    ]);
+    expect(missed.actorId).toBe(actorId);
+
+    const adjustment = await repo.adjustStock({ medicationId, deltaUnits: 10, reason: "purchase" });
+    expect(adjustment.actorId).toBe(actorId);
+
+    const setOnHand = await repo.setStockOnHand(medicationId, 20);
+    expect(setOnHand.actorId).toBe(actorId);
+  });
+
+  // --- 17. no write path can ever produce a null actorId --------------------
+
+  it("no DoseEvent or StockAdjustment row is missing, null or empty actorId after exercising every write method", async () => {
+    const repo = makeRepo();
+    const { medicationId, courseId } = await setupCourse(repo);
+    const dose = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    await repo.correctDose(dose.id, { amount: 0.5 });
+    await repo.recordMissed([{ courseId, scheduledFor: "2026-08-09T08:00:00.000Z", amount: 0.4 }]);
+    await repo.adjustStock({ medicationId, deltaUnits: 10, reason: "purchase" });
+    await repo.setStockOnHand(medicationId, 20);
+
+    const events = await repo.listDoseEvents({});
+    const adjustments = await repo.listStockAdjustments();
+    expect(events.length).toBeGreaterThan(0);
+    expect(adjustments.length).toBeGreaterThan(0);
+    for (const e of events) {
+      expect(e.actorId).toBeTruthy();
+    }
+    for (const a of adjustments) {
+      expect(a.actorId).toBeTruthy();
+    }
+  });
+
+  // --- 18. createPet stamps householdId, with no caller involvement --------
+
+  it("createPet stamps householdId === currentHouseholdId(), with no caller involvement", async () => {
+    const repo = makeRepo();
+    const householdId = await repo.currentHouseholdId();
+    const pet = await repo.createPet({ name: "Clover", species: "rabbit" });
+    expect(pet.householdId).toBe(householdId);
+  });
+
+  // --- 19. concurrent-log dedup guard (SPEC §5/§12) --------------------------
+
+  describe("logDose dedup guard", () => {
+    it("a fixedTimes course: logging the identical non-null scheduledFor twice throws DuplicateDoseError, and exactly one event survives", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo);
+      const scheduledFor = "2026-08-08T07:00:00.000Z";
+
+      await repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 });
+      await expect(
+        repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 }),
+      ).rejects.toBeInstanceOf(DuplicateDoseError);
+
+      const events = await repo.listDoseEvents({ courseId });
+      expect(events).toHaveLength(1);
+    });
+
+    it("the thrown DuplicateDoseError carries the surviving event's actorId/givenAt, and its message contains no '@' and no display name", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo);
+      const scheduledFor = "2026-08-08T07:00:00.000Z";
+
+      await repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 });
+      let caught: unknown;
+      try {
+        await repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(DuplicateDoseError);
+      const dup = caught as DuplicateDoseError;
+
+      const [survivor] = await repo.listDoseEvents({ courseId });
+      expect(dup.actorId).toBe(survivor.actorId);
+      expect(dup.givenAt).toBe(survivor.givenAt);
+      expect(dup.message).not.toContain("@");
+
+      const users = await repo.listUsers({ includeRemoved: true });
+      const name = displayNameFor(dup.actorId, users);
+      expect(dup.message).not.toContain(name);
+    });
+
+    it("a fromLastDose course, scheduledFor: null: a second log 10 minutes later is rejected; a log 91 minutes later is accepted", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupIntervalCourse(repo);
+      const t0 = "2026-08-08T07:00:00.000Z";
+
+      setClock(fixedClock(t0));
+      await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
+
+      setClock(fixedClock(new Date(new Date(t0).getTime() + 10 * 60_000).toISOString()));
+      await expect(
+        repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 }),
+      ).rejects.toBeInstanceOf(DuplicateDoseError);
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
+
+      setClock(
+        fixedClock(new Date(new Date(t0).getTime() + (GRACE_INTERVAL_MIN + 1) * 60_000).toISOString()),
+      );
+      await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(2);
+    });
+
+    it("correctDose still writes its superseding row and recordMissed still works — the guard applies to logDose only", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo);
+      const scheduledFor = "2026-08-08T07:00:00.000Z";
+
+      const original = await repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 });
+      // Immediately correcting the row we just logged, at the same instant,
+      // must not trip the dedup guard — `correctDose` is exempt.
+      const corrected = await repo.correctDose(original.id, { amount: 0.5 });
+      expect(corrected.supersedesId).toBe(original.id);
+
+      // `recordMissed` for a distinct occurrence on the same course, at the
+      // same instant, must not trip the guard either — it dedupes only via
+      // `occurrenceKey`.
+      const [missed] = await repo.recordMissed([
+        { courseId, scheduledFor: "2026-08-09T07:00:00.000Z", amount: 0.4 },
+      ]);
+      expect(missed.status).toBe("missed");
+    });
+
+    it("after retractDoseEvent removes the only event, the same occurrence can be logged again", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo);
+      const scheduledFor = "2026-08-08T07:00:00.000Z";
+
+      const event = await repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 });
+      await repo.retractDoseEvent(event.id);
+
+      const relogged = await repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 });
+      expect(relogged.id).not.toBe(event.id);
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
+    });
+  });
+
+  // --- 20. displayNameFor end to end -----------------------------------------
+
+  it("displayNameFor resolves a real logged actor's name, a second member's name, and 'Someone' for an unknown id", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+    const selfId = await repo.currentActorId();
+    const householdId = await repo.currentHouseholdId();
+    const self = await repo.getUser(selfId);
+
+    const marta: User = {
+      id: "b0000000-0000-4000-8000-00000000c001",
+      householdId,
+      email: null,
+      displayName: "Marta",
+      tint: 2,
+      isSelf: false,
+      joinedAt: "2026-08-08T07:00:00.000Z",
+      createdAt: "2026-08-08T07:00:00.000Z",
+      updatedAt: "2026-08-08T07:00:00.000Z",
+      deletedAt: null,
+    };
+    await repo.upsertUser(marta);
+
+    const dose = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    const users = await repo.listUsers({ includeRemoved: true });
+
+    expect(displayNameFor(dose.actorId, users)).toBe(self?.displayName);
+    expect(displayNameFor(marta.id, users)).toBe("Marta");
+    expect(displayNameFor("not-a-real-member-id", users)).toBe("Someone");
+  });
+
+  // --- 21. a removed member's name still renders (SPEC §12) ------------------
+
+  it("removeUser soft-deletes the member; their historical DoseEvent rows are untouched and displayNameFor still resolves their name via includeRemoved", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+    const selfId = await repo.currentActorId();
+    const self = await repo.getUser(selfId);
+
+    const event = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    const jsonBefore = JSON.stringify(event);
+
+    await repo.removeUser(selfId);
+
+    const eventsAfter = await repo.listDoseEvents({ courseId });
+    const survivingEvent = eventsAfter.find((e) => e.id === event.id);
+    expect(JSON.stringify(survivingEvent)).toBe(jsonBefore);
+
+    const visibleWithoutRemoved = await repo.listUsers({});
+    expect(visibleWithoutRemoved.find((u) => u.id === selfId)).toBeUndefined();
+
+    const usersIncludingRemoved = await repo.listUsers({ includeRemoved: true });
+    expect(displayNameFor(selfId, usersIncludingRemoved)).toBe(self?.displayName);
+  });
+
+  // --- 22. renaming a member is retroactive (SPEC §12) ------------------------
+
+  it("updateUser's displayName change is retroactive: a historical DoseEvent's resolved name changes too, proving no name was denormalised onto the event", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+    const selfId = await repo.currentActorId();
+
+    const event = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+
+    await repo.updateUser(selfId, { displayName: "Ilya" });
+
+    const usersAfter = await repo.listUsers({ includeRemoved: true });
+    expect(displayNameFor(event.actorId, usersAfter)).toBe("Ilya");
+  });
+
+  // --- 23. join codes (SPEC §12) -----------------------------------------------
+
+  it("issuing a second join code revokes the first; isJoinCodeUsable holds for used/revoked/expired/fresh; getJoinCodeByCode resolves by code", async () => {
+    const t0 = "2026-08-08T07:00:00.000Z";
+    setClock(fixedClock(t0));
+    const repo = makeRepo();
+    const expiresAt = new Date(new Date(t0).getTime() + JOIN_CODE_TTL_MS).toISOString();
+
+    const first = await repo.createJoinCode({ code: "K7RMQ4", expiresAt });
+    expect(isJoinCodeUsable(first, new Date(t0))).toBe(true);
+
+    const second = await repo.createJoinCode({ code: "H8SNPQ", expiresAt });
+    const firstAfterSecond = (await repo.listJoinCodes()).find((c) => c.id === first.id);
+    expect(firstAfterSecond?.revokedAt).not.toBeNull();
+    expect(isJoinCodeUsable(firstAfterSecond as JoinCode, new Date(t0))).toBe(false);
+
+    expect(await repo.getJoinCodeByCode("H8SNPQ")).toMatchObject({ id: second.id });
+    expect(await repo.getJoinCodeByCode("ZZZZZZ")).toBeNull();
+
+    const used = await repo.markJoinCodeUsed(second.id, "some-member-id");
+    expect(isJoinCodeUsable(used, new Date(t0))).toBe(false);
+
+    const third = await repo.createJoinCode({ code: "L9TQWX", expiresAt });
+    const revokedThird = await repo.revokeJoinCode(third.id);
+    expect(isJoinCodeUsable(revokedThird, new Date(t0))).toBe(false);
+
+    const expiredCode: JoinCode = {
+      ...revokedThird,
+      id: "expired-check-id",
+      revokedAt: null,
+      usedBy: null,
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    };
+    expect(isJoinCodeUsable(expiredCode, new Date(t0))).toBe(false);
+  });
+
+  // --- 24. export/import round-trip: households/users carried, joinCodes excluded, v1 backfill --
+
+  it("exportHousehold carries households/users and no joinCodes; importing a v1-shaped backup backfills householdId/actorId on every row", async () => {
+    const repo = makeRepo();
+    const { courseId, medicationId } = await setupCourse(repo);
+    await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    await repo.adjustStock({ medicationId, deltaUnits: 5, reason: "purchase" });
+    await repo.createJoinCode({ code: "K7RMQ4", expiresAt: "2026-08-09T07:00:00.000Z" });
+
+    const backup = await repo.exportHousehold();
+    expect(backup.households?.length).toBeGreaterThan(0);
+    expect(backup.users?.length).toBeGreaterThan(0);
+    expect((backup as unknown as Record<string, unknown>).joinCodes).toBeUndefined();
+
+    // A v1-shaped backup: no `households`/`users` keys, and rows stripped of
+    // the fields v2 added, exactly what a pre-migration export looked like.
+    const v1Pet = { ...backup.pets[0] } as Record<string, unknown>;
+    delete v1Pet.householdId;
+    const v1Event = { ...backup.doseEvents[0] } as Record<string, unknown>;
+    delete v1Event.actorId;
+    const v1Adjustment = { ...backup.stockAdjustments[0] } as Record<string, unknown>;
+    delete v1Adjustment.actorId;
+
+    const v1Backup = {
+      schemaVersion: 1,
+      exportedAt: backup.exportedAt,
+      pets: [v1Pet],
+      medications: [],
+      courses: [],
+      doseEvents: [v1Event],
+      stockAdjustments: [v1Adjustment],
+    } as unknown as HouseholdBackup;
+
+    const target = makeRepo();
+    await target.importHousehold(v1Backup, "replace");
+
+    const importedPets = await target.listPets({ includeArchived: true });
+    const importedEvents = await target.listDoseEvents({});
+    const importedAdjustments = await target.listStockAdjustments();
+    expect(importedPets.length).toBeGreaterThan(0);
+    expect(importedEvents.length).toBeGreaterThan(0);
+    expect(importedAdjustments.length).toBeGreaterThan(0);
+    for (const p of importedPets) expect(p.householdId).toBeTruthy();
+    for (const e of importedEvents) expect(e.actorId).toBeTruthy();
+    for (const a of importedAdjustments) expect(a.actorId).toBeTruthy();
+  });
+
+  // --- 25. no email address appears anywhere ----------------------------------
+
+  it("no '@' character appears anywhere in the export, in listUsers(includeRemoved), or in any DoseEvent, after a full exercise of the repo", async () => {
+    const repo = makeRepo();
+    const { courseId, medicationId } = await setupCourse(repo);
+    await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    await repo.adjustStock({ medicationId, deltaUnits: 5, reason: "purchase" });
+    await repo.createJoinCode({ code: "K7RMQ4", expiresAt: "2026-08-09T07:00:00.000Z" });
+
+    const backup = await repo.exportHousehold();
+    const users = await repo.listUsers({ includeRemoved: true });
+    const events = await repo.listDoseEvents({});
+
+    expect(JSON.stringify(backup)).not.toContain("@");
+    expect(JSON.stringify(users)).not.toContain("@");
+    for (const e of events) {
+      expect(JSON.stringify(e)).not.toContain("@");
+    }
   });
 });

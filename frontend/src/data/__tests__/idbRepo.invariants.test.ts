@@ -147,11 +147,33 @@ describe("openPetMedsDb — fresh schema", () => {
     const db = await openPetMedsDb(dbName);
 
     expect(db.version).toBe(DB_VERSION);
+    // v2 (CONTRACT.md §7): the five original stores plus `households`,
+    // `users` and `joinCodes`, enumerated explicitly (not a count) so this
+    // test still catches a store being dropped.
     expect(Array.from(db.objectStoreNames).sort()).toEqual(
-      ["courses", "doseEvents", "medications", "meta", "pets", "stockAdjustments"].sort(),
+      [
+        "courses",
+        "doseEvents",
+        "households",
+        "joinCodes",
+        "medications",
+        "meta",
+        "pets",
+        "stockAdjustments",
+        "users",
+      ].sort(),
     );
 
-    type StoreName = "pets" | "medications" | "courses" | "doseEvents" | "stockAdjustments" | "meta";
+    type StoreName =
+      | "pets"
+      | "medications"
+      | "courses"
+      | "doseEvents"
+      | "stockAdjustments"
+      | "meta"
+      | "households"
+      | "users"
+      | "joinCodes";
     const expectedIndexes: Record<StoreName, string[]> = {
       pets: ["by_name"],
       medications: ["by_nameLower"],
@@ -159,6 +181,9 @@ describe("openPetMedsDb — fresh schema", () => {
       doseEvents: ["by_courseId", "by_occurrenceKey", "by_givenAt", "by_courseId_givenAt"],
       stockAdjustments: ["by_medicationId", "by_createdAt"],
       meta: [],
+      households: [],
+      users: ["by_householdId"],
+      joinCodes: ["by_householdId", "by_code"],
     };
 
     for (const storeName of Object.keys(expectedIndexes) as StoreName[]) {
@@ -168,9 +193,18 @@ describe("openPetMedsDb — fresh schema", () => {
       await tx.done;
     }
 
+    // v2 also seeds `householdId`/`selfUserId` (CONTRACT.md §7 item 2), whose
+    // values are minted ids rather than fixed defaults — assert presence and
+    // shape, not a literal value.
     const metaRows = await db.getAll("meta");
     const metaByKey = Object.fromEntries(metaRows.map((r) => [r.key, r.value]));
-    expect(metaByKey).toEqual({ schemaVersion: 1, tintCursor: 0, lastSweepDay: null });
+    expect(metaByKey.schemaVersion).toBe(2);
+    expect(metaByKey.tintCursor).toBe(0);
+    expect(metaByKey.lastSweepDay).toBeNull();
+    expect(typeof metaByKey.householdId).toBe("string");
+    expect(metaByKey.householdId).not.toBe("");
+    expect(typeof metaByKey.selfUserId).toBe("string");
+    expect(metaByKey.selfUserId).not.toBe("");
 
     db.close();
   });

@@ -42,6 +42,7 @@ function makeEvent(overrides: Partial<DoseEvent> & { courseId: string }): DoseEv
     note: null,
     occurrenceKey: occurrenceKeyFor(overrides.courseId, scheduledFor),
     supersedesId: null,
+    actorId: "test-actor-id",
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
     deletedAt: null,

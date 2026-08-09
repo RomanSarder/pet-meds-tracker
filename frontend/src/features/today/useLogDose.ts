@@ -46,7 +46,7 @@ interface LogDoseContext {
  * mistaken for a persisted event, and `onSettled`'s invalidation replaces it
  * with the real one moments later.
  */
-function provisionalEvent(vars: LogDoseVars): DoseEvent {
+function provisionalEvent(vars: LogDoseVars, actorId: string): DoseEvent {
   const stamp: IsoDateTime = vars.givenAt ?? now().toISOString();
   return {
     id: "optimistic",
@@ -59,6 +59,7 @@ function provisionalEvent(vars: LogDoseVars): DoseEvent {
     note: null,
     occurrenceKey: occurrenceKeyFor(vars.courseId, vars.scheduledFor),
     supersedesId: null,
+    actorId,
     createdAt: stamp,
     updatedAt: stamp,
     deletedAt: null,
@@ -124,11 +125,15 @@ export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, 
       await queryClient.cancelQueries({ queryKey: qk.today(day) });
       const previous = queryClient.getQueryData<TodaySnapshot>(qk.today(day));
       if (previous) {
+        // The optimistic row must carry the real actor id, not a placeholder —
+        // it stands in for the row `logDose` is about to write, and that row's
+        // `actorId` is always the repo's stamped `currentActorId()`.
+        const actorId = await getRepo().currentActorId();
         queryClient.setQueryData<TodaySnapshot>(qk.today(day), {
           ...previous,
           occurrences: previous.occurrences.map((occurrence) =>
             occurrence.key === vars.occurrenceKey
-              ? { ...occurrence, event: provisionalEvent(vars) }
+              ? { ...occurrence, event: provisionalEvent(vars, actorId) }
               : occurrence,
           ),
         });

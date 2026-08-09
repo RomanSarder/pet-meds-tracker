@@ -61,6 +61,7 @@ describe("serializeBackup / readBackupFile round-trip", () => {
           weightGrams: null,
           tint: 1,
           archived: false,
+          householdId: "test-household-id",
           createdAt: "2026-08-01T00:00:00.000Z",
           updatedAt: "2026-08-01T00:00:00.000Z",
           deletedAt: null,

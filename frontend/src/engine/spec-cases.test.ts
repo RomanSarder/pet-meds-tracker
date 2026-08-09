@@ -76,6 +76,7 @@ function givenEvent(
     note: null,
     occurrenceKey: occurrenceKeyFor(courseId, opts.scheduledFor),
     supersedesId: null,
+    actorId: "test-actor-id",
     createdAt: opts.givenAt,
     updatedAt: opts.givenAt,
     deletedAt: null,
