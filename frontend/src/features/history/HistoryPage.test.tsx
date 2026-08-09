@@ -28,6 +28,7 @@ import {
   localDayKey,
   occurrenceKeyFor,
   setClock,
+  type Clock,
   type Household,
   type LocalDate,
   type User,
@@ -44,6 +45,20 @@ const OLDER_DAY = addLocalDays(TODAY, -3);
 async function withClock<T>(iso: string, fn: () => Promise<T>): Promise<T> {
   setClock(fixedClock(iso));
   return fn();
+}
+
+/**
+ * A clock that genuinely advances by 1ms on every call — the same shape as
+ * the browser's real `Date.now()`-backed clock the app runs under in
+ * production, unlike `fixedClock`, which returns a byte-identical value no
+ * matter how many times or how far apart it is called. Deterministic (no
+ * dependency on real wall-clock time or how fast the test runs), but still
+ * exercises "the value changes between two `now()` calls" the way the real
+ * clock does.
+ */
+function tickingClock(startIso: string): Clock {
+  let ms = new Date(startIso).getTime();
+  return { now: () => new Date(ms++) };
 }
 
 async function seedCourse(
@@ -180,6 +195,40 @@ describe("HistoryView", () => {
     expect(summaryCount("Given")).toBe("2");
     expect(summaryCount("Skipped")).toBe("1");
     expect(summaryCount("Missed")).toBe("1");
+  });
+
+  it("still renders entries once the clock genuinely advances between renders, not just under a frozen test clock", async () => {
+    // Regression for a `now()` call inlined directly in the render body: it
+    // returns a fresh instant on every render, which fed straight into the
+    // event-log query keys, so a real (ticking) clock meant the query key
+    // never stayed still long enough for a fetch to land before the next
+    // render discarded it for a newer one — the screen stayed permanently
+    // empty. Every other test in this file renders under
+    // `renderWithProviders`' fixed clock, which returns the exact same
+    // instant no matter how many times `now()` is called, so none of them
+    // can see this: it is the one thing this test changes.
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+    const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+    await withClock(givenIso, () =>
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+    );
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    // Swap in the ticking clock right after the (synchronous) initial mount,
+    // so every subsequent re-render — as `pet`/`courses`/`doseEvents` each
+    // resolve — computes `now()` off a clock that has actually moved on,
+    // exactly like the browser's clock does between the render that starts a
+    // fetch and the render that receives its result.
+    setClock(tickingClock(FIXTURE_NOW));
+
+    await screen.findByText("History");
+    // Course-started entry + the one given dose = 2 rows.
+    expect(await screen.findAllByText(/^by /)).toHaveLength(2);
   });
 
   it("renders each row with a trailing 'by <name>'", async () => {

@@ -11,10 +11,10 @@ import {
   addLocalDays,
   displayNameLookup,
   localDayKey,
-  now,
   parseLocalDay,
   startOfLocalDay,
 } from "@/domain";
+import { useNow } from "@/app/useNow";
 import { buildLogEntries, filterEntries, groupByDay, summarise, type LogEntryStatus } from "./logModel";
 import { exportAsCsv, exportAsText } from "./historyExport";
 import { useCourseEventLog, useDoseEventLog, useUsers } from "./hooks";
@@ -70,7 +70,14 @@ export function HistoryView({ petId }: { petId: string }) {
   const [pages, setPages] = useState(1);
   const [exportOpen, setExportOpen] = useState(false);
 
-  const nowDate = now();
+  // `useNow()`, not `now()` directly: a bare `now()` call in the render body
+  // returns a fresh millisecond-precision Date on every render, which feeds
+  // `to` below and therefore the event-log query keys — so the key would
+  // never stabilise long enough for a fetch to land before the next render
+  // discarded it for a newer one. `useNow()` memoises the value in state so
+  // it only ticks on its own interval (see `@/app/useNow`), the same pattern
+  // `TodayPage`/`SuppliesPage` use for the same reason.
+  const nowDate = useNow();
   const today = localDayKey(nowDate);
   // Backwards-only pagination: widen a single range rather than appending
   // pages, so a row at the previous window's boundary can never be fetched
