@@ -6,6 +6,8 @@ export interface AlertBannerProps {
   /** Label of the inline text action, e.g. "Log". */
   action?: string;
   onAction?: () => void;
+  /** Merged with the action button's own `.ds-hit-44` class — see Chip.tsx's className handling. */
+  actionClassName?: string;
   style?: CSSProperties;
 }
 
@@ -14,6 +16,7 @@ export function AlertBanner({
   detail,
   action,
   onAction,
+  actionClassName,
   style,
 }: AlertBannerProps) {
   return (
@@ -60,6 +63,12 @@ export function AlertBanner({
       {action ? (
         <button
           onClick={onAction}
+          // SPEC §10: this bare-text button has no height/padding, so its
+          // painted box (~18px tall, label-width wide) is well under the
+          // 44px tap-target minimum on both axes. `.ds-hit-44` grows the
+          // pointer target only — see ds.css — the same mechanism used by
+          // Chip and IconButton.
+          className={["ds-hit-44", actionClassName].filter(Boolean).join(" ")}
           style={{
             background: "none",
             border: "none",

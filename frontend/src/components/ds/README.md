@@ -98,12 +98,33 @@ Outside `DsRoot` the tokens do not resolve and components render unstyled.
     unchanged: `IconButton`'s default is still 40×40, `Chip` is still 34px tall, and no `SIZES`
     entry in `Button.tsx` changed. Pointer targets are now 44×44 (`IconButton`, `Chip`, `Button`
     `size="sm"`) or 56×51.5 (`TabBar`). Zero-pixel change; should upstream.
+  - **`AlertBanner`'s inline text action button was missed by the original audit above** — it
+    paints no height or padding at all (`background: none`, `border: none`, `fontSize: 13`), so
+    its box is roughly 18px tall and only as wide as its label (e.g. "Log" at ~24px), failing
+    44px on both axes. It's a live violation: `TodayPage` renders it as the "Log" action on the
+    overdue-doses banner. It now carries the same `.ds-hit-44` class as `IconButton`/`Chip`,
+    merged with a caller-supplied `actionClassName` rather than clobbering it, giving it a
+    44×44 pointer target while its painted box stays exactly as drawn. Zero-pixel change;
+    should upstream.
 - **`ScreenHeader`'s title is an `<h1>`**, not a `<div>`. It is the only heading-shaped element on
   any screen that uses `ScreenHeader`, so promoting it gives those screens their first `<h1>`.
   Semantic only: font-size, font-weight and letter-spacing are the same inline values as before,
-  with `margin: 0` now explicit (the DS has no reset that would otherwise zero a heading's
-  default margin, so leaving it implicit would have shifted layout). No class, wrapper or copy
-  changed. Zero-pixel change; should upstream.
+  with `margin: 0` now explicit. This isn't closing a gap in the DS's own reset — `src/index.css`
+  pulls in `@tailwind base`, and Tailwind's Preflight already zeroes `h1`–`h6` margins globally
+  (confirmed in a browser: computed margin is `0px` either way). The explicit `margin: 0` is kept
+  anyway as a self-documenting guarantee for this element that doesn't depend on Preflight
+  staying in the build. No class, wrapper or copy changed. Zero-pixel change; should upstream.
+
+- **`IconButton` rendered via Base UI's `Menu.Trigger render={<IconButton ... />}` does not
+  receive `.ds-hit-44`.** `Menu.Trigger` clones the `render` element to wire up its own props and
+  strips `className` in the process, so the class `IconButton` sets never reaches the DOM node
+  Base UI actually renders. Four call sites do this today — `HistoryPage.tsx` and
+  `PetDetailPage.tsx` pass `size={44}` directly; `TodayDoseRow.tsx` and `HouseholdPage.tsx` pass
+  `size={40}` plus a manual `style={{ minWidth: 44, minHeight: 44 }}`. All four are compliant,
+  but only because each hand-rolled its own workaround before `.ds-hit-44` existed, not because
+  of the class. Any new `IconButton` wrapped in `Menu.Trigger` must be sized to 44 explicitly
+  (`size={44}`, or a smaller `size` plus `minWidth`/`minHeight: 44`) — it cannot rely on
+  `.ds-hit-44` to cover it.
 
 ## Known deviations still outstanding (not fixed here)
 
