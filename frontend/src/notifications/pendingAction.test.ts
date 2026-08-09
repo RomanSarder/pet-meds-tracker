@@ -1,7 +1,7 @@
 // Cold start: a notification click with no page open arrives here as a URL.
 // The one invariant that matters is "a refresh cannot double-log" — proven
 // below by driving the same mutable `win` double through two drains.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/domain";
 import { fixedClock, occurrenceKeyFor } from "@/domain";
 import { setRepo, type Repo } from "@/data";
@@ -130,21 +130,31 @@ describe("drainPendingAction", () => {
   });
 
   it("does not throw and still performs the action when history.replaceState is unavailable", async () => {
-    const course = await findGivableCourse(repo);
-    const dose: DoseRef = {
-      occurrenceKey: occurrenceKeyFor(course.id, SCHEDULED_FOR),
-      courseId: course.id,
-      scheduledFor: SCHEDULED_FOR,
-      amount: course.doseAmount,
-    };
-    const win = {
-      location: { search: giveSearchFor(dose), pathname: "/", hash: "" },
-      history: {},
-    } as unknown as Window;
-    const before = await repo.listDoseEvents({ courseId: course.id });
+    const consoleSpies = [
+      vi.spyOn(console, "error").mockImplementation(() => {}),
+      vi.spyOn(console, "warn").mockImplementation(() => {}),
+      vi.spyOn(console, "log").mockImplementation(() => {}),
+    ];
+    try {
+      const course = await findGivableCourse(repo);
+      const dose: DoseRef = {
+        occurrenceKey: occurrenceKeyFor(course.id, SCHEDULED_FOR),
+        courseId: course.id,
+        scheduledFor: SCHEDULED_FOR,
+        amount: course.doseAmount,
+      };
+      const win = {
+        location: { search: giveSearchFor(dose), pathname: "/", hash: "" },
+        history: {},
+      } as unknown as Window;
+      const before = await repo.listDoseEvents({ courseId: course.id });
 
-    await expect(drainPendingAction(makeDeps(), win)).resolves.toBeUndefined();
+      await expect(drainPendingAction(makeDeps(), win)).resolves.toBeUndefined();
 
-    expect(await repo.listDoseEvents({ courseId: course.id })).toHaveLength(before.length + 1);
+      expect(await repo.listDoseEvents({ courseId: course.id })).toHaveLength(before.length + 1);
+      for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

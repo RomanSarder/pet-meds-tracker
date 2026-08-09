@@ -9,8 +9,9 @@
  *   2. Return if `!notificationsSupported()`.
  *   3. `registerNotificationWorker()`.
  *   4. `onNotificationAction` wired to `performGive`/`performSnooze`.
- *   5. `armPermissionRequest`, with `hasActiveCourse` reading active courses
- *      from the repo.
+ *   5. `armPermissionRequest`, with `hasExpressedIntent` reading, from the
+ *      repo, whether an active course exists AND the current actor has
+ *      logged a dose (Fix 4 — see `hasExpressedIntent` below).
  *   6. Create and `start()` the scheduler with the real (injected) clock and
  *      the window's own timers.
  *
@@ -28,10 +29,23 @@ import { armPermissionRequest } from "./permission";
 import { createNotificationScheduler } from "./scheduler";
 import { canShowNotifications, notificationsSupported, silentlyAsync } from "./support";
 
-/** SPEC §6.9 / permission.ts: only ask a user who has actually set up a course. */
-async function hasActiveCourse(): Promise<boolean> {
-  const courses = await getRepo().listCourses({ status: ["active"] });
-  return courses.length > 0;
+/**
+ * SPEC §6.9 / permission.ts (Fix 4): only ask a user who has actually
+ * expressed intent to manage medication — not merely a user for whom data
+ * exists. Requires BOTH (a) at least one active course exists (there is
+ * something to be reminded about), AND (b) the current actor has authored
+ * at least one relevant write. `Course` carries no `actorId` (see
+ * `domain/types.ts` — only `DoseEvent` and `CourseEvent` are attributed), so
+ * condition (b) is evaluated as "the current actor has logged at least one
+ * `DoseEvent`". A user who has only joined a household that already has
+ * active courses set up by somebody else fails (b) and is not prompted.
+ */
+async function hasExpressedIntent(): Promise<boolean> {
+  const repo = getRepo();
+  const courses = await repo.listCourses({ status: ["active"] });
+  if (courses.length === 0) return false;
+  const [actorId, events] = await Promise.all([repo.currentActorId(), repo.listDoseEvents({})]);
+  return events.some((event) => event.actorId === actorId);
 }
 
 export function startNotifications(): void {
@@ -57,7 +71,7 @@ export function startNotifications(): void {
       });
     });
 
-    armPermissionRequest({ hasActiveCourse });
+    armPermissionRequest({ hasExpressedIntent });
 
     const scheduler = createNotificationScheduler({
       clock: getClock(),

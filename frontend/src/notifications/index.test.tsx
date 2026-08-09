@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import { occurrenceKeyFor } from "@/domain";
+import type { Course, DoseEvent, Household, User } from "@/domain";
 import { setRepo, type Repo } from "@/data";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import { renderWithProviders } from "@/test/renderWithProviders";
@@ -29,6 +30,37 @@ function restoreAll(): void {
     delete (navigator as { serviceWorker?: unknown }).serviceWorker;
   }
   window.history.replaceState(null, "", originalLocation);
+  window.localStorage.clear();
+}
+
+/**
+ * `armPermissionRequest` attaches its `pointerup`/`keydown` listeners to
+ * `document` (the default target `startNotifications()` uses — it has no
+ * way to inject another one), and never detaches them unless an ask
+ * actually happens. Left alone, a test whose gate never fires an ask (e.g.
+ * "not prompted") leaks its listener onto the shared jsdom `document` for
+ * every later test in this file, which would then also react to THEIR
+ * `gesture()` dispatches. This captures exactly the listeners a block of
+ * code attaches to `document` and removes them again, so each test's
+ * `startNotifications()` call is fully self-contained.
+ */
+function captureDocumentGestureListeners(): () => void {
+  const captured: Array<{ type: string; listener: EventListenerOrEventListenerObject }> = [];
+  const realAdd = document.addEventListener.bind(document);
+  const addSpy = vi
+    .spyOn(document, "addEventListener")
+    .mockImplementation((type, listener, options) => {
+      if ((type === "pointerup" || type === "keydown") && listener) {
+        captured.push({ type, listener: listener as EventListenerOrEventListenerObject });
+      }
+      realAdd(type, listener as EventListenerOrEventListenerObject, options);
+    });
+  return () => {
+    addSpy.mockRestore();
+    for (const { type, listener } of captured) {
+      document.removeEventListener(type, listener);
+    }
+  };
 }
 
 function setNotification(value: unknown): void {
@@ -45,8 +77,11 @@ function setNavigatorServiceWorker(value: unknown): void {
 
 /** Full, working support: Notification, a service worker container capable
  *  of registering/listening, and a registration prototype with `showNotification`. */
-function installFullSupport(permission: "default" | "granted" | "denied"): void {
-  setNotification({ permission, requestPermission: vi.fn().mockResolvedValue(permission) });
+function installFullSupport(
+  permission: "default" | "granted" | "denied",
+): ReturnType<typeof vi.fn> {
+  const requestPermission = vi.fn().mockResolvedValue(permission);
+  setNotification({ permission, requestPermission });
   setNavigatorServiceWorker({
     register: vi.fn().mockResolvedValue({ scope: "/" }),
     addEventListener: vi.fn(),
@@ -57,6 +92,13 @@ function installFullSupport(permission: "default" | "granted" | "denied"): void 
     showNotification(): void {}
   }
   setServiceWorkerRegistration(FakeRegistration);
+  return requestPermission;
+}
+
+/** `armPermissionRequest` defaults its listener target to `document` when
+ *  `startNotifications()` calls it (no explicit `target` is passed). */
+function gesture(): void {
+  document.dispatchEvent(new Event("pointerup"));
 }
 
 function spyConsole(): Array<ReturnType<typeof vi.spyOn>> {
@@ -106,12 +148,14 @@ describe("startNotifications — silent degradation", () => {
     const spies = spyConsole();
     // Prevent the scheduler's real 30s poll timer from lingering past this test.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const releaseListeners = captureDocumentGestureListeners();
 
     try {
       expect(() => startNotifications()).not.toThrow();
       await flush();
     } finally {
       vi.clearAllTimers();
+      releaseListeners();
     }
 
     assertSilent(spies);
@@ -164,5 +208,139 @@ describe("startNotifications — pending action always drains", () => {
     const after = await repo.listDoseEvents({ courseId: course.id });
     expect(after).toHaveLength(before.length + 1);
     expect(window.location.search).toBe("");
+  });
+});
+
+describe("startNotifications — Fix 4: the permission gate requires expressed intent", () => {
+  const HOUSEHOLD: Household = {
+    id: "hh-fix4",
+    name: "Home",
+    createdAt: "2026-06-01T09:00:00.000Z",
+    updatedAt: "2026-06-01T09:00:00.000Z",
+    deletedAt: null,
+  };
+
+  function selfUser(): User {
+    return {
+      id: "u-self",
+      householdId: HOUSEHOLD.id,
+      email: null,
+      displayName: "Newcomer",
+      tint: 1,
+      isSelf: true,
+      joinedAt: "2026-08-01T09:00:00.000Z",
+      createdAt: "2026-08-01T09:00:00.000Z",
+      updatedAt: "2026-08-01T09:00:00.000Z",
+      deletedAt: null,
+    };
+  }
+
+  function activeCourse(): Course {
+    return {
+      id: "c-fix4",
+      petId: "p-fix4",
+      medicationId: "m-fix4",
+      doseAmount: 1,
+      doseUnit: "ml",
+      instructions: null,
+      schedule: { kind: "fixedTimes", times: ["08:00"] },
+      startDate: "2026-08-01",
+      endDate: null,
+      status: "active",
+      notes: null,
+      resumedAt: null,
+      createdAt: "2026-08-01T09:00:00.000Z",
+      updatedAt: "2026-08-01T09:00:00.000Z",
+      deletedAt: null,
+    };
+  }
+
+  /** Someone ELSE in the household set this course up and has been logging
+   *  it — the current actor has never written anything. */
+  function otherActorsDoseEvent(): DoseEvent {
+    return {
+      id: "d-fix4",
+      courseId: "c-fix4",
+      scheduledFor: null,
+      status: "given",
+      loggedAt: "2026-08-08T06:00:00.000Z",
+      givenAt: "2026-08-08T06:00:00.000Z",
+      amount: 1,
+      note: null,
+      occurrenceKey: "c-fix4|-",
+      supersedesId: null,
+      actorId: "u-someone-else",
+      createdAt: "2026-08-08T06:00:00.000Z",
+      updatedAt: "2026-08-08T06:00:00.000Z",
+      deletedAt: null,
+    };
+  }
+
+  function fix4Repo(): Repo {
+    return createMemoryRepo({
+      household: HOUSEHOLD,
+      users: [selfUser()],
+      pets: [],
+      medications: [],
+      courses: [activeCourse()],
+      doseEvents: [otherActorsDoseEvent()],
+      stockAdjustments: [],
+      joinCodes: [],
+    });
+  }
+
+  it("does NOT prompt a user with an active course but no writes of their own, however many gestures they make", async () => {
+    const fix4RepoInstance = fix4Repo();
+    setRepo(fix4RepoInstance);
+    const requestPermission = installFullSupport("default");
+    const releaseListeners = captureDocumentGestureListeners();
+
+    try {
+      startNotifications();
+      await flush();
+
+      // Several gestures, not just one — proves this is not a timing fluke.
+      for (let i = 0; i < 4; i += 1) {
+        gesture();
+        await flush();
+      }
+
+      expect(requestPermission).not.toHaveBeenCalled();
+    } finally {
+      releaseListeners();
+    }
+  });
+
+  it("prompts on the next gesture right after this actor logs their first dose", async () => {
+    const fix4RepoInstance = fix4Repo();
+    setRepo(fix4RepoInstance);
+    const requestPermission = installFullSupport("default");
+    const releaseListeners = captureDocumentGestureListeners();
+
+    try {
+      startNotifications();
+      await flush();
+
+      // Not prompted yet — same refusal as above, so the success below is
+      // not vacuous.
+      gesture();
+      await flush();
+      expect(requestPermission).not.toHaveBeenCalled();
+
+      // The actor logs their own first dose against the existing course.
+      await fix4RepoInstance.logDose({
+        courseId: "c-fix4",
+        status: "given",
+        scheduledFor: null,
+        amount: 1,
+      });
+
+      gesture();
+      await flush();
+
+      expect(requestPermission).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseListeners();
+    }
   });
 });

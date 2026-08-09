@@ -6,19 +6,12 @@
  * naming this file as the source of truth. Keep the two in lockstep by hand.
  */
 import { occurrenceKeyFor } from "@/domain";
-import type { DoseRef, NotificationSpec } from "./types";
+import type { DoseRef } from "./types";
 
-/** page -> worker: `{ type, spec: NotificationSpec }` */
-export const MSG_SHOW = "petmeds/show";
 /** worker -> page: `{ type, action, dose }` */
 export const MSG_ACTION = "petmeds/action";
 
 export type NotificationAction = "give" | "snooze";
-
-export interface ShowMessage {
-  type: typeof MSG_SHOW;
-  spec: NotificationSpec;
-}
 
 export interface ActionMessage {
   type: typeof MSG_ACTION;

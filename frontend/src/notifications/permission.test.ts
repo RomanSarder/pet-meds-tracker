@@ -67,18 +67,18 @@ describe("armPermissionRequest", () => {
     const requestPermission = installSupport("default");
     const target = new EventTarget();
     armPermissionRequest({
-      hasActiveCourse: () => Promise.resolve(true),
+      hasExpressedIntent: () => Promise.resolve(true),
       target,
       storage: memoryStorage(),
     });
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
-  it("requests once on the first gesture when there is an active course and permission is default", async () => {
+  it("requests once on the first gesture when intent has been expressed and permission is default", async () => {
     const requestPermission = installSupport("default");
     const target = new EventTarget();
     armPermissionRequest({
-      hasActiveCourse: () => Promise.resolve(true),
+      hasExpressedIntent: () => Promise.resolve(true),
       target,
       storage: memoryStorage(),
     });
@@ -92,7 +92,7 @@ describe("armPermissionRequest", () => {
     const requestPermission = installSupport("default");
     const target = new EventTarget();
     armPermissionRequest({
-      hasActiveCourse: () => Promise.resolve(true),
+      hasExpressedIntent: () => Promise.resolve(true),
       target,
       storage: memoryStorage(),
     });
@@ -106,53 +106,53 @@ describe("armPermissionRequest", () => {
     expect(requestPermission).toHaveBeenCalledTimes(1);
   });
 
-  it("does not request when there is no active course", async () => {
+  it("does not request when intent has not been expressed", async () => {
     const requestPermission = installSupport("default");
     const target = new EventTarget();
-    const hasActiveCourse = vi.fn().mockResolvedValue(false);
-    armPermissionRequest({ hasActiveCourse, target, storage: memoryStorage() });
+    const hasExpressedIntent = vi.fn().mockResolvedValue(false);
+    armPermissionRequest({ hasExpressedIntent, target, storage: memoryStorage() });
 
     gesture(target);
-    await vi.waitFor(() => expect(hasActiveCourse).toHaveBeenCalled());
+    await vi.waitFor(() => expect(hasExpressedIntent).toHaveBeenCalled());
 
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
-  it("does not latch the asked flag on a gesture with no active course", async () => {
+  it("does not latch the asked flag on a gesture with no expressed intent", async () => {
     const requestPermission = installSupport("default");
     const target = new EventTarget();
-    const hasActiveCourse = vi.fn().mockResolvedValue(false);
+    const hasExpressedIntent = vi.fn().mockResolvedValue(false);
     const storage = memoryStorage();
-    armPermissionRequest({ hasActiveCourse, target, storage });
+    armPermissionRequest({ hasExpressedIntent, target, storage });
 
     gesture(target);
-    await vi.waitFor(() => expect(hasActiveCourse).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(hasExpressedIntent).toHaveBeenCalledTimes(1));
 
     expect(requestPermission).not.toHaveBeenCalled();
     expect(storage.read()).toBeNull();
   });
 
-  it("re-evaluates on a LATER gesture once an active course exists, and asks then", async () => {
+  it("re-evaluates on a LATER gesture once intent has been expressed, and asks then", async () => {
     const requestPermission = installSupport("default");
     const target = new EventTarget();
     let active = false;
-    const hasActiveCourse = vi.fn(() => Promise.resolve(active));
+    const hasExpressedIntent = vi.fn(() => Promise.resolve(active));
     const storage = memoryStorage();
-    armPermissionRequest({ hasActiveCourse, target, storage });
+    armPermissionRequest({ hasExpressedIntent, target, storage });
 
-    // First gesture: no course yet — proves the earlier refusal, so the
+    // First gesture: no intent yet — proves the earlier refusal, so the
     // later success below is not vacuous.
     gesture(target);
-    await vi.waitFor(() => expect(hasActiveCourse).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(hasExpressedIntent).toHaveBeenCalledTimes(1));
     expect(requestPermission).not.toHaveBeenCalled();
     // Let the handler's in-flight guard finish resetting (it clears on the
-    // microtask following hasActiveCourse's resolution) before firing again.
+    // microtask following hasExpressedIntent's resolution) before firing again.
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
 
-    // A course now exists; a later gesture gets a fresh chance because the
-    // first one never latched the flag or detached the listener.
+    // Intent is now expressed; a later gesture gets a fresh chance because
+    // the first one never latched the flag or detached the listener.
     active = true;
     gesture(target);
     await vi.waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
@@ -167,7 +167,7 @@ describe("armPermissionRequest", () => {
     const requestPermission = installSupport("granted");
     const target = new EventTarget();
     armPermissionRequest({
-      hasActiveCourse: () => Promise.resolve(true),
+      hasExpressedIntent: () => Promise.resolve(true),
       target,
       storage: memoryStorage(),
     });
@@ -184,7 +184,7 @@ describe("armPermissionRequest", () => {
     const requestPermission = installSupport("denied");
     const target = new EventTarget();
     armPermissionRequest({
-      hasActiveCourse: () => Promise.resolve(true),
+      hasExpressedIntent: () => Promise.resolve(true),
       target,
       storage: memoryStorage(),
     });
@@ -202,7 +202,7 @@ describe("armPermissionRequest", () => {
     const storage = memoryStorage();
     storage.write("1"); // simulate a previous session having already asked
 
-    armPermissionRequest({ hasActiveCourse: () => Promise.resolve(true), target, storage });
+    armPermissionRequest({ hasExpressedIntent: () => Promise.resolve(true), target, storage });
 
     gesture(target);
     await Promise.resolve();
@@ -216,26 +216,37 @@ describe("armPermissionRequest", () => {
     const target = new EventTarget();
     const storage = memoryStorage(); // no pre-existing flag this time
 
-    armPermissionRequest({ hasActiveCourse: () => Promise.resolve(true), target, storage });
+    armPermissionRequest({ hasExpressedIntent: () => Promise.resolve(true), target, storage });
 
     gesture(target);
     await vi.waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
   });
 
-  it("throws nothing when Notification is undefined", async () => {
+  it("throws nothing and logs nothing when Notification is undefined", async () => {
     (globalThis as { Notification?: unknown }).Notification = undefined;
     const target = new EventTarget();
+    const consoleSpies = [
+      vi.spyOn(console, "error").mockImplementation(() => {}),
+      vi.spyOn(console, "warn").mockImplementation(() => {}),
+      vi.spyOn(console, "log").mockImplementation(() => {}),
+    ];
 
-    expect(() =>
-      armPermissionRequest({
-        hasActiveCourse: () => Promise.resolve(true),
-        target,
-        storage: memoryStorage(),
-      }),
-    ).not.toThrow();
+    try {
+      expect(() =>
+        armPermissionRequest({
+          hasExpressedIntent: () => Promise.resolve(true),
+          target,
+          storage: memoryStorage(),
+        }),
+      ).not.toThrow();
 
-    expect(() => gesture(target)).not.toThrow();
-    await Promise.resolve();
-    await Promise.resolve();
+      expect(() => gesture(target)).not.toThrow();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

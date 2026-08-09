@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MSG_ACTION, MSG_SHOW, parseActionUrl } from "./protocol";
+import { MSG_ACTION, parseActionUrl } from "./protocol";
 import type { DoseRef } from "./types";
 
 const SW_SOURCE = readFileSync(
@@ -117,39 +117,19 @@ describe("install / activate", () => {
   });
 });
 
-describe("message (MSG_SHOW)", () => {
-  it("calls showNotification with the spec's title, tag, data and the two actions", async () => {
-    const { self, handlers } = loadWorker();
-    const spec = {
-      title: "Clover · Metacam 0.4 ml due now",
-      tag: DOSE.occurrenceKey,
-      reason: "due",
-      dose: DOSE,
-    };
-    const event = makeEvent({ data: { type: MSG_SHOW, spec } });
-
-    handlers.get("message")!(event);
-    await event.settled;
-
-    expect(self.registration.showNotification).toHaveBeenCalledWith(spec.title, {
-      tag: spec.tag,
-      data: spec.dose,
-      requireInteraction: false,
-      actions: [
-        { action: "give", title: "Give" },
-        { action: "snooze", title: "Snooze 30 min" },
-      ],
-    });
-    assertSilent();
-  });
-
-  it("ignores a malformed message without throwing", async () => {
+describe("message handling (Fix 3 — removed)", () => {
+  it("registers no \"message\" handler at all: showNotification is unreachable from a worker message", () => {
     const { self, handlers } = loadWorker();
 
-    expect(() => handlers.get("message")!(makeEvent({ data: { type: "something/else" } }))).not.toThrow();
-    expect(() => handlers.get("message")!(makeEvent({ data: null }))).not.toThrow();
-    expect(() => handlers.get("message")!(makeEvent({}))).not.toThrow();
-
+    // The worker used to have an unguarded `petmeds/show` message handler
+    // that called `self.registration.showNotification(...)` directly — a
+    // second, unguarded call site next to the one enforcement point
+    // (`AlertLedger.claim()` in the page) the whole design depends on.
+    // Nothing ever sent that message (`bridge.ts` calls
+    // `registration.showNotification` from the page itself), so it was dead
+    // code and has been deleted. Prove it stays deleted: no "message"
+    // listener is registered at all.
+    expect(handlers.has("message")).toBe(false);
     expect(self.registration.showNotification).not.toHaveBeenCalled();
     assertSilent();
   });

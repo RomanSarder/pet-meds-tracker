@@ -11,7 +11,6 @@
 // The literals below are restated from `frontend/src/notifications/protocol.ts`
 // (the source of truth) because this file cannot import from `src/`. Keep
 // the two in lockstep by hand.
-var MSG_SHOW = "petmeds/show";
 var MSG_ACTION = "petmeds/action";
 var ACTION_PARAM = "petmeds_action";
 var COURSE_PARAM = "petmeds_course";
@@ -37,27 +36,6 @@ function handleInstall(event) {
 
 function handleActivate(event) {
   event.waitUntil(self.clients.claim());
-}
-
-/** page -> worker: `{ type: MSG_SHOW, spec: NotificationSpec }`. */
-function handleMessage(event) {
-  var data = event.data;
-  if (!data || data.type !== MSG_SHOW || !data.spec) return;
-  var spec = data.spec;
-
-  event.waitUntil(
-    self.registration
-      .showNotification(spec.title, {
-        tag: spec.tag,
-        data: spec.dose,
-        requireInteraction: false,
-        actions: [
-          { action: "give", title: "Give" },
-          { action: "snooze", title: "Snooze 30 min" },
-        ],
-      })
-      .catch(noop)
-  );
 }
 
 /**
@@ -114,9 +92,14 @@ function handleNotificationClick(event) {
 
 self.addEventListener("install", handleInstall);
 self.addEventListener("activate", handleActivate);
-self.addEventListener("message", handleMessage);
 self.addEventListener("notificationclick", handleNotificationClick);
 
 // --- slice 11 (PWA & polish) extends here: precache list, install/activate
 // cache steps, and a fetch listener for the offline shell. Nothing above
-// needs to change. ---
+// needs to change. Any future code that shows a notification MUST go
+// through the page's `AlertLedger.claim()` first (see
+// `frontend/src/notifications/ledger.ts`) — never call
+// `self.registration.showNotification(...)` directly from this worker. That
+// was tried once (an unguarded `message` handler for a `petmeds/show`
+// message) and removed because it was a second, unguarded call site sitting
+// next to the one enforcement point the whole design depends on. ---

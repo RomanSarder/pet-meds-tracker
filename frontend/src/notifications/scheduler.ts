@@ -8,7 +8,9 @@
  *
  * The two-alerts-per-dose ceiling has exactly one enforcement point:
  * `AlertLedger.claim()`. `deps.show(...)` is called from exactly one place
- * in this file, physically nested inside the `if (claim)` branch below.
+ * in this file, guarded by an inverted claim check (`if (!ledger.claim(...))
+ * continue;`) immediately above it — unreachable unless that claim just
+ * succeeded.
  */
 import type { Clock, Course } from "@/domain";
 import { addLocalDays, localDayKey, MISSED_AFTER_HOURS } from "@/domain";
