@@ -6,6 +6,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { router } from "./router";
 import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { startBackgroundSync } from "./sync";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -16,3 +17,4 @@ createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </StrictMode>
 );
+startBackgroundSync();
