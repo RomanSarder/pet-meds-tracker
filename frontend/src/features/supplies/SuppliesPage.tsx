@@ -149,40 +149,39 @@ export function SuppliesPage(): ReactElement {
           <EmptyState icon="package" title="Supplies" />
         ) : (
           <>
-            {buy.length > 0 ? (
-              <>
-                <SectionLabel tone="alert">Buy now</SectionLabel>
-                {buy.map((item) => (
-                  <SupplyRow
-                    key={item.medicationId}
-                    name={item.name}
-                    forWhom={item.forWhom}
-                    stock={item.stock}
-                    tone={item.tone}
-                    percent={item.percent}
-                    note={item.note}
-                    action={actionsFor(item)}
-                  />
-                ))}
-              </>
-            ) : null}
-            {ok.length > 0 ? (
-              <>
-                <SectionLabel>Stocked</SectionLabel>
-                {ok.map((item) => (
-                  <SupplyRow
-                    key={item.medicationId}
-                    name={item.name}
-                    forWhom={item.forWhom}
-                    stock={item.stock}
-                    tone={item.tone}
-                    percent={item.percent}
-                    note={item.note}
-                    action={actionsFor(item)}
-                  />
-                ))}
-              </>
-            ) : null}
+            {/*
+              Both section labels render unconditionally, exactly as the kit's
+              SuppliesScreen.jsx does. Suppressing an empty group's label would
+              be a layout decision this slice has no authority to make: the kit
+              is the layout authority and this screen is a transcription of it.
+              The nothing-to-show-at-all case is handled above by EmptyState.
+            */}
+            <SectionLabel tone="alert">Buy now</SectionLabel>
+            {buy.map((item) => (
+              <SupplyRow
+                key={item.medicationId}
+                name={item.name}
+                forWhom={item.forWhom}
+                stock={item.stock}
+                tone={item.tone}
+                percent={item.percent}
+                note={item.note}
+                action={actionsFor(item)}
+              />
+            ))}
+            <SectionLabel>Stocked</SectionLabel>
+            {ok.map((item) => (
+              <SupplyRow
+                key={item.medicationId}
+                name={item.name}
+                forWhom={item.forWhom}
+                stock={item.stock}
+                tone={item.tone}
+                percent={item.percent}
+                note={item.note}
+                action={actionsFor(item)}
+              />
+            ))}
           </>
         )}
       </div>
