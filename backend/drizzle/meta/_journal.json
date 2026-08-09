@@ -22,6 +22,13 @@
       "when": 1786285428511,
       "tag": "0002_dashing_bloodscream",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786287905655,
+      "tag": "0003_glorious_talkback",
+      "breakpoints": true
     }
   ]
 }

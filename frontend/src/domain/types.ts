@@ -144,6 +144,16 @@ export interface CourseEvent extends Timestamped {
   kind: CourseEventKind;
   /** When the change happened. The ordering and day-grouping key for §6.4. */
   at: IsoDateTime;
+  /**
+   * W9 sync (design §D3): a Lamport counter (meta key `courseEventSeq`), NOT
+   * a per-device row count. Every write takes `seq = ++courseEventSeq`;
+   * `applyRemoteChanges` jumps the counter to `max(local, max seq among
+   * applied rows)`, so a device's later writes always sort after everything
+   * it has seen. Ordering is `(at asc, seq asc, id asc)` — `at` stays
+   * primary (§6.4 day grouping, W6's event-log tests); `seq` only replaces
+   * the random-UUID tie-break `id` used to be.
+   */
+  seq: number;
   /** SPEC §5: who did it; never null. Stamped by the repo from `currentActorId()`. */
   actorId: string;
   /** The course as it was before the change. `null` only for `started`. */
@@ -208,6 +218,12 @@ export interface MetaShape {
   selfUserId: string | null;
   /** id of the local `Household`. Written by the v2 migration; never null in practice. */
   householdId: string | null;
+  /** W9 sync (design §D3): the Lamport counter `CourseEvent.seq` is allocated from. Written by the v4 migration. */
+  courseEventSeq: number;
+  /** W9 sync (design §D4): opaque pull-side watermark; null until the first successful sync. */
+  syncCursor: string | null;
+  /** W9 sync (design §D4): when the push side last succeeded; null until the first successful sync. */
+  lastPushedAt: IsoDateTime | null;
 }
 
 export interface HouseholdBackup {

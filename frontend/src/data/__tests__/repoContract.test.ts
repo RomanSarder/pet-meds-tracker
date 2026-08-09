@@ -10,7 +10,17 @@
 import { describe, expect, it, afterEach } from "vitest";
 import type { Repo } from "@/data";
 import { createIdbRepo, createMemoryRepo, DuplicateDoseError } from "@/data";
-import type { HouseholdBackup, JoinCode, Medication, MetaShape, User } from "@/domain";
+import type {
+  CourseEvent,
+  CourseSnapshot,
+  DoseEvent,
+  HouseholdBackup,
+  JoinCode,
+  Medication,
+  MetaShape,
+  StockAdjustment,
+  User,
+} from "@/domain";
 import {
   displayNameFor,
   fixedClock,
@@ -411,7 +421,7 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
   it("getMeta returns null for an unset key and the seeded defaults for a fresh empty household; setMeta round-trips", async () => {
     const repo = makeRepo();
 
-    expect(await repo.getMeta("schemaVersion")).toBe(3);
+    expect(await repo.getMeta("schemaVersion")).toBe(4);
     expect(await repo.getMeta("tintCursor")).toBe(0);
     expect(await repo.getMeta("lastSweepDay")).toBeNull();
 
@@ -988,5 +998,281 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     expect(untyped.recordCourseEvent).toBeUndefined();
     expect(untyped.updateCourseEvent).toBeUndefined();
     expect(untyped.deleteCourseEvent).toBeUndefined();
+  });
+
+  // --- 27. applyRemoteChanges (W9 sync design §D2/§D4) ------------------------
+
+  describe("applyRemoteChanges", () => {
+    it("mutable rows are last-write-wins on updatedAt: a stale remote write does not clobber a newer local row, and a genuinely newer one wins", async () => {
+      const repo = makeRepo();
+      const pet = await repo.createPet({ name: "Old Name", species: "cat" });
+
+      const stale = { ...pet, name: "Should Not Win", updatedAt: "2020-01-01T00:00:00.000Z" };
+      const staleReport = await repo.applyRemoteChanges({ pets: [stale] });
+      expect(staleReport.applied.pets).toBe(0);
+      expect(staleReport.ignored).toBe(1);
+      expect((await repo.getPet(pet.id))?.name).toBe("Old Name");
+
+      const newer = { ...pet, name: "New Name", updatedAt: "2030-01-01T00:00:00.000Z" };
+      const newerReport = await repo.applyRemoteChanges({ pets: [newer] });
+      expect(newerReport.applied.pets).toBe(1);
+      expect(newerReport.ignored).toBe(0);
+      expect((await repo.getPet(pet.id))?.name).toBe("New Name");
+    });
+
+    it("mutable rows tie-break on id: an exact updatedAt tie can never have incoming.id strictly greater than its own id, so it resolves to keeping the existing row", async () => {
+      const repo = makeRepo();
+      const pet = await repo.createPet({ name: "Original", species: "cat" });
+
+      const tied = { ...pet, name: "Should Not Win On Tie", updatedAt: pet.updatedAt };
+      const report = await repo.applyRemoteChanges({ pets: [tied] });
+      expect(report.applied.pets).toBe(0);
+      expect(report.ignored).toBe(1);
+      expect((await repo.getPet(pet.id))?.name).toBe("Original");
+    });
+
+    it("a remote medication gains the row unchanged and is readable by name (idbRepo's internal nameLower column is transparent)", async () => {
+      const repo = makeRepo();
+      const ts = "2026-08-08T07:00:00.000Z";
+      const remote: Medication = {
+        id: crypto.randomUUID(),
+        name: "Remote Med",
+        strength: null,
+        form: "tablet",
+        unit: "tab",
+        packSize: null,
+        stockUnits: null,
+        lowThreshold: null,
+        createdAt: ts,
+        updatedAt: ts,
+        deletedAt: null,
+      };
+      const report = await repo.applyRemoteChanges({ medications: [remote] });
+      expect(report.applied.medications).toBe(1);
+      expect(await repo.findMedicationByName("remote med")).toMatchObject({ id: remote.id });
+    });
+
+    it("ledger rows (doseEvents/stockAdjustments/courseEvents) are insert-if-absent, land with their incoming id/createdAt/actorId intact, are never overwritten, and applying the same batch twice is idempotent", async () => {
+      const repo = makeRepo();
+      const { courseId, medicationId } = await setupCourse(repo);
+      const REMOTE_ACTOR_ID = "z0000000-0000-4000-8000-00000000ffff";
+      const remoteTs = "2020-01-01T00:00:00.000Z"; // deliberately older than anything local
+
+      const remoteDose: DoseEvent = {
+        id: crypto.randomUUID(),
+        courseId,
+        scheduledFor: null,
+        status: "given",
+        loggedAt: remoteTs,
+        givenAt: remoteTs,
+        amount: 0.4,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(courseId, null),
+        supersedesId: null,
+        actorId: REMOTE_ACTOR_ID,
+        createdAt: remoteTs,
+        updatedAt: remoteTs,
+        deletedAt: null,
+      };
+      const remoteAdjustment: StockAdjustment = {
+        id: crypto.randomUUID(),
+        medicationId,
+        deltaUnits: 3,
+        reason: "purchase",
+        note: null,
+        actorId: REMOTE_ACTOR_ID,
+        createdAt: remoteTs,
+        updatedAt: remoteTs,
+        deletedAt: null,
+      };
+      const snapshot: CourseSnapshot = {
+        schedule: { kind: "fixedTimes", times: ["08:00"] },
+        doseAmount: 0.4,
+        doseUnit: "ml",
+        startDate: "2026-08-01",
+        endDate: null,
+      };
+      const remoteCourseEvent: CourseEvent = {
+        id: crypto.randomUUID(),
+        courseId,
+        kind: "paused",
+        at: remoteTs,
+        seq: 500,
+        actorId: REMOTE_ACTOR_ID,
+        before: null,
+        after: snapshot,
+        createdAt: remoteTs,
+        updatedAt: remoteTs,
+        deletedAt: null,
+      };
+
+      const changes = {
+        doseEvents: [remoteDose],
+        stockAdjustments: [remoteAdjustment],
+        courseEvents: [remoteCourseEvent],
+      };
+
+      const first = await repo.applyRemoteChanges(changes);
+      expect(first.applied).toMatchObject({ doseEvents: 1, stockAdjustments: 1, courseEvents: 1 });
+      expect(first.ignored).toBe(0);
+
+      const storedDose = (await repo.listDoseEvents({ courseId })).find((e) => e.id === remoteDose.id);
+      expect(storedDose).toMatchObject({
+        id: remoteDose.id,
+        actorId: REMOTE_ACTOR_ID,
+        createdAt: remoteTs,
+        updatedAt: remoteTs,
+      });
+      const storedAdjustment = (await repo.listStockAdjustments(medicationId)).find(
+        (a) => a.id === remoteAdjustment.id,
+      );
+      expect(storedAdjustment).toMatchObject({ actorId: REMOTE_ACTOR_ID, createdAt: remoteTs });
+      const storedCourseEvent = (await repo.listCourseEvents({ courseId })).find(
+        (e) => e.id === remoteCourseEvent.id,
+      );
+      expect(storedCourseEvent).toMatchObject({ actorId: REMOTE_ACTOR_ID, createdAt: remoteTs, kind: "paused" });
+
+      // Applying the identical batch again must not double-write or change anything.
+      const second = await repo.applyRemoteChanges(changes);
+      expect(second.applied).toMatchObject({ doseEvents: 0, stockAdjustments: 0, courseEvents: 0 });
+      expect(second.ignored).toBe(3);
+      expect((await repo.listDoseEvents({ courseId })).filter((e) => e.id === remoteDose.id)).toHaveLength(1);
+
+      // A "corrected" copy of the same ledger ids must not overwrite the original.
+      const tampered = {
+        doseEvents: [{ ...remoteDose, amount: 999, note: "tampered" }],
+        stockAdjustments: [{ ...remoteAdjustment, deltaUnits: 999 }],
+        courseEvents: [{ ...remoteCourseEvent, kind: "stopped" as const }],
+      };
+      const third = await repo.applyRemoteChanges(tampered);
+      expect(third.applied).toMatchObject({ doseEvents: 0, stockAdjustments: 0, courseEvents: 0 });
+      expect(
+        (await repo.listDoseEvents({ courseId })).find((e) => e.id === remoteDose.id)?.amount,
+      ).toBe(0.4);
+      expect(
+        (await repo.listCourseEvents({ courseId })).find((e) => e.id === remoteCourseEvent.id)?.kind,
+      ).toBe("paused");
+    });
+
+    it("bumps the local courseEventSeq counter to at least the incoming seq, so the device's own next write always sorts after what it just learned", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo); // one local "started" CourseEvent, seq 1
+      expect(await repo.getMeta("courseEventSeq")).toBe(1);
+
+      const snapshot: CourseSnapshot = {
+        schedule: { kind: "fixedTimes", times: ["08:00"] },
+        doseAmount: 0.4,
+        doseUnit: "ml",
+        startDate: "2026-08-01",
+        endDate: null,
+      };
+      const remote: CourseEvent = {
+        id: crypto.randomUUID(),
+        courseId,
+        kind: "paused",
+        at: "2026-08-08T08:00:00.000Z",
+        seq: 50,
+        actorId: "remote-actor",
+        before: null,
+        after: snapshot,
+        createdAt: "2026-08-08T08:00:00.000Z",
+        updatedAt: "2026-08-08T08:00:00.000Z",
+        deletedAt: null,
+      };
+      await repo.applyRemoteChanges({ courseEvents: [remote] });
+      expect(await repo.getMeta("courseEventSeq")).toBe(50);
+
+      // The device's own next real write must land strictly after the seq it just learned.
+      const resumed = await repo.setCourseStatus(courseId, "paused");
+      const events = await repo.listCourseEvents({ courseId, newestFirst: true });
+      const localEvent = events.find((e) => e.courseId === resumed.id && e.kind === "paused" && e.actorId !== "remote-actor");
+      expect(localEvent?.seq).toBe(51);
+    });
+  });
+
+  // --- 28. merge-mode importHousehold routes through applyRemoteChanges (carried item b) --
+
+  it("importHousehold(merge) cannot overwrite an existing doseEvents/stockAdjustments/courseEvents row — carried item (b), fixed structurally via applyRemoteChanges", async () => {
+    const repo = makeRepo();
+    const { courseId, medicationId } = await setupCourse(repo);
+    const dose = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    const adjustment = await repo.adjustStock({ medicationId, deltaUnits: 5, reason: "purchase" });
+    const [startedEvent] = await repo.listCourseEvents({ courseId });
+
+    const tamperedDose = { ...dose, amount: 999, note: "tampered" };
+    const tamperedAdjustment = { ...adjustment, deltaUnits: 999 };
+    const tamperedCourseEvent = { ...startedEvent, kind: "stopped" as const };
+
+    const report = await repo.importHousehold(
+      emptyBackup({
+        doseEvents: [tamperedDose],
+        stockAdjustments: [tamperedAdjustment],
+        courseEvents: [tamperedCourseEvent],
+      }),
+      "merge",
+    );
+
+    // All three ledger rows already existed by id — none of them was written.
+    expect(report.doseEvents).toBe(0);
+    expect(report.stockAdjustments).toBe(0);
+    expect(report.skipped).toBeGreaterThanOrEqual(3);
+
+    expect((await repo.listDoseEvents({ courseId })).find((e) => e.id === dose.id)?.amount).toBe(0.4);
+    expect(
+      (await repo.listStockAdjustments(medicationId)).find((a) => a.id === adjustment.id)?.deltaUnits,
+    ).toBe(5);
+    expect(
+      (await repo.listCourseEvents({ courseId })).find((e) => e.id === startedEvent.id)?.kind,
+    ).toBe("started");
+  });
+
+  // --- 29. CourseEvent ordering is deterministic for rows sharing an `at` (design §D3) --
+
+  it("CourseEvent ordering `(at asc, seq asc, id asc)`: two rows sharing the same `at` sort by seq, not by id", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+    const sharedAt = "2026-08-09T10:00:00.000Z";
+    const snapshot: CourseSnapshot = {
+      schedule: { kind: "fixedTimes", times: ["08:00"] },
+      doseAmount: 0.4,
+      doseUnit: "ml",
+      startDate: "2026-08-01",
+      endDate: null,
+    };
+
+    // The row with the lexicographically GREATER id is deliberately given the
+    // SMALLER seq, so an id-based tiebreak and a seq-based one disagree —
+    // whichever order comes out proves which key is actually in force.
+    const lowSeqHighId: CourseEvent = {
+      id: "zzzzzzzz-0000-4000-8000-000000000001",
+      courseId,
+      kind: "paused",
+      at: sharedAt,
+      seq: 100,
+      actorId: "remote-1",
+      before: null,
+      after: snapshot,
+      createdAt: sharedAt,
+      updatedAt: sharedAt,
+      deletedAt: null,
+    };
+    const highSeqLowId: CourseEvent = {
+      id: "aaaaaaaa-0000-4000-8000-000000000002",
+      courseId,
+      kind: "resumed",
+      at: sharedAt,
+      seq: 101,
+      actorId: "remote-1",
+      before: null,
+      after: snapshot,
+      createdAt: sharedAt,
+      updatedAt: sharedAt,
+      deletedAt: null,
+    };
+
+    await repo.applyRemoteChanges({ courseEvents: [lowSeqHighId, highSeqLowId] });
+
+    const events = await repo.listCourseEvents({ courseId, from: sharedAt, to: sharedAt });
+    expect(events.map((e) => e.id)).toEqual([lowSeqHighId.id, highSeqLowId.id]);
   });
 });

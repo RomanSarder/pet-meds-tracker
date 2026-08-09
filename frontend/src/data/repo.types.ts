@@ -28,6 +28,25 @@ import type {
 } from "@/domain";
 
 /**
+ * W9 sync (design §D4): rows learned from another device or a merge-mode
+ * import. Reuses `HouseholdBackup`'s shapes so slice 9 introduces no
+ * parallel row types. Deliberately excludes `households`/`users` — those
+ * keep merging the way `importHousehold` already did.
+ */
+export type RemoteChanges = Partial<
+  Pick<
+    HouseholdBackup,
+    "pets" | "medications" | "courses" | "doseEvents" | "stockAdjustments" | "courseEvents"
+  >
+>;
+
+export interface ApplyReport {
+  applied: Record<keyof RemoteChanges, number>;
+  /** Rows seen and deliberately not written: an older LWW loser, or a ledger id already held. */
+  ignored: number;
+}
+
+/**
  * Append-only is enforced by the SHAPE of this interface, not by discipline:
  * there is deliberately no `updateDoseEvent`, no `deleteDoseEvent`, and no
  * `updateStockAdjustment`. `DoseEvent` and `StockAdjustment` rows are only
@@ -147,6 +166,18 @@ export interface Repo {
 
   exportHousehold(): Promise<HouseholdBackup>;
   importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport>;
+
+  /**
+   * W9 sync (design §D2/§D4/§D8): the single reconciliation rule for both
+   * sync and merge-mode import. Mutable entities (`pets`, `medications`,
+   * `courses`): last-write-wins on `updatedAt`, tie-break greater `id`.
+   * Append-only ledgers (`doseEvents`, `stockAdjustments`, `courseEvents`):
+   * insert-if-absent, never overwritten. Rows land with their incoming `id`,
+   * `createdAt`, `updatedAt` and `actorId` intact — the one write path that
+   * does not stamp `currentActorId()`. `importHousehold(b, "merge")` routes
+   * through this and must not implement its own version of the rule.
+   */
+  applyRemoteChanges(changes: RemoteChanges): Promise<ApplyReport>;
 
   getMeta<K extends keyof MetaShape>(key: K): Promise<MetaShape[K] | null>;
   setMeta<K extends keyof MetaShape>(key: K, value: MetaShape[K]): Promise<void>;

@@ -6,7 +6,7 @@
 import { createIdbRepo } from "./idbRepo";
 import type { Repo } from "./repo.types";
 
-export type { Repo } from "./repo.types";
+export type { Repo, RemoteChanges, ApplyReport } from "./repo.types";
 export { createMemoryRepo } from "./memoryRepo";
 export { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 export { createIdbRepo } from "./idbRepo";

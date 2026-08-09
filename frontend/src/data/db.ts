@@ -15,7 +15,7 @@ import type {
 import { DEFAULT_SELF_DISPLAY_NAME, newId, now } from "@/domain";
 
 export const DB_NAME = "petmeds";
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 /**
  * The course fields §6.4's ledger compares across a change — mirrors
@@ -303,6 +303,10 @@ export function openPetMedsDb(dbName: string = DB_NAME): Promise<IDBPDatabase<Pe
               courseId: course.id,
               kind: "started",
               at: course.createdAt,
+              // Placeholder — this same upgrade transaction cascades straight
+              // into `case 3` below, which backfills every `courseEvents` row
+              // (including this one) with its real (at, id)-ordered seq.
+              seq: 0,
               actorId: selfUserId,
               before: null,
               after: courseSnapshot(course),
@@ -315,6 +319,32 @@ export function openPetMedsDb(dbName: string = DB_NAME): Promise<IDBPDatabase<Pe
           }
 
           await metaStore.put({ key: "schemaVersion", value: 3 });
+        }
+        // falls through
+        case 3: {
+          // v4 (W9 sync design §D3): `CourseEvent.seq`, a Lamport counter
+          // (meta key `courseEventSeq`) that replaces the random-UUID tie
+          // in the log's ordering with something stable across devices. Add
+          // rows and one field only (SPEC §1) — every pre-existing row in
+          // every store survives with every original field intact; this
+          // case only ever adds `seq` to `courseEvents` rows and mints the
+          // counter.
+          const courseEventsStore = transaction.objectStore("courseEvents");
+          const metaStore = transaction.objectStore("meta");
+
+          const existingEvents = await courseEventsStore.getAll();
+          // (at, id) order — matches the ledger's own new ordering rule
+          // `(at asc, seq asc, id asc)`: assigning seq in this order means
+          // the backfill doesn't reshuffle anything already stable by `at`.
+          existingEvents.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+
+          let seq = 0;
+          for (const event of existingEvents) {
+            seq += 1;
+            await courseEventsStore.put({ ...event, seq });
+          }
+          await metaStore.put({ key: "courseEventSeq", value: seq });
+          await metaStore.put({ key: "schemaVersion", value: 4 });
         }
       }
     },

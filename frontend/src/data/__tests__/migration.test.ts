@@ -224,10 +224,10 @@ describe("v1 -> v2 migration", () => {
     try {
       // `openPetMedsDb` always brings a database up to the CURRENT
       // `DB_VERSION` in one upgrade transaction, so opening this v1 seed
-      // necessarily cascades through the v2->v3 upgrade too — this test's
-      // v1->v2-specific assertions below remain valid regardless.
-      expect(db.version).toBe(3);
-      expect(await getMetaValue(db, "schemaVersion")).toBe(3);
+      // necessarily cascades through the v2->v3->v4 upgrades too — this
+      // test's v1->v2-specific assertions below remain valid regardless.
+      expect(db.version).toBe(4);
+      expect(await getMetaValue(db, "schemaVersion")).toBe(4);
 
       const householdId = await getMetaValue(db, "householdId");
       const selfUserId = await getMetaValue(db, "selfUserId");
@@ -324,6 +324,12 @@ describe("v1 -> v2 migration", () => {
         endDate: v1Courses[0].endDate,
       });
 
+      // ...and it cascades through v3->v4 too: that one synthesized
+      // "started" event is the only row in `courseEvents`, so it gets seq 1
+      // and the counter mints to match.
+      expect(migratedCourseEvents[0].seq).toBe(1);
+      expect(await getMetaValue(db, "courseEventSeq")).toBe(1);
+
       // No address anywhere in the migrated data.
       const everything = [...migratedPets, ...migratedDoseEvents, ...migratedStockAdjustments, ...users];
       for (const row of everything) {
@@ -361,7 +367,7 @@ describe("v1 -> v2 migration", () => {
     const name = crypto.randomUUID();
     const db = await openPetMedsDb(name);
     try {
-      expect(db.version).toBe(3);
+      expect(db.version).toBe(4);
       expect(Array.from(db.objectStoreNames).sort()).toEqual(
         [
           "courses",
@@ -376,7 +382,8 @@ describe("v1 -> v2 migration", () => {
           "users",
         ].sort(),
       );
-      expect(await getMetaValue(db, "schemaVersion")).toBe(3);
+      expect(await getMetaValue(db, "schemaVersion")).toBe(4);
+      expect(await getMetaValue(db, "courseEventSeq")).toBe(0);
 
       const householdId = await getMetaValue(db, "householdId");
       const selfUserId = await getMetaValue(db, "selfUserId");
@@ -683,8 +690,12 @@ describe("v2 -> v3 migration", () => {
 
     const db = await openPetMedsDb(name);
     try {
-      expect(db.version).toBe(3);
-      expect(await getMetaValue(db, "schemaVersion")).toBe(3);
+      // Opening a v2 seed cascades through v2->v3->v4 in one upgrade
+      // transaction — this test's v2->v3-specific assertions below remain
+      // valid regardless (see the dedicated "v3 -> v4 migration" suite for
+      // seq-backfill coverage against a genuine v3 database).
+      expect(db.version).toBe(4);
+      expect(await getMetaValue(db, "schemaVersion")).toBe(4);
 
       // Row counts unchanged in every pre-existing store — nothing was dropped.
       const migratedPets = await db.getAll("pets");
@@ -753,6 +764,19 @@ describe("v2 -> v3 migration", () => {
         expect(typeof event.id).toBe("string");
         expect(event.id).toBeTruthy();
       }
+
+      // ...and it cascades through v3->v4 too: two courses with distinct
+      // `createdAt` values (`v2-course-1` earlier than `v2-course-2`) means
+      // the (at, id)-ordered backfill assigns seq 1 and 2 respectively, and
+      // the counter mints to match the row count.
+      const sortedByAt = [...v2Courses].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const seqs = sortedByAt.map((course) => {
+        const event = courseEvents.find((e) => e.courseId === course.id);
+        return event?.seq;
+      });
+      expect(seqs).toEqual([1, 2]);
+      expect(new Set(courseEvents.map((e) => e.seq)).size).toBe(courseEvents.length);
+      expect(await getMetaValue(db, "courseEventSeq")).toBe(v2Courses.length);
     } finally {
       db.close();
     }
@@ -771,6 +795,378 @@ describe("v2 -> v3 migration", () => {
       expect(courseEvents).toHaveLength(v2Courses.length);
     } finally {
       secondOpen.close();
+    }
+  });
+});
+
+// --- v3 -> v4: CourseEvent.seq, the Lamport counter (W9 sync design §D3) ---
+// Same rigour as the v1 -> v2 and v2 -> v3 suites above: a genuine v3
+// database built with the raw `indexedDB` API (NOT `openPetMedsDb`, which
+// would open straight at v4 and prove nothing about the upgrade path),
+// seeded with real rows in EVERY store — including `courseEvents` rows that
+// deliberately lack `seq`, exactly the pre-migration shape — proving every
+// row survives, `seq` is backfilled 1..N in (at, id) order, and the
+// `courseEventSeq` counter mints to N.
+
+/** Opens a brand-new database at version 3, with exactly today's v3 schema (pre-`seq`). */
+function openV3Database(name: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, 3);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+
+      const pets = database.createObjectStore("pets", { keyPath: "id" });
+      pets.createIndex("by_name", "name");
+
+      const medications = database.createObjectStore("medications", { keyPath: "id" });
+      medications.createIndex("by_nameLower", "nameLower");
+
+      const courses = database.createObjectStore("courses", { keyPath: "id" });
+      courses.createIndex("by_petId", "petId");
+      courses.createIndex("by_medicationId", "medicationId");
+      courses.createIndex("by_status", "status");
+
+      const doseEvents = database.createObjectStore("doseEvents", { keyPath: "id" });
+      doseEvents.createIndex("by_courseId", "courseId");
+      doseEvents.createIndex("by_occurrenceKey", "occurrenceKey");
+      doseEvents.createIndex("by_givenAt", "givenAt");
+      doseEvents.createIndex("by_courseId_givenAt", ["courseId", "givenAt"]);
+
+      const stockAdjustments = database.createObjectStore("stockAdjustments", { keyPath: "id" });
+      stockAdjustments.createIndex("by_medicationId", "medicationId");
+      stockAdjustments.createIndex("by_createdAt", "createdAt");
+
+      const courseEvents = database.createObjectStore("courseEvents", { keyPath: "id" });
+      courseEvents.createIndex("by_courseId", "courseId");
+      courseEvents.createIndex("by_at", "at");
+      courseEvents.createIndex("by_courseId_at", ["courseId", "at"]);
+
+      database.createObjectStore("meta", { keyPath: "key" });
+      database.createObjectStore("households", { keyPath: "id" });
+
+      const users = database.createObjectStore("users", { keyPath: "id" });
+      users.createIndex("by_householdId", "householdId");
+
+      const joinCodes = database.createObjectStore("joinCodes", { keyPath: "id" });
+      joinCodes.createIndex("by_householdId", "householdId");
+      joinCodes.createIndex("by_code", "code");
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+const V3_HOUSEHOLD_ID = "v3-household-11111111-1111-1111-1111-111111111111";
+const V3_SELF_USER_ID = "v3-user-22222222-2222-2222-2222-222222222222";
+
+const v3Household = {
+  id: V3_HOUSEHOLD_ID,
+  name: "Distinctive V3 Household",
+  createdAt: "2025-03-01T00:00:00.000Z",
+  updatedAt: "2025-03-01T00:00:00.000Z",
+  deletedAt: null,
+};
+
+const v3Users = [
+  {
+    id: V3_SELF_USER_ID,
+    householdId: V3_HOUSEHOLD_ID,
+    email: null,
+    displayName: "Distinctive V3 Self",
+    tint: 1,
+    isSelf: true,
+    joinedAt: "2025-03-01T00:00:00.000Z",
+    createdAt: "2025-03-01T00:00:00.000Z",
+    updatedAt: "2025-03-01T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v3JoinCodes = [
+  {
+    id: "v3-joincode-3333333-3333-3333-3333-333333333333",
+    householdId: V3_HOUSEHOLD_ID,
+    code: "L8SNPR",
+    createdBy: V3_SELF_USER_ID,
+    expiresAt: "2025-03-02T00:00:00.000Z",
+    usedBy: null,
+    revokedAt: null,
+    createdAt: "2025-03-01T00:00:00.000Z",
+    updatedAt: "2025-03-01T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v3Pets = [
+  {
+    id: "v3-pet-1",
+    name: "Distinctive V3 Pet",
+    species: "dog",
+    birthdate: "2022-01-01",
+    weightGrams: 12000,
+    tint: 1,
+    archived: false,
+    householdId: V3_HOUSEHOLD_ID,
+    createdAt: "2025-03-01T00:00:00.000Z",
+    updatedAt: "2025-03-01T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v3Medications = [
+  {
+    id: "v3-med-1",
+    name: "Distinctive V3 Medication",
+    strength: "5mg",
+    form: "tablet",
+    unit: "tablet",
+    packSize: 10,
+    stockUnits: 8,
+    lowThreshold: 2,
+    nameLower: "distinctive v3 medication",
+    createdAt: "2025-03-02T00:00:00.000Z",
+    updatedAt: "2025-03-02T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v3Courses = [
+  {
+    id: "v3-course-1",
+    petId: "v3-pet-1",
+    medicationId: "v3-med-1",
+    doseAmount: 1,
+    doseUnit: "tablet",
+    instructions: "Distinctive v3 instructions",
+    schedule: { kind: "fixedTimes", times: ["07:00"] },
+    startDate: "2025-03-03",
+    endDate: null,
+    status: "active",
+    notes: null,
+    resumedAt: null,
+    createdAt: "2025-03-03T00:00:00.000Z",
+    updatedAt: "2025-03-03T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v3DoseEvents = [
+  {
+    id: "v3-dose-1",
+    courseId: "v3-course-1",
+    scheduledFor: "2025-03-04T07:00:00.000Z",
+    status: "given",
+    loggedAt: "2025-03-04T07:01:00.000Z",
+    givenAt: "2025-03-04T07:01:00.000Z",
+    amount: 1,
+    note: "Distinctive v3 dose note",
+    occurrenceKey: "v3-course-1|2025-03-04T07:00:00.000Z",
+    supersedesId: null,
+    actorId: V3_SELF_USER_ID,
+    createdAt: "2025-03-04T07:01:00.000Z",
+    updatedAt: "2025-03-04T07:01:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v3StockAdjustments = [
+  {
+    id: "v3-stock-1",
+    medicationId: "v3-med-1",
+    deltaUnits: 10,
+    reason: "purchase",
+    note: "Distinctive v3 stock note",
+    actorId: V3_SELF_USER_ID,
+    createdAt: "2025-03-02T00:00:00.000Z",
+    updatedAt: "2025-03-02T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+// Three pre-existing CourseEvent rows, deliberately WITHOUT `seq` (the exact
+// pre-migration shape) and deliberately seeded in an order that does NOT
+// match (at, id) order, so the backfill's sort — not insertion order or
+// object-store enumeration order — is what's actually under test. `at`
+// ties between v3-cev-2/3 exercise the `id` fallback within the backfill's
+// own sort.
+const v3CourseEvents = [
+  {
+    id: "v3-cev-3",
+    courseId: "v3-course-1",
+    kind: "edited",
+    at: "2025-03-05T00:00:00.000Z", // tied with v3-cev-2, greater id
+    actorId: V3_SELF_USER_ID,
+    before: { schedule: v3Courses[0].schedule, doseAmount: 1, doseUnit: "tablet", startDate: "2025-03-03", endDate: null },
+    after: { schedule: v3Courses[0].schedule, doseAmount: 2, doseUnit: "tablet", startDate: "2025-03-03", endDate: null },
+    createdAt: "2025-03-05T00:00:00.000Z",
+    updatedAt: "2025-03-05T00:00:00.000Z",
+    deletedAt: null,
+  },
+  {
+    id: "v3-cev-1",
+    courseId: "v3-course-1",
+    kind: "started",
+    at: "2025-03-03T00:00:00.000Z", // earliest
+    actorId: V3_SELF_USER_ID,
+    before: null,
+    after: { schedule: v3Courses[0].schedule, doseAmount: 1, doseUnit: "tablet", startDate: "2025-03-03", endDate: null },
+    createdAt: "2025-03-03T00:00:00.000Z",
+    updatedAt: "2025-03-03T00:00:00.000Z",
+    deletedAt: null,
+  },
+  {
+    id: "v3-cev-2",
+    courseId: "v3-course-1",
+    kind: "paused",
+    at: "2025-03-05T00:00:00.000Z", // tied with v3-cev-3, lesser id
+    actorId: V3_SELF_USER_ID,
+    before: { schedule: v3Courses[0].schedule, doseAmount: 1, doseUnit: "tablet", startDate: "2025-03-03", endDate: null },
+    after: { schedule: v3Courses[0].schedule, doseAmount: 1, doseUnit: "tablet", startDate: "2025-03-03", endDate: null },
+    createdAt: "2025-03-04T00:00:00.000Z",
+    updatedAt: "2025-03-04T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const V3_TINT_CURSOR = 7;
+const V3_LAST_SWEEP_DAY = "2026-03-01";
+
+async function seedV3Database(name: string): Promise<void> {
+  const database = await openV3Database(name);
+  await putAll(database, "pets", v3Pets);
+  await putAll(database, "medications", v3Medications);
+  await putAll(database, "courses", v3Courses);
+  await putAll(database, "doseEvents", v3DoseEvents);
+  await putAll(database, "stockAdjustments", v3StockAdjustments);
+  await putAll(database, "courseEvents", v3CourseEvents);
+  await putAll(database, "households", [v3Household]);
+  await putAll(database, "users", v3Users);
+  await putAll(database, "joinCodes", v3JoinCodes);
+  await putAll(database, "meta", [
+    { key: "schemaVersion", value: 3 },
+    { key: "tintCursor", value: V3_TINT_CURSOR },
+    { key: "lastSweepDay", value: V3_LAST_SWEEP_DAY },
+    { key: "householdId", value: V3_HOUSEHOLD_ID },
+    { key: "selfUserId", value: V3_SELF_USER_ID },
+  ]);
+  database.close();
+}
+
+describe("v3 -> v4 migration", () => {
+  it("backfills seq 1..N in (at, id) order across every pre-existing CourseEvent, mints courseEventSeq = N, and every row in every store survives untouched", async () => {
+    const name = crypto.randomUUID();
+    await seedV3Database(name);
+
+    const db = await openPetMedsDb(name);
+    try {
+      expect(db.version).toBe(4);
+      expect(await getMetaValue(db, "schemaVersion")).toBe(4);
+
+      // Row counts unchanged in every pre-existing store — nothing was dropped.
+      const migratedPets = await db.getAll("pets");
+      const migratedMedications = await db.getAll("medications");
+      const migratedCourses = await db.getAll("courses");
+      const migratedDoseEvents = await db.getAll("doseEvents");
+      const migratedStockAdjustments = await db.getAll("stockAdjustments");
+      const migratedHouseholds = await db.getAll("households");
+      const migratedUsers = await db.getAll("users");
+      const migratedJoinCodes = await db.getAll("joinCodes");
+      const migratedCourseEvents = await db.getAll("courseEvents");
+      expect(migratedPets).toHaveLength(v3Pets.length);
+      expect(migratedMedications).toHaveLength(v3Medications.length);
+      expect(migratedCourses).toHaveLength(v3Courses.length);
+      expect(migratedDoseEvents).toHaveLength(v3DoseEvents.length);
+      expect(migratedStockAdjustments).toHaveLength(v3StockAdjustments.length);
+      expect(migratedHouseholds).toHaveLength(1);
+      expect(migratedUsers).toHaveLength(1);
+      expect(migratedJoinCodes).toHaveLength(v3JoinCodes.length);
+      expect(migratedCourseEvents).toHaveLength(v3CourseEvents.length);
+
+      // Every original row in every OTHER store survives byte-identical —
+      // this upgrade only ever adds `seq` to `courseEvents` rows.
+      for (const original of v3Pets) {
+        expect(migratedPets.find((p) => p.id === original.id)).toEqual(original);
+      }
+      for (const original of v3Medications) {
+        expect(migratedMedications.find((m) => m.id === original.id)).toEqual(original);
+      }
+      for (const original of v3Courses) {
+        expect(migratedCourses.find((c) => c.id === original.id)).toEqual(original);
+      }
+      for (const original of v3DoseEvents) {
+        expect(migratedDoseEvents.find((e) => e.id === original.id)).toEqual(original);
+      }
+      for (const original of v3StockAdjustments) {
+        expect(migratedStockAdjustments.find((a) => a.id === original.id)).toEqual(original);
+      }
+      expect(migratedHouseholds[0]).toEqual(v3Household);
+      expect(migratedUsers[0]).toEqual(v3Users[0]);
+      expect(migratedJoinCodes[0]).toEqual(v3JoinCodes[0]);
+
+      // Every original CourseEvent field survives, PLUS the new `seq` field —
+      // added, not substituted.
+      for (const original of v3CourseEvents) {
+        const migrated = migratedCourseEvents.find((e) => e.id === original.id);
+        expect(migrated).toMatchObject(original);
+        expect(typeof migrated?.seq).toBe("number");
+        // Exactly one field was added — no field was dropped or renamed.
+        expect(Object.keys(migrated as object).sort()).toEqual(
+          [...Object.keys(original), "seq"].sort(),
+        );
+      }
+
+      // seq is assigned 1..N in (at, id) order: v3-cev-1 (earliest at) gets 1;
+      // the tie between v3-cev-2/v3-cev-3 (same `at`) breaks on id, so
+      // v3-cev-2 (lesser id) gets 2 and v3-cev-3 (greater id) gets 3 —
+      // independent of the deliberately-scrambled seed order above.
+      const byId = new Map(migratedCourseEvents.map((e) => [e.id, e.seq]));
+      expect(byId.get("v3-cev-1")).toBe(1);
+      expect(byId.get("v3-cev-2")).toBe(2);
+      expect(byId.get("v3-cev-3")).toBe(3);
+
+      // Every seq is unique, and the counter mints to exactly N.
+      expect(new Set(migratedCourseEvents.map((e) => e.seq)).size).toBe(migratedCourseEvents.length);
+      expect(await getMetaValue(db, "courseEventSeq")).toBe(v3CourseEvents.length);
+
+      // Existing meta untouched by the migration, apart from schemaVersion/courseEventSeq.
+      expect(await getMetaValue(db, "tintCursor")).toBe(V3_TINT_CURSOR);
+      expect(await getMetaValue(db, "lastSweepDay")).toBe(V3_LAST_SWEEP_DAY);
+      expect(await getMetaValue(db, "householdId")).toBe(V3_HOUSEHOLD_ID);
+      expect(await getMetaValue(db, "selfUserId")).toBe(V3_SELF_USER_ID);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not re-run the backfill when a v4 database is simply re-opened", async () => {
+    const name = crypto.randomUUID();
+    await seedV3Database(name);
+
+    const firstOpen = await openPetMedsDb(name);
+    firstOpen.close();
+
+    const secondOpen = await openPetMedsDb(name);
+    try {
+      const courseEvents = await secondOpen.getAll("courseEvents");
+      expect(courseEvents).toHaveLength(v3CourseEvents.length);
+      expect(await getMetaValue(secondOpen, "courseEventSeq")).toBe(v3CourseEvents.length);
+    } finally {
+      secondOpen.close();
+    }
+  });
+
+  it("brings a v3 database with an EMPTY courseEvents store to courseEventSeq = 0", async () => {
+    const name = crypto.randomUUID();
+    const database = await openV3Database(name);
+    await putAll(database, "meta", [{ key: "schemaVersion", value: 3 }]);
+    database.close();
+
+    const db = await openPetMedsDb(name);
+    try {
+      expect(await getMetaValue(db, "courseEventSeq")).toBe(0);
+      expect(await db.getAll("courseEvents")).toHaveLength(0);
+    } finally {
+      db.close();
     }
   });
 });

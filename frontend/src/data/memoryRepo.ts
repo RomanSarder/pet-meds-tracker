@@ -41,7 +41,7 @@ import {
   UNDO_WINDOW_MS,
   RETRACT_GRACE_MS,
 } from "@/domain";
-import type { Repo } from "./repo.types";
+import type { ApplyReport, RemoteChanges, Repo } from "./repo.types";
 import { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 
 export { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
@@ -138,12 +138,21 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
   // different tint layout gets a cursor that is merely a reasonable guess,
   // documented here rather than silently "fixed".
   const meta: MetaShape = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     tintCursor: pets.length,
     lastSweepDay: null,
     selfUserId: users.find((u) => u.isSelf)?.id ?? null,
     householdId: household.id,
+    courseEventSeq: 0,
+    syncCursor: null,
+    lastPushedAt: null,
   };
+
+  /** W9 sync (design §D3): the Lamport counter every `CourseEvent` write allocates from. */
+  function nextCourseEventSeq(): number {
+    meta.courseEventSeq += 1;
+    return meta.courseEventSeq;
+  }
 
   // `createMemoryRepo(fixtures)` (and every custom seed) puts courses
   // directly into `courses` above, bypassing `createCourse` entirely, so
@@ -156,6 +165,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     courseId: course.id,
     kind: "started",
     at: course.createdAt,
+    seq: 0, // placeholder — assigned in (at, id) order just below, mirroring the v3->v4 backfill
     actorId: meta.selfUserId ?? "",
     before: null,
     after: courseSnapshot(course),
@@ -163,6 +173,14 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     updatedAt: stamp(),
     deletedAt: null,
   }));
+  // Deterministic seq assignment for the synthesized rows above — same (at,
+  // id) ordering rule db.ts's v3->v4 upgrade uses — so `meta.courseEventSeq`
+  // starts consistent with however many "started" events were just minted.
+  [...courseEvents]
+    .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
+    .forEach((event) => {
+      event.seq = nextCourseEventSeq();
+    });
 
   // --- small internal helpers ------------------------------------------
 
@@ -370,6 +388,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       courseId: course.id,
       kind: "started",
       at: course.createdAt,
+      seq: nextCourseEventSeq(),
       actorId,
       before: null,
       after: courseSnapshot(course),
@@ -404,6 +423,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
         courseId: course.id,
         kind: "edited",
         at: stamp(),
+        seq: nextCourseEventSeq(),
         actorId,
         before,
         after,
@@ -443,6 +463,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
         courseId: course.id,
         kind: courseEventKindForStatusChange(status),
         at: stamp(),
+        seq: nextCourseEventSeq(),
         actorId,
         before,
         after: courseSnapshot(course),
@@ -467,10 +488,14 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     if (filter.courseIds) result = result.filter((e) => filter.courseIds!.includes(e.courseId));
     if (filter.from) result = result.filter((e) => e.at >= filter.from!);
     if (filter.to) result = result.filter((e) => e.at <= filter.to!);
-    // `at` can legitimately tie within a test (two transitions in the same
-    // millisecond); breaking the tie on `id` keeps ordering deterministic
-    // rather than depending on array insertion order.
-    result = [...result].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+    // W9 sync (design §D3): `(at asc, seq asc, id asc)`. `at` stays primary
+    // (§6.4 day grouping, W6's event-log tests); `seq` — a Lamport counter
+    // stable across devices — replaces the random-UUID `id` as the tie
+    // within one instant, with `id` remaining as a last-resort tie only a
+    // corrupt/duplicate `seq` could ever reach.
+    result = [...result].sort(
+      (a, b) => a.at.localeCompare(b.at) || a.seq - b.seq || a.id.localeCompare(b.id),
+    );
     if (filter.newestFirst) result.reverse();
     if (filter.limit !== undefined) result = result.slice(0, filter.limit);
     return structuredClone(result);
@@ -866,6 +891,98 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     return { merged: Array.from(byId.values()), written, skipped };
   }
 
+  /**
+   * W9 sync (design §D2/§D4): the single reconciliation rule for both sync
+   * and merge-mode `importHousehold`. Mutable entities are last-write-wins
+   * on `updatedAt` with a deterministic tie-break on `id`; append-only
+   * ledgers are insert-if-absent and never overwritten. Rows land with their
+   * incoming `id`/`createdAt`/`updatedAt`/`actorId` intact — this is the one
+   * write path that does not stamp `currentActorId()`.
+   */
+  async function applyRemoteChanges(changes: RemoteChanges): Promise<ApplyReport> {
+    const applied: Record<keyof RemoteChanges, number> = {
+      pets: 0,
+      medications: 0,
+      courses: 0,
+      doseEvents: 0,
+      stockAdjustments: 0,
+      courseEvents: 0,
+    };
+    let ignored = 0;
+
+    /** Mutable rows: `incoming` wins over `existing` on newer `updatedAt`, tie-broken by greater `id`. */
+    function mutableWins<T extends Timestamped & { id: string }>(incoming: T, existing: T | undefined): boolean {
+      if (!existing) return true;
+      if (incoming.updatedAt !== existing.updatedAt) return incoming.updatedAt > existing.updatedAt;
+      return incoming.id > existing.id;
+    }
+
+    function applyMutable<T extends Timestamped & { id: string }>(
+      current: T[],
+      incoming: T[] | undefined,
+      key: keyof RemoteChanges,
+    ): T[] {
+      if (!incoming) return current;
+      const byId = new Map(current.map((r) => [r.id, r]));
+      let count = 0;
+      for (const row of incoming) {
+        const existing = byId.get(row.id);
+        if (mutableWins(row, existing)) {
+          byId.set(row.id, structuredClone(row));
+          count += 1;
+        } else {
+          ignored += 1;
+        }
+      }
+      applied[key] = count;
+      return Array.from(byId.values());
+    }
+
+    /** Append-only ledgers: insert if the id is unheld, never overwrite an id already present. */
+    function applyLedger<T extends { id: string }>(
+      current: T[],
+      incoming: T[] | undefined,
+      key: keyof RemoteChanges,
+    ): { rows: T[]; inserted: T[] } {
+      if (!incoming) return { rows: current, inserted: [] };
+      const ids = new Set(current.map((r) => r.id));
+      const rows = [...current];
+      const inserted: T[] = [];
+      for (const row of incoming) {
+        if (ids.has(row.id)) {
+          ignored += 1;
+          continue;
+        }
+        ids.add(row.id);
+        rows.push(structuredClone(row));
+        inserted.push(row);
+      }
+      applied[key] = inserted.length;
+      return { rows, inserted };
+    }
+
+    pets = applyMutable(pets, changes.pets, "pets");
+    medications = applyMutable(medications, changes.medications, "medications");
+    courses = applyMutable(courses, changes.courses, "courses");
+
+    const doseR = applyLedger(doseEvents, changes.doseEvents, "doseEvents");
+    doseEvents = doseR.rows;
+    const stockR = applyLedger(stockAdjustments, changes.stockAdjustments, "stockAdjustments");
+    stockAdjustments = stockR.rows;
+    const courseEventsR = applyLedger(courseEvents, changes.courseEvents, "courseEvents");
+    courseEvents = courseEventsR.rows;
+
+    // The Lamport counter jumps to max(local, max seq among the rows just
+    // inserted) — never derived from rows we ignored, since an ignored
+    // ledger row's id was already held and its seq already accounted for.
+    if (courseEventsR.inserted.length > 0) {
+      const maxIncomingSeq = Math.max(...courseEventsR.inserted.map((e) => e.seq));
+      meta.courseEventSeq = Math.max(meta.courseEventSeq, maxIncomingSeq);
+    }
+
+    return { applied, ignored };
+  }
+
   async function importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport> {
     // Backfill targets are read BEFORE any household/user replacement, so a
     // v1-shaped backup (no `households`/`users` keys) backfills against the
@@ -904,6 +1021,10 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       meta.lastSweepDay = b.meta?.lastSweepDay ?? null;
       meta.householdId = household.id;
       meta.selfUserId = users.find((u) => u.isSelf)?.id ?? meta.selfUserId;
+      // The counter this database's own restored history implies — a
+      // replace wipes and reinstalls `courseEvents` wholesale, so the
+      // Lamport counter must be reset to match rather than left stale.
+      meta.courseEventSeq = courseEvents.reduce((max, e) => Math.max(max, e.seq), 0);
       return {
         mode,
         pets: pets.length,
@@ -915,21 +1036,17 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       };
     }
 
-    const petsR = mergeArray(pets, backfillPets(b.pets));
-    const medsR = mergeArray(medications, b.medications);
-    const coursesR = mergeArray(courses, b.courses);
-    const eventsR = mergeArray(doseEvents, backfillEvents(b.doseEvents));
-    const stockR = mergeArray(stockAdjustments, backfillAdjustments(b.stockAdjustments));
-    // Not folded into `ImportReport` (which is frozen for this slice) —
-    // merged the same last-write-wins way as every other entity regardless.
-    const courseEventsR = mergeArray(courseEvents, b.courseEvents ?? []);
-
-    pets = petsR.merged;
-    medications = medsR.merged;
-    courses = coursesR.merged;
-    doseEvents = eventsR.merged;
-    stockAdjustments = stockR.merged;
-    courseEvents = courseEventsR.merged;
+    // W9 sync (design §D2/§D7 item 8): carried item (b) fixed by
+    // construction — merge mode routes through the exact same rule sync
+    // uses, so an import can no longer overwrite an append-only row.
+    const report = await applyRemoteChanges({
+      pets: backfillPets(b.pets),
+      medications: b.medications,
+      courses: b.courses,
+      doseEvents: backfillEvents(b.doseEvents),
+      stockAdjustments: backfillAdjustments(b.stockAdjustments),
+      courseEvents: b.courseEvents ?? [],
+    });
 
     if (b.users) {
       users = mergeArray(users, b.users).merged;
@@ -947,12 +1064,17 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
 
     return {
       mode,
-      pets: petsR.written,
-      medications: medsR.written,
-      courses: coursesR.written,
-      doseEvents: eventsR.written,
-      stockAdjustments: stockR.written,
-      skipped: petsR.skipped + medsR.skipped + coursesR.skipped + eventsR.skipped + stockR.skipped,
+      pets: report.applied.pets,
+      medications: report.applied.medications,
+      courses: report.applied.courses,
+      doseEvents: report.applied.doseEvents,
+      stockAdjustments: report.applied.stockAdjustments,
+      // Broadened, not shape-changed: `ImportReport`'s five fields above are
+      // untouched, but `skipped` now also counts ignored `courseEvents` rows
+      // (previously merged silently and uncounted) — the direct consequence
+      // of routing every entity through the one `applyRemoteChanges` rule
+      // rather than five bespoke ones. See the W9 report for detail.
+      skipped: report.ignored,
     };
   }
 
@@ -994,6 +1116,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     setStockOnHand,
     exportHousehold,
     importHousehold,
+    applyRemoteChanges,
     getMeta,
     setMeta,
     currentActorId,

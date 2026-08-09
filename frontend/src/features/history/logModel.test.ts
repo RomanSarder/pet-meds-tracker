@@ -83,6 +83,7 @@ function makeCourseEvent(overrides: Partial<CourseEvent> = {}): CourseEvent {
     courseId: "course-1",
     kind: "started",
     at: TS,
+    seq: 1,
     actorId: "user-1",
     before: null,
     after: defaultSnapshot,

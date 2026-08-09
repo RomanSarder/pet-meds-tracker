@@ -39,7 +39,7 @@ import {
 } from "@/domain";
 import { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 import { DB_NAME, openPetMedsDb, type PetMedsDB, type StoredMedication } from "./db";
-import type { Repo } from "./repo.types";
+import type { ApplyReport, RemoteChanges, Repo } from "./repo.types";
 
 function notFound(label: string, id: string): never {
   throw new Error(`${label} not found: ${id}`);
@@ -400,6 +400,14 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       updatedAt: ts,
       deletedAt: null,
     };
+    const tx = conn.transaction(["courses", "courseEvents", "meta"], "readwrite");
+    const metaStore = tx.objectStore("meta");
+    // W9 sync (design §D3): the Lamport counter every `CourseEvent` write
+    // allocates from, read and rewritten inside this same transaction.
+    const seqRec = await metaStore.get("courseEventSeq");
+    const seq = ((seqRec?.value as number | undefined) ?? 0) + 1;
+    await metaStore.put({ key: "courseEventSeq", value: seq });
+
     // SPEC §6.4: every course starts life with exactly one "started" event —
     // written here, inside `createCourse`, never by a caller.
     const event: CourseEvent = {
@@ -407,6 +415,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       courseId: course.id,
       kind: "started",
       at: course.createdAt,
+      seq,
       actorId,
       before: null,
       after: courseSnapshot(course),
@@ -414,7 +423,6 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       updatedAt: ts,
       deletedAt: null,
     };
-    const tx = conn.transaction(["courses", "courseEvents"], "readwrite");
     await tx.objectStore("courses").add(course);
     await tx.objectStore("courseEvents").add(event);
     await tx.done;
@@ -432,7 +440,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
   ): Promise<Course> {
     const actorId = await currentActorId();
     const conn = await db();
-    const tx = conn.transaction(["courses", "courseEvents"], "readwrite");
+    const tx = conn.transaction(["courses", "courseEvents", "meta"], "readwrite");
     const store = tx.objectStore("courses");
     const existing = assertAlive(await store.get(id), "Course", id);
     const before = courseSnapshot(existing);
@@ -445,11 +453,16 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     const scheduleChanged = JSON.stringify(before.schedule) !== JSON.stringify(after.schedule);
     const doseChanged = before.doseAmount !== after.doseAmount || before.doseUnit !== after.doseUnit;
     if (scheduleChanged || doseChanged) {
+      const metaStore = tx.objectStore("meta");
+      const seqRec = await metaStore.get("courseEventSeq");
+      const seq = ((seqRec?.value as number | undefined) ?? 0) + 1;
+      await metaStore.put({ key: "courseEventSeq", value: seq });
       const event: CourseEvent = {
         id: newId(),
         courseId: updated.id,
         kind: "edited",
         at: ts,
+        seq,
         actorId,
         before,
         after,
@@ -466,7 +479,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
   async function setCourseStatus(id: string, status: CourseStatus): Promise<Course> {
     const actorId = await currentActorId();
     const conn = await db();
-    const tx = conn.transaction(["courses", "courseEvents"], "readwrite");
+    const tx = conn.transaction(["courses", "courseEvents", "meta"], "readwrite");
     const store = tx.objectStore("courses");
     const existing = assertAlive(await store.get(id), "Course", id);
     const before = courseSnapshot(existing);
@@ -486,11 +499,16 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     // SPEC §6.4: a genuine transition only — setting the status a course
     // already has records nothing.
     if (status !== previousStatus) {
+      const metaStore = tx.objectStore("meta");
+      const seqRec = await metaStore.get("courseEventSeq");
+      const seq = ((seqRec?.value as number | undefined) ?? 0) + 1;
+      await metaStore.put({ key: "courseEventSeq", value: seq });
       const event: CourseEvent = {
         id: newId(),
         courseId: updated.id,
         kind: courseEventKindForStatusChange(status),
         at: ts,
+        seq,
         actorId,
         before,
         after: courseSnapshot(updated),
@@ -529,11 +547,14 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     if (filter.courseIds) result = result.filter((e) => filter.courseIds!.includes(e.courseId));
     if (filter.from) result = result.filter((e) => e.at >= filter.from!);
     if (filter.to) result = result.filter((e) => e.at <= filter.to!);
-    // `at` can legitimately tie within a test (two transitions in the same
-    // millisecond); breaking the tie on `id` keeps ordering deterministic —
-    // and matches how IndexedDB itself orders same-key index entries by
-    // primary key — rather than depending on store enumeration order.
-    result = [...result].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+    // W9 sync (design §D3): `(at asc, seq asc, id asc)`. `at` stays primary
+    // (§6.4 day grouping, W6's event-log tests); `seq` — a Lamport counter
+    // stable across devices — replaces the random-UUID `id` as the tie
+    // within one instant, with `id` remaining as a last-resort tie only a
+    // corrupt/duplicate `seq` could ever reach.
+    result = [...result].sort(
+      (a, b) => a.at.localeCompare(b.at) || a.seq - b.seq || a.id.localeCompare(b.id),
+    );
     if (filter.newestFirst) result.reverse();
     if (filter.limit !== undefined) result = result.slice(0, filter.limit);
     return result;
@@ -896,6 +917,108 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     };
   }
 
+  /**
+   * W9 sync (design §D2/§D4): the single reconciliation rule for both sync
+   * and merge-mode `importHousehold`. Mutable entities are last-write-wins
+   * on `updatedAt` with a deterministic tie-break on `id`; append-only
+   * ledgers are insert-if-absent and never overwritten. Rows land with their
+   * incoming `id`/`createdAt`/`updatedAt`/`actorId` intact — this is the one
+   * write path that does not stamp `currentActorId()`. A remote medication
+   * gains the internal `nameLower` column on the way in, exactly like
+   * `createMedication`/`updateMedication`.
+   */
+  async function applyRemoteChanges(changes: RemoteChanges): Promise<ApplyReport> {
+    const conn = await db();
+    const tx = conn.transaction(
+      ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "courseEvents", "meta"],
+      "readwrite",
+    );
+    const petsStore = tx.objectStore("pets");
+    const medsStore = tx.objectStore("medications");
+    const coursesStore = tx.objectStore("courses");
+    const doseStore = tx.objectStore("doseEvents");
+    const stockStore = tx.objectStore("stockAdjustments");
+    const courseEventsStore = tx.objectStore("courseEvents");
+    const metaStore = tx.objectStore("meta");
+
+    const applied: Record<keyof RemoteChanges, number> = {
+      pets: 0,
+      medications: 0,
+      courses: 0,
+      doseEvents: 0,
+      stockAdjustments: 0,
+      courseEvents: 0,
+    };
+    let ignored = 0;
+
+    function mutableWins<T extends Timestamped & { id: string }>(incoming: T, existing: T | undefined): boolean {
+      if (!existing) return true;
+      if (incoming.updatedAt !== existing.updatedAt) return incoming.updatedAt > existing.updatedAt;
+      return incoming.id > existing.id;
+    }
+
+    async function applyMutable<T extends Timestamped & { id: string }>(
+      store: { get(id: string): Promise<T | undefined>; put(row: T): Promise<unknown> },
+      incoming: T[] | undefined,
+    ): Promise<number> {
+      if (!incoming) return 0;
+      let count = 0;
+      for (const row of incoming) {
+        const existing = await store.get(row.id);
+        if (mutableWins(row, existing)) {
+          await store.put(row);
+          count += 1;
+        } else {
+          ignored += 1;
+        }
+      }
+      return count;
+    }
+
+    /** Insert if the id is unheld; never overwrite an id already present. Returns the rows actually inserted. */
+    async function applyLedger<T extends { id: string }>(
+      store: { get(id: string): Promise<T | undefined>; add(row: T): Promise<unknown> },
+      incoming: T[] | undefined,
+    ): Promise<T[]> {
+      if (!incoming) return [];
+      const inserted: T[] = [];
+      for (const row of incoming) {
+        const existing = await store.get(row.id);
+        if (existing) {
+          ignored += 1;
+          continue;
+        }
+        await store.add(row);
+        inserted.push(row);
+      }
+      return inserted;
+    }
+
+    applied.pets = await applyMutable(petsStore, changes.pets);
+    applied.medications = await applyMutable(medsStore, changes.medications?.map(toStoredMedication));
+    applied.courses = await applyMutable(coursesStore, changes.courses);
+
+    const insertedDoseEvents = await applyLedger(doseStore, changes.doseEvents);
+    applied.doseEvents = insertedDoseEvents.length;
+    const insertedStock = await applyLedger(stockStore, changes.stockAdjustments);
+    applied.stockAdjustments = insertedStock.length;
+    const insertedCourseEvents = await applyLedger(courseEventsStore, changes.courseEvents);
+    applied.courseEvents = insertedCourseEvents.length;
+
+    // The Lamport counter jumps to max(local, max seq among the rows just
+    // inserted) — never derived from rows we ignored, since an ignored
+    // ledger row's id was already held and its seq already accounted for.
+    if (insertedCourseEvents.length > 0) {
+      const maxIncomingSeq = Math.max(...insertedCourseEvents.map((e) => e.seq));
+      const seqRec = await metaStore.get("courseEventSeq");
+      const current = (seqRec?.value as number | undefined) ?? 0;
+      await metaStore.put({ key: "courseEventSeq", value: Math.max(current, maxIncomingSeq) });
+    }
+
+    await tx.done;
+    return { applied, ignored };
+  }
+
   async function importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport> {
     // Backfill targets are resolved BEFORE any household/user replacement, so
     // a v1-shaped backup (no `households`/`users` keys, rows lacking
@@ -903,31 +1026,6 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     // already has, not one import is about to discard.
     const fallbackHouseholdId = await currentHouseholdId();
     const fallbackActorId = await currentActorId();
-
-    const conn = await db();
-    const tx = conn.transaction(
-      [
-        "pets",
-        "medications",
-        "courses",
-        "doseEvents",
-        "courseEvents",
-        "stockAdjustments",
-        "meta",
-        "households",
-        "users",
-      ],
-      "readwrite",
-    );
-    const petsStore = tx.objectStore("pets");
-    const medsStore = tx.objectStore("medications");
-    const coursesStore = tx.objectStore("courses");
-    const eventsStore = tx.objectStore("doseEvents");
-    const courseEventsStore = tx.objectStore("courseEvents");
-    const stockStore = tx.objectStore("stockAdjustments");
-    const metaStore = tx.objectStore("meta");
-    const householdsStore = tx.objectStore("households");
-    const usersStore = tx.objectStore("users");
 
     const backfillPets = (rows: Pet[]): Pet[] =>
       rows.map((p) => (p.householdId ? p : { ...p, householdId: fallbackHouseholdId }));
@@ -937,6 +1035,31 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       rows.map((a) => (a.actorId ? a : { ...a, actorId: fallbackActorId }));
 
     if (mode === "replace") {
+      const conn = await db();
+      const tx = conn.transaction(
+        [
+          "pets",
+          "medications",
+          "courses",
+          "doseEvents",
+          "courseEvents",
+          "stockAdjustments",
+          "meta",
+          "households",
+          "users",
+        ],
+        "readwrite",
+      );
+      const petsStore = tx.objectStore("pets");
+      const medsStore = tx.objectStore("medications");
+      const coursesStore = tx.objectStore("courses");
+      const eventsStore = tx.objectStore("doseEvents");
+      const courseEventsStore = tx.objectStore("courseEvents");
+      const stockStore = tx.objectStore("stockAdjustments");
+      const metaStore = tx.objectStore("meta");
+      const householdsStore = tx.objectStore("households");
+      const usersStore = tx.objectStore("users");
+
       await Promise.all([
         petsStore.clear(),
         medsStore.clear(),
@@ -951,7 +1074,8 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       for (const e of backfillEvents(b.doseEvents)) await eventsStore.put(e);
       // Optional on `HouseholdBackup` (a v2 backup predates the ledger) —
       // tolerate its absence without inventing rows to fill the gap.
-      for (const ce of b.courseEvents ?? []) await courseEventsStore.put(ce);
+      const restoredCourseEvents = b.courseEvents ?? [];
+      for (const ce of restoredCourseEvents) await courseEventsStore.put(ce);
       for (const a of backfillAdjustments(b.stockAdjustments)) await stockStore.put(a);
 
       // Only replace households/users when the backup actually carries them —
@@ -980,6 +1104,10 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       await metaStore.put({ key: "lastSweepDay", value: b.meta?.lastSweepDay ?? null });
       await metaStore.put({ key: "householdId", value: householdId });
       await metaStore.put({ key: "selfUserId", value: selfUserId });
+      // A replace wholesale-replaces `courseEvents` too — the Lamport
+      // counter must be reset to match the restored history, not left stale.
+      const newCourseEventSeq = restoredCourseEvents.reduce((max, e) => Math.max(max, e.seq), 0);
+      await metaStore.put({ key: "courseEventSeq", value: newCourseEventSeq });
       await tx.done;
 
       // The closure cache must track whatever identity replace just
@@ -999,75 +1127,65 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       };
     }
 
-    const petsR = await mergeRows(
-      backfillPets(b.pets),
-      (id) => petsStore.get(id),
-      (row) => petsStore.put(row),
-    );
-    const medsR = await mergeRows(
-      b.medications.map(toStoredMedication),
-      (id) => medsStore.get(id),
-      (row) => medsStore.put(row),
-    );
-    const coursesR = await mergeRows(
-      b.courses,
-      (id) => coursesStore.get(id),
-      (row) => coursesStore.put(row),
-    );
-    const eventsR = await mergeRows(
-      backfillEvents(b.doseEvents),
-      (id) => eventsStore.get(id),
-      (row) => eventsStore.put(row),
-    );
-    const stockR = await mergeRows(
-      backfillAdjustments(b.stockAdjustments),
-      (id) => stockStore.get(id),
-      (row) => stockStore.put(row),
-    );
-    // Not folded into `ImportReport` (which is frozen for this slice) —
-    // merged the same last-write-wins way as every other entity regardless.
-    await mergeRows(
-      b.courseEvents ?? [],
-      (id) => courseEventsStore.get(id),
-      (row) => courseEventsStore.put(row),
-    );
+    // W9 sync (design §D2/§D7 item 8): carried item (b) fixed by
+    // construction — merge mode routes through the exact same rule sync
+    // uses, so an import can no longer overwrite an append-only row.
+    const report = await applyRemoteChanges({
+      pets: backfillPets(b.pets),
+      medications: b.medications,
+      courses: b.courses,
+      doseEvents: backfillEvents(b.doseEvents),
+      stockAdjustments: backfillAdjustments(b.stockAdjustments),
+      courseEvents: b.courseEvents ?? [],
+    });
 
-    // Merge never changes whose local repo this is — only the replace path
-    // reassigns `meta.householdId`/`meta.selfUserId`, matching memoryRepo.
-    if (b.users) {
-      await mergeRows(
-        b.users,
-        (id) => usersStore.get(id),
-        (row) => usersStore.put(row),
-      );
-    }
-    if (b.households && b.households[0]) {
-      await mergeRows(
-        b.households,
-        (id) => householdsStore.get(id),
-        (row) => householdsStore.put(row),
-      );
-    }
+    // Households/users/tintCursor merge unchanged — outside `RemoteChanges`'
+    // scope, so still handled here directly, in a small transaction of their own.
+    if (b.users || (b.households && b.households[0]) || b.meta) {
+      const conn = await db();
+      const tx = conn.transaction(["households", "users", "meta"], "readwrite");
+      const householdsStore = tx.objectStore("households");
+      const usersStore = tx.objectStore("users");
+      const metaStore = tx.objectStore("meta");
 
-    // Merge only ever moves the cursor forward, and only when the incoming
-    // backup actually carries one — an old backup without `meta` must not
-    // reset or otherwise perturb the current cursor.
-    if (b.meta) {
-      const cursorRec = await metaStore.get("tintCursor");
-      const currentCursor = (cursorRec?.value as number | undefined) ?? 0;
-      await metaStore.put({ key: "tintCursor", value: Math.max(currentCursor, b.meta.tintCursor) });
+      if (b.users) {
+        await mergeRows(
+          b.users,
+          (id) => usersStore.get(id),
+          (row) => usersStore.put(row),
+        );
+      }
+      if (b.households && b.households[0]) {
+        await mergeRows(
+          b.households,
+          (id) => householdsStore.get(id),
+          (row) => householdsStore.put(row),
+        );
+      }
+      // Merge only ever moves the cursor forward, and only when the incoming
+      // backup actually carries one — an old backup without `meta` must not
+      // reset or otherwise perturb the current cursor.
+      if (b.meta) {
+        const cursorRec = await metaStore.get("tintCursor");
+        const currentCursor = (cursorRec?.value as number | undefined) ?? 0;
+        await metaStore.put({ key: "tintCursor", value: Math.max(currentCursor, b.meta.tintCursor) });
+      }
+      await tx.done;
     }
-
-    await tx.done;
 
     return {
       mode,
-      pets: petsR.written,
-      medications: medsR.written,
-      courses: coursesR.written,
-      doseEvents: eventsR.written,
-      stockAdjustments: stockR.written,
-      skipped: petsR.skipped + medsR.skipped + coursesR.skipped + eventsR.skipped + stockR.skipped,
+      pets: report.applied.pets,
+      medications: report.applied.medications,
+      courses: report.applied.courses,
+      doseEvents: report.applied.doseEvents,
+      stockAdjustments: report.applied.stockAdjustments,
+      // Broadened, not shape-changed: `ImportReport`'s five fields above are
+      // untouched, but `skipped` now also counts ignored `courseEvents` rows
+      // (previously merged silently and uncounted) — the direct consequence
+      // of routing every entity through the one `applyRemoteChanges` rule
+      // rather than six bespoke `mergeRows` calls. See the W9 report for detail.
+      skipped: report.ignored,
     };
   }
 
@@ -1264,6 +1382,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     setStockOnHand,
     exportHousehold,
     importHousehold,
+    applyRemoteChanges,
     getMeta,
     setMeta,
     currentActorId,

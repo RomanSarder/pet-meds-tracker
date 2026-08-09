@@ -201,7 +201,7 @@ describe("openPetMedsDb — fresh schema", () => {
     // shape, not a literal value.
     const metaRows = await db.getAll("meta");
     const metaByKey = Object.fromEntries(metaRows.map((r) => [r.key, r.value]));
-    expect(metaByKey.schemaVersion).toBe(3);
+    expect(metaByKey.schemaVersion).toBe(4);
     expect(metaByKey.tintCursor).toBe(0);
     expect(metaByKey.lastSweepDay).toBeNull();
     expect(typeof metaByKey.householdId).toBe("string");
