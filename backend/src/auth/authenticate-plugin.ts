@@ -16,7 +16,21 @@ declare module "fastify" {
 }
 
 export default fp(async (fastify) => {
-  fastify.decorateRequest("userId", "");
+  // This plugin is registered from three independent feature plugins
+  // (auth/index.ts, household/index.ts, sync/index.ts), each of which
+  // genuinely depends on `fastify.authenticate` and declares that dependency
+  // by registering it directly. Since it's wrapped in fastify-plugin,
+  // encapsulation is off and the decoration is global — so without this
+  // guard, the second and third registrations would throw
+  // FST_ERR_DEC_ALREADY_PRESENT. Guarding on Fastify's own decorator check
+  // makes registering this plugin any number of times harmless.
+  if (!fastify.hasRequestDecorator("userId")) {
+    fastify.decorateRequest("userId", "");
+  }
+
+  if (fastify.hasDecorator("authenticate")) {
+    return;
+  }
 
   fastify.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
     const cookie = request.cookies["pet_tracker_token"];

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildApp, mockDbMulti, mockDbRecording, renderSql } from "../test-utils";
-import syncPlugin from "./index";
+import syncPlugin, { SYNC_TABLES } from "./index";
 import { hashSecret } from "../auth/utils";
 import { addToDate } from "../utils";
 import { courseEvents, courses, doseEvents, medications, pets, stockAdjustments } from "../db/schema";
@@ -299,6 +299,16 @@ const TABLE_SPECS: TableSpec[] = [
     }),
   },
 ];
+
+// TABLE_SPECS above is a hand-maintained mirror of SYNC_TABLES in
+// sync/index.ts. Without this assertion, a table added to SYNC_TABLES but
+// forgotten here would ship with zero cross-household isolation coverage —
+// the describe.each block below only ever sees what's listed in TABLE_SPECS.
+it("TABLE_SPECS covers exactly the same tables as SYNC_TABLES", () => {
+  const specKeys = TABLE_SPECS.map((s) => s.key).sort();
+  const sourceKeys = SYNC_TABLES.map((t) => t.key).sort();
+  expect(specKeys).toEqual(sourceKeys);
+});
 
 describe("auth and household gates", () => {
   it("401s POST /sync/push when unauthenticated", async () => {

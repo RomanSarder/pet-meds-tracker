@@ -277,7 +277,10 @@ interface SyncTableSpec {
   fromDto: (dto: any, householdId: string) => any;
 }
 
-const SYNC_TABLES: readonly SyncTableSpec[] = [
+// Exported so tests can assert against it directly, e.g. sync/index.test.ts's
+// TABLE_SPECS-vs-SYNC_TABLES coverage check. Purely additive visibility change
+// — does not alter runtime behaviour.
+export const SYNC_TABLES: readonly SyncTableSpec[] = [
   { key: "pets", table: pets, kind: "mutable", toDto: petToDto, fromDto: petFromDto },
   { key: "medications", table: medications, kind: "mutable", toDto: medicationToDto, fromDto: medicationFromDto },
   { key: "courses", table: courses, kind: "mutable", toDto: courseToDto, fromDto: courseFromDto },
