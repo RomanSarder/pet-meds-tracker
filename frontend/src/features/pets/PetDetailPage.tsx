@@ -5,9 +5,11 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { Badge, Button, Card, IconButton, PetAvatar, SectionLabel } from "@/components/ds";
-import { localDayKey, now } from "@/domain";
+import { displayNameLookup, localDayKey, now } from "@/domain";
 import { courseProgress, describeSchedule, getDoseState, getOccurrences } from "@/engine";
 import { useCourses, useDoseEvents, useMedications } from "@/features/courses/hooks";
+import { buildLogEntries } from "@/features/history/logModel";
+import { useCourseEventLog, useUsers } from "@/features/history/hooks";
 import { ageLabel } from "./age";
 import { doseRowPropsFor } from "./doseRow";
 import { courseLabel, eventWhenLabel, joinMeta, speciesLabel, weightLabel } from "./format";
@@ -36,6 +38,14 @@ export function PetDetailView({ petId }: { petId: string }) {
   // firing an unfiltered query in the meantime.
   const courseIds = courses.data?.map((c) => c.id) ?? [];
   const events = useDoseEvents({ courseIds, limit: 10, newestFirst: true });
+  // Recent (SPEC §6.3) widened to the same event-log model History (§6.4)
+  // uses, so a course pause/resume with no DoseEvent still shows up here.
+  // Bounding each source query to the last 10 and letting `buildLogEntries`
+  // merge+sort them is safe: any entry within the true merged top 10 can
+  // have at most 9 same-kind entries ranked above it, so it is necessarily
+  // within its own kind's top 10 too.
+  const courseEventsForRecent = useCourseEventLog({ courseIds, limit: 10, newestFirst: true });
+  const users = useUsers();
   const setPetArchived = useSetPetArchived();
 
   if (!pet.data) return null;
@@ -43,6 +53,13 @@ export function PetDetailView({ petId }: { petId: string }) {
   const activeCourses = courses.data ?? [];
   const medicationList = medications.data ?? [];
   const recentEvents = events.data ?? [];
+  const nameFor = displayNameLookup(users.data ?? []);
+  const recentLog = buildLogEntries({
+    courses: activeCourses,
+    medications: medicationList,
+    doseEvents: recentEvents,
+    courseEvents: courseEventsForRecent.data ?? [],
+  }).slice(0, 10);
 
   // `getOccurrences` decides which courses generate occurrences (it skips
   // non-`active` ones) — the context below hands it this pet's courses and
@@ -209,25 +226,47 @@ export function PetDetailView({ petId }: { petId: string }) {
           );
         })}
 
-        <SectionLabel>Recent</SectionLabel>
+        <SectionLabel
+          trailing={
+            <button
+              onClick={() => navigate({ to: "/pets/$petId/history", params: { petId } })}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                color: "var(--accent)",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              See all history
+            </button>
+          }
+        >
+          Recent
+        </SectionLabel>
         <Card tone="quiet" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {recentEvents.map((e) => {
-            const course = activeCourses.find((c) => c.id === e.courseId);
-            const label = course
-              ? courseLabel(medicationName(course.medicationId), course.doseAmount, course.doseUnit)
-              : "";
-            const suffix = e.status === "skipped" ? " · Skipped" : e.status === "missed" ? " · Missed" : "";
+          {recentLog.map((entry) => {
+            const suffix =
+              entry.status === "skipped"
+                ? " · Skipped"
+                : entry.status === "missed"
+                  ? " · Missed"
+                  : entry.status === "course"
+                    ? ` · ${entry.detail}`
+                    : "";
             return (
               <div
-                key={e.id}
+                key={entry.id}
                 style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: "var(--ink-2)" }}
               >
                 <span>
-                  {label}
+                  {entry.title}
                   {suffix}
                 </span>
                 <span style={{ color: "var(--ink-3)", fontSize: 13 }}>
-                  {eventWhenLabel(new Date(e.givenAt), today)}
+                  {eventWhenLabel(new Date(entry.at), today)} · by {nameFor(entry.actorId)}
                 </span>
               </div>
             );

@@ -222,8 +222,12 @@ describe("v1 -> v2 migration", () => {
 
     const db = await openPetMedsDb(name);
     try {
-      expect(db.version).toBe(2);
-      expect(await getMetaValue(db, "schemaVersion")).toBe(2);
+      // `openPetMedsDb` always brings a database up to the CURRENT
+      // `DB_VERSION` in one upgrade transaction, so opening this v1 seed
+      // necessarily cascades through the v2->v3 upgrade too — this test's
+      // v1->v2-specific assertions below remain valid regardless.
+      expect(db.version).toBe(3);
+      expect(await getMetaValue(db, "schemaVersion")).toBe(3);
 
       const householdId = await getMetaValue(db, "householdId");
       const selfUserId = await getMetaValue(db, "selfUserId");
@@ -303,6 +307,23 @@ describe("v1 -> v2 migration", () => {
       expect(households).toHaveLength(1);
       expect(households[0].id).toBe(householdId);
 
+      // The v1 seed cascades through v2->v3 too: the one pre-existing course
+      // gets exactly one backfilled "started" event.
+      const migratedCourseEvents = await db.getAll("courseEvents");
+      expect(migratedCourseEvents).toHaveLength(1);
+      expect(migratedCourseEvents[0].courseId).toBe(v1Courses[0].id);
+      expect(migratedCourseEvents[0].kind).toBe("started");
+      expect(migratedCourseEvents[0].at).toBe(v1Courses[0].createdAt);
+      expect(migratedCourseEvents[0].actorId).toBe(selfUserId);
+      expect(migratedCourseEvents[0].before).toBeNull();
+      expect(migratedCourseEvents[0].after).toEqual({
+        schedule: v1Courses[0].schedule,
+        doseAmount: v1Courses[0].doseAmount,
+        doseUnit: v1Courses[0].doseUnit,
+        startDate: v1Courses[0].startDate,
+        endDate: v1Courses[0].endDate,
+      });
+
       // No address anywhere in the migrated data.
       const everything = [...migratedPets, ...migratedDoseEvents, ...migratedStockAdjustments, ...users];
       for (const row of everything) {
@@ -336,14 +357,15 @@ describe("v1 -> v2 migration", () => {
     }
   });
 
-  it("brings a fresh database up at v2 with a self user and household", async () => {
+  it("brings a fresh database up at v3 with a self user and household", async () => {
     const name = crypto.randomUUID();
     const db = await openPetMedsDb(name);
     try {
-      expect(db.version).toBe(2);
+      expect(db.version).toBe(3);
       expect(Array.from(db.objectStoreNames).sort()).toEqual(
         [
           "courses",
+          "courseEvents",
           "doseEvents",
           "households",
           "joinCodes",
@@ -354,7 +376,7 @@ describe("v1 -> v2 migration", () => {
           "users",
         ].sort(),
       );
-      expect(await getMetaValue(db, "schemaVersion")).toBe(2);
+      expect(await getMetaValue(db, "schemaVersion")).toBe(3);
 
       const householdId = await getMetaValue(db, "householdId");
       const selfUserId = await getMetaValue(db, "selfUserId");
@@ -432,6 +454,323 @@ describe("v1 -> v2 migration", () => {
       expect(migratedCourses).toHaveLength(1);
     } finally {
       db.close();
+    }
+  });
+});
+
+// --- v2 -> v3: the course lifecycle ledger (SPEC §6.4) ----------------------
+// Same rigour as the v1 -> v2 suite above: a genuine v2 database built with
+// the raw `indexedDB` API (NOT `openPetMedsDb`, which would open straight at
+// v3 and prove nothing about the upgrade path), seeded with real rows in
+// EVERY store, proving every row survives and every course gets exactly one
+// backfilled "started" event.
+
+/** Opens a brand-new database at version 2, with exactly today's v2 schema (pre-`courseEvents`). */
+function openV2Database(name: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, 2);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+
+      const pets = database.createObjectStore("pets", { keyPath: "id" });
+      pets.createIndex("by_name", "name");
+
+      const medications = database.createObjectStore("medications", { keyPath: "id" });
+      medications.createIndex("by_nameLower", "nameLower");
+
+      const courses = database.createObjectStore("courses", { keyPath: "id" });
+      courses.createIndex("by_petId", "petId");
+      courses.createIndex("by_medicationId", "medicationId");
+      courses.createIndex("by_status", "status");
+
+      const doseEvents = database.createObjectStore("doseEvents", { keyPath: "id" });
+      doseEvents.createIndex("by_courseId", "courseId");
+      doseEvents.createIndex("by_occurrenceKey", "occurrenceKey");
+      doseEvents.createIndex("by_givenAt", "givenAt");
+      doseEvents.createIndex("by_courseId_givenAt", ["courseId", "givenAt"]);
+
+      const stockAdjustments = database.createObjectStore("stockAdjustments", { keyPath: "id" });
+      stockAdjustments.createIndex("by_medicationId", "medicationId");
+      stockAdjustments.createIndex("by_createdAt", "createdAt");
+
+      database.createObjectStore("meta", { keyPath: "key" });
+      database.createObjectStore("households", { keyPath: "id" });
+
+      const users = database.createObjectStore("users", { keyPath: "id" });
+      users.createIndex("by_householdId", "householdId");
+
+      const joinCodes = database.createObjectStore("joinCodes", { keyPath: "id" });
+      joinCodes.createIndex("by_householdId", "householdId");
+      joinCodes.createIndex("by_code", "code");
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+const V2_HOUSEHOLD_ID = "v2-household-11111111-1111-1111-1111-111111111111";
+const V2_SELF_USER_ID = "v2-user-22222222-2222-2222-2222-222222222222";
+
+const v2Household = {
+  id: V2_HOUSEHOLD_ID,
+  name: "Distinctive Household",
+  createdAt: "2025-02-01T00:00:00.000Z",
+  updatedAt: "2025-02-01T00:00:00.000Z",
+  deletedAt: null,
+};
+
+const v2Users = [
+  {
+    id: V2_SELF_USER_ID,
+    householdId: V2_HOUSEHOLD_ID,
+    email: null,
+    displayName: "Distinctive Self",
+    tint: 1,
+    isSelf: true,
+    joinedAt: "2025-02-01T00:00:00.000Z",
+    createdAt: "2025-02-01T00:00:00.000Z",
+    updatedAt: "2025-02-01T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v2JoinCodes = [
+  {
+    id: "v2-joincode-3333333-3333-3333-3333-333333333333",
+    householdId: V2_HOUSEHOLD_ID,
+    code: "K7RMQ4",
+    createdBy: V2_SELF_USER_ID,
+    expiresAt: "2025-02-02T00:00:00.000Z",
+    usedBy: null,
+    revokedAt: null,
+    createdAt: "2025-02-01T00:00:00.000Z",
+    updatedAt: "2025-02-01T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v2Pets = [
+  {
+    id: "v2-pet-1",
+    name: "Distinctive V2 Pet",
+    species: "cat",
+    birthdate: "2021-01-01",
+    weightGrams: 4200,
+    tint: 1,
+    archived: false,
+    householdId: V2_HOUSEHOLD_ID,
+    createdAt: "2025-02-01T00:00:00.000Z",
+    updatedAt: "2025-02-01T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v2Medications = [
+  {
+    id: "v2-med-1",
+    name: "Distinctive V2 Medication",
+    strength: "20mg",
+    form: "capsule",
+    unit: "capsule",
+    packSize: 20,
+    stockUnits: 15,
+    lowThreshold: 3,
+    nameLower: "distinctive v2 medication",
+    createdAt: "2025-02-02T00:00:00.000Z",
+    updatedAt: "2025-02-02T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+// Two courses — proves the backfill is "one event PER course", not one event total.
+const v2Courses = [
+  {
+    id: "v2-course-1",
+    petId: "v2-pet-1",
+    medicationId: "v2-med-1",
+    doseAmount: 2,
+    doseUnit: "capsule",
+    instructions: "Distinctive v2 instructions one",
+    schedule: { kind: "fixedTimes", times: ["09:00"] },
+    startDate: "2025-02-03",
+    endDate: null,
+    status: "active",
+    notes: "Distinctive v2 course notes one",
+    resumedAt: null,
+    createdAt: "2025-02-03T00:00:00.000Z",
+    updatedAt: "2025-02-03T00:00:00.000Z",
+    deletedAt: null,
+  },
+  {
+    id: "v2-course-2",
+    petId: "v2-pet-1",
+    medicationId: "v2-med-1",
+    doseAmount: 1,
+    doseUnit: "capsule",
+    instructions: null,
+    schedule: { kind: "fromLastDose", intervalHours: 12 },
+    startDate: "2025-02-04",
+    endDate: "2025-02-20",
+    status: "stopped",
+    notes: null,
+    resumedAt: null,
+    createdAt: "2025-02-04T00:00:00.000Z",
+    updatedAt: "2025-02-20T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v2DoseEvents = [
+  {
+    id: "v2-dose-1",
+    courseId: "v2-course-1",
+    scheduledFor: "2025-02-05T09:00:00.000Z",
+    status: "given",
+    loggedAt: "2025-02-05T09:01:00.000Z",
+    givenAt: "2025-02-05T09:01:00.000Z",
+    amount: 2,
+    note: "Distinctive v2 dose note",
+    occurrenceKey: "v2-course-1|2025-02-05T09:00:00.000Z",
+    supersedesId: null,
+    actorId: V2_SELF_USER_ID,
+    createdAt: "2025-02-05T09:01:00.000Z",
+    updatedAt: "2025-02-05T09:01:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const v2StockAdjustments = [
+  {
+    id: "v2-stock-1",
+    medicationId: "v2-med-1",
+    deltaUnits: 20,
+    reason: "purchase",
+    note: "Distinctive v2 stock note",
+    actorId: V2_SELF_USER_ID,
+    createdAt: "2025-02-02T00:00:00.000Z",
+    updatedAt: "2025-02-02T00:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+const V2_TINT_CURSOR = 5;
+const V2_LAST_SWEEP_DAY = "2026-02-01";
+
+async function seedV2Database(name: string): Promise<void> {
+  const database = await openV2Database(name);
+  await putAll(database, "pets", v2Pets);
+  await putAll(database, "medications", v2Medications);
+  await putAll(database, "courses", v2Courses);
+  await putAll(database, "doseEvents", v2DoseEvents);
+  await putAll(database, "stockAdjustments", v2StockAdjustments);
+  await putAll(database, "households", [v2Household]);
+  await putAll(database, "users", v2Users);
+  await putAll(database, "joinCodes", v2JoinCodes);
+  await putAll(database, "meta", [
+    { key: "schemaVersion", value: 2 },
+    { key: "tintCursor", value: V2_TINT_CURSOR },
+    { key: "lastSweepDay", value: V2_LAST_SWEEP_DAY },
+    { key: "householdId", value: V2_HOUSEHOLD_ID },
+    { key: "selfUserId", value: V2_SELF_USER_ID },
+  ]);
+  database.close();
+}
+
+describe("v2 -> v3 migration", () => {
+  it("backfills exactly one 'started' CourseEvent per pre-existing course, and every row in every store survives", async () => {
+    const name = crypto.randomUUID();
+    await seedV2Database(name);
+
+    const db = await openPetMedsDb(name);
+    try {
+      expect(db.version).toBe(3);
+      expect(await getMetaValue(db, "schemaVersion")).toBe(3);
+
+      // Row counts unchanged in every pre-existing store — nothing was dropped.
+      const migratedPets = await db.getAll("pets");
+      const migratedMedications = await db.getAll("medications");
+      const migratedCourses = await db.getAll("courses");
+      const migratedDoseEvents = await db.getAll("doseEvents");
+      const migratedStockAdjustments = await db.getAll("stockAdjustments");
+      const migratedHouseholds = await db.getAll("households");
+      const migratedUsers = await db.getAll("users");
+      const migratedJoinCodes = await db.getAll("joinCodes");
+      expect(migratedPets).toHaveLength(v2Pets.length);
+      expect(migratedMedications).toHaveLength(v2Medications.length);
+      expect(migratedCourses).toHaveLength(v2Courses.length);
+      expect(migratedDoseEvents).toHaveLength(v2DoseEvents.length);
+      expect(migratedStockAdjustments).toHaveLength(v2StockAdjustments.length);
+      expect(migratedHouseholds).toHaveLength(1);
+      expect(migratedUsers).toHaveLength(1);
+      expect(migratedJoinCodes).toHaveLength(v2JoinCodes.length);
+
+      // Every original row survives byte-identical — the v3 upgrade only
+      // ever adds rows to the new `courseEvents` store.
+      for (const original of v2Pets) {
+        expect(migratedPets.find((p) => p.id === original.id)).toEqual(original);
+      }
+      for (const original of v2Medications) {
+        expect(migratedMedications.find((m) => m.id === original.id)).toEqual(original);
+      }
+      for (const original of v2Courses) {
+        expect(migratedCourses.find((c) => c.id === original.id)).toEqual(original);
+      }
+      for (const original of v2DoseEvents) {
+        expect(migratedDoseEvents.find((e) => e.id === original.id)).toEqual(original);
+      }
+      for (const original of v2StockAdjustments) {
+        expect(migratedStockAdjustments.find((a) => a.id === original.id)).toEqual(original);
+      }
+      expect(migratedHouseholds[0]).toEqual(v2Household);
+      expect(migratedUsers[0]).toEqual(v2Users[0]);
+      expect(migratedJoinCodes[0]).toEqual(v2JoinCodes[0]);
+
+      // Existing meta untouched by the migration, apart from schemaVersion.
+      expect(await getMetaValue(db, "tintCursor")).toBe(V2_TINT_CURSOR);
+      expect(await getMetaValue(db, "lastSweepDay")).toBe(V2_LAST_SWEEP_DAY);
+      expect(await getMetaValue(db, "householdId")).toBe(V2_HOUSEHOLD_ID);
+      expect(await getMetaValue(db, "selfUserId")).toBe(V2_SELF_USER_ID);
+
+      // Exactly one backfilled "started" event per pre-existing course.
+      const courseEvents = await db.getAll("courseEvents");
+      expect(courseEvents).toHaveLength(v2Courses.length);
+      for (const course of v2Courses) {
+        const matches = courseEvents.filter((e) => e.courseId === course.id);
+        expect(matches).toHaveLength(1);
+        const [event] = matches;
+        expect(event.kind).toBe("started");
+        expect(event.at).toBe(course.createdAt);
+        expect(event.actorId).toBe(V2_SELF_USER_ID);
+        expect(event.before).toBeNull();
+        expect(event.after).toEqual({
+          schedule: course.schedule,
+          doseAmount: course.doseAmount,
+          doseUnit: course.doseUnit,
+          startDate: course.startDate,
+          endDate: course.endDate,
+        });
+        expect(event.deletedAt).toBeNull();
+        expect(typeof event.id).toBe("string");
+        expect(event.id).toBeTruthy();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not run the backfill twice when a v3 database is simply re-opened", async () => {
+    const name = crypto.randomUUID();
+    await seedV2Database(name);
+
+    const firstOpen = await openPetMedsDb(name);
+    firstOpen.close();
+
+    const secondOpen = await openPetMedsDb(name);
+    try {
+      const courseEvents = await secondOpen.getAll("courseEvents");
+      expect(courseEvents).toHaveLength(v2Courses.length);
+    } finally {
+      secondOpen.close();
     }
   });
 });

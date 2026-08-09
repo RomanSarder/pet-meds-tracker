@@ -6,6 +6,9 @@
 // IndexedDB repo must enforce, so nothing here is "just for tests".
 import type {
   Course,
+  CourseEvent,
+  CourseEventKind,
+  CourseSnapshot,
   CourseStatus,
   DoseEvent,
   DoseEventStatus,
@@ -56,6 +59,42 @@ function mintHousehold(): Household {
   return { id: newId(), name: null, createdAt: ts, updatedAt: ts, deletedAt: null };
 }
 
+/**
+ * SPEC §6.4's ledger snapshot — only the fields a detail line can render.
+ * Deep-cloned so a snapshot embedded in a `CourseEvent` can never be mutated
+ * by later changes to the live `Course` row it was taken from.
+ */
+function courseSnapshot(course: Course): CourseSnapshot {
+  return structuredClone({
+    schedule: course.schedule,
+    doseAmount: course.doseAmount,
+    doseUnit: course.doseUnit,
+    startDate: course.startDate,
+    endDate: course.endDate,
+  });
+}
+
+/**
+ * `setCourseStatus` only ever calls this once it has already confirmed
+ * `status !== course.status`, so `status` is always the transition's
+ * destination and never a no-op. SPEC's rule table collapses to a plain
+ * mapping on the destination alone: every non-`active` status the course
+ * could have been in before an `-> active` transition ("paused", "finished"
+ * or "stopped") means the same thing — "resumed".
+ */
+function courseEventKindForStatusChange(status: CourseStatus): CourseEventKind {
+  switch (status) {
+    case "active":
+      return "resumed";
+    case "paused":
+      return "paused";
+    case "stopped":
+      return "stopped";
+    case "finished":
+      return "finished";
+  }
+}
+
 function mintSelfUser(householdId: string): User {
   const ts = stamp();
   return {
@@ -99,12 +138,31 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
   // different tint layout gets a cursor that is merely a reasonable guess,
   // documented here rather than silently "fixed".
   const meta: MetaShape = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tintCursor: pets.length,
     lastSweepDay: null,
     selfUserId: users.find((u) => u.isSelf)?.id ?? null,
     householdId: household.id,
   };
+
+  // `createMemoryRepo(fixtures)` (and every custom seed) puts courses
+  // directly into `courses` above, bypassing `createCourse` entirely, so
+  // those rows would otherwise have no ledger history at all. Synthesize one
+  // "started" event per seeded course — the memoryRepo mirror of exactly
+  // what the idbRepo's v2->v3 migration backfills for a pre-existing course
+  // row (`meta.selfUserId` is the same source `currentActorId()` reads).
+  let courseEvents: CourseEvent[] = courses.map((course) => ({
+    id: newId(),
+    courseId: course.id,
+    kind: "started",
+    at: course.createdAt,
+    actorId: meta.selfUserId ?? "",
+    before: null,
+    after: courseSnapshot(course),
+    createdAt: stamp(),
+    updatedAt: stamp(),
+    deletedAt: null,
+  }));
 
   // --- small internal helpers ------------------------------------------
 
@@ -304,6 +362,21 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       deletedAt: null,
     };
     courses.push(course);
+    // SPEC §6.4: every course starts life with exactly one "started" event —
+    // written here, inside `createCourse`, never by a caller.
+    const actorId = await currentActorId();
+    courseEvents.push({
+      id: newId(),
+      courseId: course.id,
+      kind: "started",
+      at: course.createdAt,
+      actorId,
+      before: null,
+      after: courseSnapshot(course),
+      createdAt: stamp(),
+      updatedAt: stamp(),
+      deletedAt: null,
+    });
     return structuredClone(course);
   }
 
@@ -317,12 +390,35 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     >,
   ): Promise<Course> {
     const course = requireAlive(courses, id, "Course");
+    const before = courseSnapshot(course);
     Object.assign(course, structuredClone(patch), { updatedAt: stamp() });
+    const after = courseSnapshot(course);
+    // SPEC §6.4: only a genuine schedule or dose change is a lifecycle
+    // change — notes/instructions/startDate/endDate alone record nothing.
+    const scheduleChanged = JSON.stringify(before.schedule) !== JSON.stringify(after.schedule);
+    const doseChanged = before.doseAmount !== after.doseAmount || before.doseUnit !== after.doseUnit;
+    if (scheduleChanged || doseChanged) {
+      const actorId = await currentActorId();
+      courseEvents.push({
+        id: newId(),
+        courseId: course.id,
+        kind: "edited",
+        at: stamp(),
+        actorId,
+        before,
+        after,
+        createdAt: stamp(),
+        updatedAt: stamp(),
+        deletedAt: null,
+      });
+    }
     return structuredClone(course);
   }
 
   async function setCourseStatus(id: string, status: CourseStatus): Promise<Course> {
     const course = requireAlive(courses, id, "Course");
+    const before = courseSnapshot(course);
+    const previousStatus = course.status;
     // SPEC §3c: resuming a `fromLastDose` course restarts the chain from the
     // resume moment. `Course.resumedAt` exists solely to record that moment;
     // this is the only place a status transition happens, so this is the
@@ -338,7 +434,46 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     }
     course.status = status;
     course.updatedAt = stamp();
+    // SPEC §6.4: a genuine transition only — setting the status a course
+    // already has records nothing.
+    if (status !== previousStatus) {
+      const actorId = await currentActorId();
+      courseEvents.push({
+        id: newId(),
+        courseId: course.id,
+        kind: courseEventKindForStatusChange(status),
+        at: stamp(),
+        actorId,
+        before,
+        after: courseSnapshot(course),
+        createdAt: stamp(),
+        updatedAt: stamp(),
+        deletedAt: null,
+      });
+    }
     return structuredClone(course);
+  }
+
+  async function listCourseEvents(filter: {
+    courseId?: string;
+    courseIds?: string[];
+    from?: IsoDateTime;
+    to?: IsoDateTime;
+    limit?: number;
+    newestFirst?: boolean;
+  }): Promise<CourseEvent[]> {
+    let result = courseEvents.filter((e) => e.deletedAt === null);
+    if (filter.courseId) result = result.filter((e) => e.courseId === filter.courseId);
+    if (filter.courseIds) result = result.filter((e) => filter.courseIds!.includes(e.courseId));
+    if (filter.from) result = result.filter((e) => e.at >= filter.from!);
+    if (filter.to) result = result.filter((e) => e.at <= filter.to!);
+    // `at` can legitimately tie within a test (two transitions in the same
+    // millisecond); breaking the tie on `id` keeps ordering deterministic
+    // rather than depending on array insertion order.
+    result = [...result].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+    if (filter.newestFirst) result.reverse();
+    if (filter.limit !== undefined) result = result.slice(0, filter.limit);
+    return structuredClone(result);
   }
 
   // --- dose events (append-only) -----------------------------------------
@@ -706,6 +841,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       medications,
       courses,
       doseEvents,
+      courseEvents,
       stockAdjustments,
       meta: { tintCursor: meta.tintCursor, lastSweepDay: meta.lastSweepDay },
     });
@@ -755,6 +891,10 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       medications = structuredClone(b.medications);
       courses = structuredClone(b.courses);
       doseEvents = backfillEvents(structuredClone(b.doseEvents));
+      // `courseEvents` is optional on `HouseholdBackup` (a v2 backup predates
+      // the ledger) — tolerate its absence without inventing rows to fill
+      // the gap, exactly like every other optional field on this type.
+      courseEvents = b.courseEvents ? structuredClone(b.courseEvents) : [];
       stockAdjustments = backfillAdjustments(structuredClone(b.stockAdjustments));
       meta.schemaVersion = b.schemaVersion;
       // Transport the real cursor/sweep-day when the backup carries them
@@ -780,12 +920,16 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     const coursesR = mergeArray(courses, b.courses);
     const eventsR = mergeArray(doseEvents, backfillEvents(b.doseEvents));
     const stockR = mergeArray(stockAdjustments, backfillAdjustments(b.stockAdjustments));
+    // Not folded into `ImportReport` (which is frozen for this slice) —
+    // merged the same last-write-wins way as every other entity regardless.
+    const courseEventsR = mergeArray(courseEvents, b.courseEvents ?? []);
 
     pets = petsR.merged;
     medications = medsR.merged;
     courses = coursesR.merged;
     doseEvents = eventsR.merged;
     stockAdjustments = stockR.merged;
+    courseEvents = courseEventsR.merged;
 
     if (b.users) {
       users = mergeArray(users, b.users).merged;
@@ -839,6 +983,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     createCourse,
     updateCourse,
     setCourseStatus,
+    listCourseEvents,
     listDoseEvents,
     logDose,
     correctDose,

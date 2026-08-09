@@ -4,6 +4,9 @@
 import type { IDBPDatabase } from "idb";
 import type {
   Course,
+  CourseEvent,
+  CourseEventKind,
+  CourseSnapshot,
   CourseStatus,
   DoseEvent,
   DoseEventStatus,
@@ -72,6 +75,34 @@ function toMedication(stored: StoredMedication): Medication {
 
 function toStoredMedication(m: Medication): StoredMedication {
   return { ...m, nameLower: m.name.trim().toLowerCase() };
+}
+
+/**
+ * SPEC §6.4's ledger snapshot — only the fields a detail line can render.
+ * Mirrors memoryRepo's `courseSnapshot` exactly.
+ */
+function courseSnapshot(course: Course): CourseSnapshot {
+  return {
+    schedule: structuredClone(course.schedule),
+    doseAmount: course.doseAmount,
+    doseUnit: course.doseUnit,
+    startDate: course.startDate,
+    endDate: course.endDate,
+  };
+}
+
+/** Mirrors memoryRepo's `courseEventKindForStatusChange` exactly. */
+function courseEventKindForStatusChange(status: CourseStatus): CourseEventKind {
+  switch (status) {
+    case "active":
+      return "resumed";
+    case "paused":
+      return "paused";
+    case "stopped":
+      return "stopped";
+    case "finished":
+      return "finished";
+  }
 }
 
 /** Last-write-wins merge of one incoming array into one store, by `updatedAt`. */
@@ -353,6 +384,10 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       status?: CourseStatus;
     },
   ): Promise<Course> {
+    // Resolved before opening the write transaction below (mirrors `logDose`)
+    // — `currentActorId()` may itself open a separate transaction to mint a
+    // self user, which must not overlap with the one opened here.
+    const actorId = await currentActorId();
     const conn = await db();
     const ts = now().toISOString();
     const { status, ...rest } = input;
@@ -365,7 +400,24 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       updatedAt: ts,
       deletedAt: null,
     };
-    await conn.add("courses", course);
+    // SPEC §6.4: every course starts life with exactly one "started" event —
+    // written here, inside `createCourse`, never by a caller.
+    const event: CourseEvent = {
+      id: newId(),
+      courseId: course.id,
+      kind: "started",
+      at: course.createdAt,
+      actorId,
+      before: null,
+      after: courseSnapshot(course),
+      createdAt: ts,
+      updatedAt: ts,
+      deletedAt: null,
+    };
+    const tx = conn.transaction(["courses", "courseEvents"], "readwrite");
+    await tx.objectStore("courses").add(course);
+    await tx.objectStore("courseEvents").add(event);
+    await tx.done;
     return course;
   }
 
@@ -378,21 +430,47 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       >
     >,
   ): Promise<Course> {
+    const actorId = await currentActorId();
     const conn = await db();
-    const tx = conn.transaction(["courses"], "readwrite");
+    const tx = conn.transaction(["courses", "courseEvents"], "readwrite");
     const store = tx.objectStore("courses");
     const existing = assertAlive(await store.get(id), "Course", id);
-    const updated: Course = { ...existing, ...patch, updatedAt: now().toISOString() };
+    const before = courseSnapshot(existing);
+    const ts = now().toISOString();
+    const updated: Course = { ...existing, ...patch, updatedAt: ts };
     await store.put(updated);
+    const after = courseSnapshot(updated);
+    // SPEC §6.4: only a genuine schedule or dose change is a lifecycle
+    // change — notes/instructions/startDate/endDate alone record nothing.
+    const scheduleChanged = JSON.stringify(before.schedule) !== JSON.stringify(after.schedule);
+    const doseChanged = before.doseAmount !== after.doseAmount || before.doseUnit !== after.doseUnit;
+    if (scheduleChanged || doseChanged) {
+      const event: CourseEvent = {
+        id: newId(),
+        courseId: updated.id,
+        kind: "edited",
+        at: ts,
+        actorId,
+        before,
+        after,
+        createdAt: ts,
+        updatedAt: ts,
+        deletedAt: null,
+      };
+      await tx.objectStore("courseEvents").add(event);
+    }
     await tx.done;
     return updated;
   }
 
   async function setCourseStatus(id: string, status: CourseStatus): Promise<Course> {
+    const actorId = await currentActorId();
     const conn = await db();
-    const tx = conn.transaction(["courses"], "readwrite");
+    const tx = conn.transaction(["courses", "courseEvents"], "readwrite");
     const store = tx.objectStore("courses");
     const existing = assertAlive(await store.get(id), "Course", id);
+    const before = courseSnapshot(existing);
+    const previousStatus = existing.status;
     const nowDate = now();
     const ts = nowDate.toISOString();
     // SPEC §3c: a paused -> active transition restarts a fromLastDose chain
@@ -405,8 +483,60 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       updatedAt: ts,
     };
     await store.put(updated);
+    // SPEC §6.4: a genuine transition only — setting the status a course
+    // already has records nothing.
+    if (status !== previousStatus) {
+      const event: CourseEvent = {
+        id: newId(),
+        courseId: updated.id,
+        kind: courseEventKindForStatusChange(status),
+        at: ts,
+        actorId,
+        before,
+        after: courseSnapshot(updated),
+        createdAt: ts,
+        updatedAt: ts,
+        deletedAt: null,
+      };
+      await tx.objectStore("courseEvents").add(event);
+    }
     await tx.done;
     return updated;
+  }
+
+  async function listCourseEvents(filter: {
+    courseId?: string;
+    courseIds?: string[];
+    from?: IsoDateTime;
+    to?: IsoDateTime;
+    limit?: number;
+    newestFirst?: boolean;
+  }): Promise<CourseEvent[]> {
+    const conn = await db();
+    let result: CourseEvent[];
+    if (filter.courseId) {
+      result = await conn.getAllFromIndex("courseEvents", "by_courseId", filter.courseId);
+    } else if (filter.courseIds) {
+      const lists = await Promise.all(
+        filter.courseIds.map((cid) => conn.getAllFromIndex("courseEvents", "by_courseId", cid)),
+      );
+      result = lists.flat();
+    } else {
+      result = await conn.getAll("courseEvents");
+    }
+    result = result.filter((e) => e.deletedAt === null);
+    if (filter.courseId) result = result.filter((e) => e.courseId === filter.courseId);
+    if (filter.courseIds) result = result.filter((e) => filter.courseIds!.includes(e.courseId));
+    if (filter.from) result = result.filter((e) => e.at >= filter.from!);
+    if (filter.to) result = result.filter((e) => e.at <= filter.to!);
+    // `at` can legitimately tie within a test (two transitions in the same
+    // millisecond); breaking the tie on `id` keeps ordering deterministic —
+    // and matches how IndexedDB itself orders same-key index entries by
+    // primary key — rather than depending on store enumeration order.
+    result = [...result].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+    if (filter.newestFirst) result.reverse();
+    if (filter.limit !== undefined) result = result.slice(0, filter.limit);
+    return result;
   }
 
   // --- dose events (append-only) -----------------------------------------
@@ -705,7 +835,17 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
   async function exportHousehold(): Promise<HouseholdBackup> {
     const conn = await db();
     const tx = conn.transaction(
-      ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "meta", "households", "users"],
+      [
+        "pets",
+        "medications",
+        "courses",
+        "doseEvents",
+        "courseEvents",
+        "stockAdjustments",
+        "meta",
+        "households",
+        "users",
+      ],
       "readonly",
     );
     const [
@@ -713,6 +853,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       meds,
       courses,
       doseEvents,
+      courseEvents,
       stockAdjustments,
       households,
       users,
@@ -724,6 +865,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       tx.objectStore("medications").getAll(),
       tx.objectStore("courses").getAll(),
       tx.objectStore("doseEvents").getAll(),
+      tx.objectStore("courseEvents").getAll(),
       tx.objectStore("stockAdjustments").getAll(),
       tx.objectStore("households").getAll(),
       tx.objectStore("users").getAll(),
@@ -745,6 +887,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       medications: meds.map(toMedication),
       courses,
       doseEvents,
+      courseEvents,
       stockAdjustments,
       meta: {
         tintCursor: (tintCursorRec?.value as number | undefined) ?? 0,
@@ -763,13 +906,24 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
 
     const conn = await db();
     const tx = conn.transaction(
-      ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "meta", "households", "users"],
+      [
+        "pets",
+        "medications",
+        "courses",
+        "doseEvents",
+        "courseEvents",
+        "stockAdjustments",
+        "meta",
+        "households",
+        "users",
+      ],
       "readwrite",
     );
     const petsStore = tx.objectStore("pets");
     const medsStore = tx.objectStore("medications");
     const coursesStore = tx.objectStore("courses");
     const eventsStore = tx.objectStore("doseEvents");
+    const courseEventsStore = tx.objectStore("courseEvents");
     const stockStore = tx.objectStore("stockAdjustments");
     const metaStore = tx.objectStore("meta");
     const householdsStore = tx.objectStore("households");
@@ -788,12 +942,16 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
         medsStore.clear(),
         coursesStore.clear(),
         eventsStore.clear(),
+        courseEventsStore.clear(),
         stockStore.clear(),
       ]);
       for (const p of backfillPets(b.pets)) await petsStore.put(p);
       for (const m of b.medications) await medsStore.put(toStoredMedication(m));
       for (const c of b.courses) await coursesStore.put(c);
       for (const e of backfillEvents(b.doseEvents)) await eventsStore.put(e);
+      // Optional on `HouseholdBackup` (a v2 backup predates the ledger) —
+      // tolerate its absence without inventing rows to fill the gap.
+      for (const ce of b.courseEvents ?? []) await courseEventsStore.put(ce);
       for (const a of backfillAdjustments(b.stockAdjustments)) await stockStore.put(a);
 
       // Only replace households/users when the backup actually carries them —
@@ -865,6 +1023,13 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       backfillAdjustments(b.stockAdjustments),
       (id) => stockStore.get(id),
       (row) => stockStore.put(row),
+    );
+    // Not folded into `ImportReport` (which is frozen for this slice) —
+    // merged the same last-write-wins way as every other entity regardless.
+    await mergeRows(
+      b.courseEvents ?? [],
+      (id) => courseEventsStore.get(id),
+      (row) => courseEventsStore.put(row),
     );
 
     // Merge never changes whose local repo this is — only the replace path
@@ -1088,6 +1253,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     createCourse,
     updateCourse,
     setCourseStatus,
+    listCourseEvents,
     listDoseEvents,
     logDose,
     correctDose,

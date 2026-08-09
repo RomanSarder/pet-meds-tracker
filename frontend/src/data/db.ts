@@ -1,10 +1,38 @@
 // The IndexedDB schema (SPEC §8) and the one place `openDB` is called.
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { Course, DoseEvent, Household, JoinCode, Medication, Pet, StockAdjustment, User } from "@/domain";
+import type {
+  Course,
+  CourseEvent,
+  CourseSnapshot,
+  DoseEvent,
+  Household,
+  JoinCode,
+  Medication,
+  Pet,
+  StockAdjustment,
+  User,
+} from "@/domain";
 import { DEFAULT_SELF_DISPLAY_NAME, newId, now } from "@/domain";
 
 export const DB_NAME = "petmeds";
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
+
+/**
+ * The course fields §6.4's ledger compares across a change — mirrors
+ * `CourseSnapshot` exactly. Duplicated here (rather than imported from a
+ * shared spot) the same way every other cross-cutting helper in this file
+ * duplicates memoryRepo/idbRepo's own local helpers instead of reaching into
+ * `@/domain`, which is frozen for this slice.
+ */
+function courseSnapshot(course: Course): CourseSnapshot {
+  return {
+    schedule: structuredClone(course.schedule),
+    doseAmount: course.doseAmount,
+    doseUnit: course.doseUnit,
+    startDate: course.startDate,
+    endDate: course.endDate,
+  };
+}
 
 /**
  * `by_nameLower` must be a real stored field, and the frozen `Medication`
@@ -54,6 +82,12 @@ export interface PetMedsDB extends DBSchema {
     key: string;
     value: StockAdjustment;
     indexes: { by_medicationId: string; by_createdAt: string };
+  };
+  /** SPEC §6.4 course lifecycle ledger — append-only, backfilled by the v3 upgrade below. */
+  courseEvents: {
+    key: string;
+    value: CourseEvent;
+    indexes: { by_courseId: string; by_at: string; by_courseId_at: [string, string] };
   };
   meta: {
     key: string;
@@ -196,6 +230,91 @@ export function openPetMedsDb(dbName: string = DB_NAME): Promise<IDBPDatabase<Pe
           }
 
           await metaStore.put({ key: "schemaVersion", value: 2 });
+        }
+        // falls through
+        case 2: {
+          // v3 (SPEC §6.4): the course lifecycle ledger. `courseEvents` is
+          // append-only, like `doseEvents`/`stockAdjustments` — see the doc
+          // comment on `Repo` in repo.types.ts.
+          const courseEvents = database.createObjectStore("courseEvents", { keyPath: "id" });
+          courseEvents.createIndex("by_courseId", "courseId");
+          courseEvents.createIndex("by_at", "at");
+          courseEvents.createIndex("by_courseId_at", ["courseId", "at"]);
+
+          const metaStore = transaction.objectStore("meta");
+          const selfUserIdRecord = await metaStore.get("selfUserId");
+          let selfUserId = selfUserIdRecord?.value as string | null | undefined;
+          const existingSelfUser = selfUserId
+            ? await transaction.objectStore("users").get(selfUserId)
+            : undefined;
+
+          // Case 1 (run just above, or in an earlier session that already
+          // brought this database to v2) always leaves a valid selfUserId
+          // behind. This mirrors that exact resolve-or-mint mechanism rather
+          // than inventing a new one, purely as a defensive fallback for a
+          // database that reaches here with a dangling id.
+          if (!selfUserId || !existingSelfUser) {
+            const householdIdRecord = await metaStore.get("householdId");
+            let householdId = householdIdRecord?.value as string | null | undefined;
+            const existingHousehold = householdId
+              ? await transaction.objectStore("households").get(householdId)
+              : undefined;
+            const ts = now().toISOString();
+
+            if (!householdId || !existingHousehold) {
+              householdId = newId();
+              await transaction.objectStore("households").put({
+                id: householdId,
+                name: null,
+                createdAt: ts,
+                updatedAt: ts,
+                deletedAt: null,
+              });
+              await metaStore.put({ key: "householdId", value: householdId });
+            }
+
+            selfUserId = newId();
+            await transaction.objectStore("users").put({
+              id: selfUserId,
+              householdId,
+              email: null,
+              displayName: DEFAULT_SELF_DISPLAY_NAME,
+              tint: 1,
+              isSelf: true,
+              joinedAt: ts,
+              createdAt: ts,
+              updatedAt: ts,
+              deletedAt: null,
+            });
+            await metaStore.put({ key: "selfUserId", value: selfUserId });
+          }
+
+          // Backfill, never drop (SPEC §1): every pre-existing course gets
+          // exactly one synthetic "started" event so a household that
+          // pre-dates this slice never shows an empty ledger for a course it
+          // already has. Every pre-existing row in every store survives
+          // untouched — this only ever adds rows to the new store.
+          let coursesCursor = await transaction.objectStore("courses").openCursor();
+          while (coursesCursor) {
+            const course = coursesCursor.value;
+            const ts = now().toISOString();
+            const event: CourseEvent = {
+              id: newId(),
+              courseId: course.id,
+              kind: "started",
+              at: course.createdAt,
+              actorId: selfUserId,
+              before: null,
+              after: courseSnapshot(course),
+              createdAt: ts,
+              updatedAt: ts,
+              deletedAt: null,
+            };
+            await transaction.objectStore("courseEvents").add(event);
+            coursesCursor = await coursesCursor.continue();
+          }
+
+          await metaStore.put({ key: "schemaVersion", value: 3 });
         }
       }
     },

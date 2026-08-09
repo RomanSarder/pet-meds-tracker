@@ -153,6 +153,7 @@ describe("openPetMedsDb — fresh schema", () => {
     expect(Array.from(db.objectStoreNames).sort()).toEqual(
       [
         "courses",
+        "courseEvents",
         "doseEvents",
         "households",
         "joinCodes",
@@ -169,6 +170,7 @@ describe("openPetMedsDb — fresh schema", () => {
       | "medications"
       | "courses"
       | "doseEvents"
+      | "courseEvents"
       | "stockAdjustments"
       | "meta"
       | "households"
@@ -179,6 +181,7 @@ describe("openPetMedsDb — fresh schema", () => {
       medications: ["by_nameLower"],
       courses: ["by_petId", "by_medicationId", "by_status"],
       doseEvents: ["by_courseId", "by_occurrenceKey", "by_givenAt", "by_courseId_givenAt"],
+      courseEvents: ["by_courseId", "by_at", "by_courseId_at"],
       stockAdjustments: ["by_medicationId", "by_createdAt"],
       meta: [],
       households: [],
@@ -198,7 +201,7 @@ describe("openPetMedsDb — fresh schema", () => {
     // shape, not a literal value.
     const metaRows = await db.getAll("meta");
     const metaByKey = Object.fromEntries(metaRows.map((r) => [r.key, r.value]));
-    expect(metaByKey.schemaVersion).toBe(2);
+    expect(metaByKey.schemaVersion).toBe(3);
     expect(metaByKey.tintCursor).toBe(0);
     expect(metaByKey.lastSweepDay).toBeNull();
     expect(typeof metaByKey.householdId).toBe("string");

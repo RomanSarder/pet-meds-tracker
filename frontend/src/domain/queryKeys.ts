@@ -26,5 +26,6 @@ export const qk = {
   courses: (filter?: CourseFilter) => ["courses", filter] as const,
   course: (id: string) => ["courses", id] as const,
   events: (filter: EventFilter) => ["events", filter] as const,
+  courseEvents: (filter: EventFilter) => ["courseEvents", filter] as const,
   today: (day: LocalDate) => ["today", day] as const,
 };

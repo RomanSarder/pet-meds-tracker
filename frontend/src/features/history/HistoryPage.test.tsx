@@ -1,0 +1,463 @@
+// SPEC §6.4 — Pet history: the full event log, filterable, grouped by day,
+// with a summary strip, backward pagination and a text/CSV export. Every
+// scenario below is seeded through the repo's real write methods
+// (`createPet`, `createMedication`, `createCourse`, `logDose`,
+// `recordMissed`, `setCourseStatus`, `adjustStock`, `upsertUser`) so course
+// lifecycle events are recorded by the data layer exactly as production
+// writes them — never hand-authored CourseEvent rows, which would prove
+// nothing about the real write path (the one exception, noted at its use
+// site, is a single hand-authored DoseEvent for an actorId no repo write can
+// ever produce).
+//
+// `listDoseEvents`/`listCourseEvents` range-filter on `loggedAt`/`at`, which
+// the repo always stamps from the CURRENT clock — never from the explicit
+// `scheduledFor`/`givenAt` a caller passes. So every write below runs through
+// `withClock`, which sets the fixed clock immediately before the call, to
+// land each row in the day its scenario intends.
+import { describe, expect, it } from "vitest";
+import { screen } from "@testing-library/react";
+import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
+import { createMemoryRepo } from "@/data/memoryRepo";
+import type { Repo } from "@/data/repo.types";
+import {
+  addLocalDays,
+  atLocalTime,
+  cloneFixtures,
+  fixedClock,
+  FIXTURE_NOW,
+  localDayKey,
+  occurrenceKeyFor,
+  setClock,
+  type Household,
+  type LocalDate,
+  type User,
+} from "@/domain";
+import { buildLogEntries } from "./logModel";
+import { exportAsCsv, exportAsText } from "./historyExport";
+import { HistoryView } from "./HistoryPage";
+
+const TODAY = localDayKey(new Date(FIXTURE_NOW));
+const YESTERDAY = addLocalDays(TODAY, -1);
+const OLDER_DAY = addLocalDays(TODAY, -3);
+
+/** Sets the fixed clock, then runs `fn` — every repo write's stamped fields key off it. */
+async function withClock<T>(iso: string, fn: () => Promise<T>): Promise<T> {
+  setClock(fixedClock(iso));
+  return fn();
+}
+
+async function seedCourse(
+  repo: Repo,
+  petId: string,
+  medicationId: string,
+  startDate: LocalDate,
+  instructions: string | null = null,
+) {
+  return repo.createCourse({
+    petId,
+    medicationId,
+    doseAmount: 0.4,
+    doseUnit: "ml",
+    instructions,
+    schedule: { kind: "fixedTimes", times: ["08:00"] },
+    startDate,
+    endDate: null,
+    notes: null,
+  });
+}
+
+/**
+ * Three days of Clover's real history, built entirely through repo writes:
+ * an older day carrying only the course's own "started" entry, yesterday's
+ * given + missed doses, and today's given + skipped doses plus a pause.
+ * `instructions: "after food"` keeps every dose's detail line from reading
+ * bare "Given"/"Skipped"/"Missed" — text the summary strip's own stat labels
+ * also use, which would otherwise make `getByText` ambiguous.
+ */
+async function seedMixedScenario(): Promise<{ repo: Repo; petId: string }> {
+  const repo = createMemoryRepo();
+  const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+  const medication = await withClock(FIXTURE_NOW, () =>
+    repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+  );
+
+  const course = await withClock(atLocalTime(OLDER_DAY, "08:00").toISOString(), () =>
+    seedCourse(repo, pet.id, medication.id, OLDER_DAY, "after food"),
+  );
+
+  const yGivenIso = atLocalTime(YESTERDAY, "08:00").toISOString();
+  await withClock(yGivenIso, () =>
+    repo.logDose({ courseId: course.id, status: "given", scheduledFor: yGivenIso, givenAt: yGivenIso, amount: 0.4 }),
+  );
+
+  const yMissedIso = atLocalTime(YESTERDAY, "20:00").toISOString();
+  await withClock(yMissedIso, () =>
+    repo.recordMissed([{ courseId: course.id, scheduledFor: yMissedIso, amount: 0.4 }]),
+  );
+
+  const tGivenIso = atLocalTime(TODAY, "06:00").toISOString();
+  await withClock(tGivenIso, () =>
+    repo.logDose({ courseId: course.id, status: "given", scheduledFor: tGivenIso, givenAt: tGivenIso, amount: 0.4 }),
+  );
+
+  // 07:15 is over an hour clear of 06:00's 60-min fixedTimes grace window, so
+  // this doesn't trip the concurrent-log dedup guard.
+  const tSkippedIso = atLocalTime(TODAY, "07:15").toISOString();
+  await withClock(tSkippedIso, () =>
+    repo.logDose({
+      courseId: course.id,
+      status: "skipped",
+      scheduledFor: tSkippedIso,
+      givenAt: tSkippedIso,
+      amount: 0.4,
+      note: "refused syringe",
+    }),
+  );
+
+  // FIXTURE_NOW is 08:00 local — after every event above, at (or exactly on)
+  // the render clock's own "now", so it lands inside the default page's
+  // inclusive `to` bound.
+  await withClock(FIXTURE_NOW, () => repo.setCourseStatus(course.id, "paused"));
+
+  return { repo, petId: pet.id };
+}
+
+describe("HistoryView", () => {
+  it("narrows via each filter chip and 'All' restores the full list", async () => {
+    const { repo, petId } = await seedMixedScenario();
+    renderWithProviders(<HistoryView petId={petId} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    const rowCount = () => screen.getAllByText(/^by /).length;
+    // 4 dose entries (2 given, 1 skipped, 1 missed) + 2 course entries
+    // (started, paused) = 6.
+    expect(rowCount()).toBe(6);
+
+    await user.click(screen.getByRole("button", { name: "Doses" }));
+    expect(rowCount()).toBe(4);
+
+    await user.click(screen.getByRole("button", { name: "Courses" }));
+    expect(rowCount()).toBe(2);
+
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(rowCount()).toBe(6);
+  });
+
+  it("groups entries by day with Today/Yesterday/plain-date headings shaped 'Ddd D Mmm'", async () => {
+    const { repo, petId } = await seedMixedScenario();
+    renderWithProviders(<HistoryView petId={petId} />, { repo });
+    await screen.findByText("History");
+
+    // Shape only — the exact weekday/date text is derived from FIXTURE_NOW
+    // by `dayLabel`, already unit-tested in logModel.test.ts; asserting the
+    // literal string here would just re-hardcode a fixture-dependent value.
+    expect(screen.getByText(/^Today · [A-Za-z]{3} \d{1,2} [A-Za-z]{3}$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Yesterday · [A-Za-z]{3} \d{1,2} [A-Za-z]{3}$/)).toBeInTheDocument();
+    expect(screen.getByText(/^[A-Za-z]{3} \d{1,2} [A-Za-z]{3}$/)).toBeInTheDocument();
+  });
+
+  it("summarises the full visible range and does not change when a filter chip is selected", async () => {
+    const { repo, petId } = await seedMixedScenario();
+    renderWithProviders(<HistoryView petId={petId} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    function summaryCount(label: string): string {
+      return screen.getByText(label).previousElementSibling?.textContent ?? "";
+    }
+
+    expect(summaryCount("Given")).toBe("2");
+    expect(summaryCount("Skipped")).toBe("1");
+    expect(summaryCount("Missed")).toBe("1");
+
+    await user.click(screen.getByRole("button", { name: "Courses" }));
+    expect(summaryCount("Given")).toBe("2");
+    expect(summaryCount("Skipped")).toBe("1");
+    expect(summaryCount("Missed")).toBe("1");
+
+    await user.click(screen.getByRole("button", { name: "Doses" }));
+    expect(summaryCount("Given")).toBe("2");
+    expect(summaryCount("Skipped")).toBe("1");
+    expect(summaryCount("Missed")).toBe("1");
+  });
+
+  it("renders each row with a trailing 'by <name>'", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+    const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+    await withClock(givenIso, () =>
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+    );
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    const self = await repo.getCurrentUser();
+    expect(screen.getAllByText(`by ${self.displayName}`).length).toBeGreaterThan(0);
+  });
+
+  it("renders 'by Someone' for an event whose actorId matches no household member", async () => {
+    // Every repo write stamps `currentActorId()`, so an unknown-actor row can
+    // never come out of the write path — only out of data the repo did not
+    // itself produce (e.g. a synced row from a member removed on another
+    // device). Seeded directly for that reason, the same technique
+    // PetDetailPage.test.tsx and logModel.test.ts use for the same
+    // otherwise-unreachable case (SPEC §5: "render 'Someone' rather than an
+    // email").
+    const custom = cloneFixtures();
+    const pet = custom.pets.find((p) => p.name === "Clover")!;
+    const course = custom.courses.find((c) => c.petId === pet.id && c.schedule.kind === "fixedTimes")!;
+    const ghostIso = atLocalTime(TODAY, "05:00").toISOString();
+    custom.doseEvents.push({
+      id: "ghost-dose",
+      courseId: course.id,
+      scheduledFor: ghostIso,
+      status: "given",
+      loggedAt: ghostIso,
+      givenAt: ghostIso,
+      amount: course.doseAmount,
+      note: null,
+      occurrenceKey: occurrenceKeyFor(course.id, ghostIso),
+      supersedesId: null,
+      actorId: "ghost-actor-id",
+      createdAt: ghostIso,
+      updatedAt: ghostIso,
+      deletedAt: null,
+    });
+    const repo = createMemoryRepo(custom);
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    expect(screen.getAllByText(/^by Someone$/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^by Roman$/).length).toBeGreaterThan(0);
+  });
+
+  it(
+    "shows a course pause even across a second pause/resume cycle — the ledger, not the " +
+      "course's own last-transition fields (SPEC §12)",
+    async () => {
+      const repo = createMemoryRepo();
+      const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+      const medication = await withClock(FIXTURE_NOW, () =>
+        repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+      );
+      // FIXTURE_NOW is 08:00 local; every transition below stays same-day and
+      // strictly before it, so all four land inside the default page.
+      const course = await withClock(atLocalTime(TODAY, "04:00").toISOString(), () =>
+        seedCourse(repo, pet.id, medication.id, TODAY),
+      );
+
+      await withClock(atLocalTime(TODAY, "05:00").toISOString(), () =>
+        repo.setCourseStatus(course.id, "paused"),
+      ); // first pause
+      await withClock(atLocalTime(TODAY, "06:00").toISOString(), () =>
+        repo.setCourseStatus(course.id, "active"),
+      ); // resume
+      await withClock(atLocalTime(TODAY, "07:00").toISOString(), () =>
+        repo.setCourseStatus(course.id, "paused"),
+      ); // second pause — the one a Course.updatedAt/resumedAt derivation cannot survive
+
+      renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+      await screen.findByText("History");
+
+      // Both pauses present (not collapsed to "latest only"), plus the
+      // resume and the original start — the full ledger, not a snapshot.
+      expect(await screen.findAllByText("Course paused")).toHaveLength(2);
+      expect(screen.getAllByText("Course resumed")).toHaveLength(1);
+      expect(screen.getAllByText(/^Course started/)).toHaveLength(1);
+    },
+  );
+
+  it("excludes stock adjustments and household member joins from the log (SPEC §6.4)", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+    const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+    await withClock(givenIso, () =>
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+    );
+
+    // Two real writes SPEC §6.4 says must NOT surface in the pet's history.
+    await withClock(FIXTURE_NOW, () =>
+      repo.adjustStock({ medicationId: medication.id, deltaUnits: 5, reason: "purchase", note: "New bottle" }),
+    );
+    const householdId = await repo.currentHouseholdId();
+    await withClock(FIXTURE_NOW, () =>
+      repo.upsertUser({
+        id: "joiner-1",
+        householdId,
+        email: null,
+        displayName: "Marta",
+        tint: 2,
+        isSelf: false,
+        joinedAt: FIXTURE_NOW,
+        createdAt: FIXTURE_NOW,
+        updatedAt: FIXTURE_NOW,
+        deletedAt: null,
+      }),
+    );
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    // The course's own "started" entry plus the one dose above = 2 rows;
+    // neither the stock purchase nor Marta's join adds a third.
+    expect(screen.getAllByText(/^by /)).toHaveLength(2);
+    expect(screen.queryByText(/New bottle/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Marta")).not.toBeInTheDocument();
+  });
+
+  it("Load earlier pages backwards 30 days without duplicating a row at the boundary", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+
+    // Page 1 covers [today - 29, today]; day -29 is its oldest, inclusive day.
+    const boundaryDay = addLocalDays(TODAY, -29);
+    // Only page 2's wider [today - 59, today] window reaches this far back.
+    const beyondPage1Day = addLocalDays(TODAY, -35);
+
+    const boundaryIso = atLocalTime(boundaryDay, "12:00").toISOString();
+    await withClock(boundaryIso, () =>
+      repo.logDose({
+        courseId: course.id,
+        status: "given",
+        scheduledFor: boundaryIso,
+        givenAt: boundaryIso,
+        amount: 0.4,
+        note: "boundary-marker",
+      }),
+    );
+
+    const olderIso = atLocalTime(beyondPage1Day, "12:00").toISOString();
+    await withClock(olderIso, () =>
+      repo.logDose({
+        courseId: course.id,
+        status: "given",
+        scheduledFor: olderIso,
+        givenAt: olderIso,
+        amount: 0.4,
+        note: "older-marker",
+      }),
+    );
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    expect(screen.getAllByText(/boundary-marker/)).toHaveLength(1);
+    expect(screen.queryByText(/older-marker/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Load earlier" }));
+
+    // The newly-reachable day appears, and the already-visible boundary row
+    // is not fetched-and-rendered a second time.
+    expect(await screen.findAllByText(/older-marker/)).toHaveLength(1);
+    expect(screen.getAllByText(/boundary-marker/)).toHaveLength(1);
+  });
+
+  it("exports the visible range as plain text and CSV, matching exportAsText/exportAsCsv over the same entries", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+    const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+    await withClock(givenIso, () =>
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+    );
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    await user.click(screen.getByRole("button", { name: "Export history" }));
+    expect(screen.getByRole("menuitem", { name: "Plain text" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "CSV" })).toBeInTheDocument();
+
+    // The download itself is unobservable in jsdom (no `URL.createObjectURL`
+    // — HistoryPage.tsx's `downloadText` no-ops without it), so the exported
+    // content is verified independently: build the same entries the screen
+    // did over the same visible range, and confirm `exportAsText`/
+    // `exportAsCsv` (imported read-only) render them correctly.
+    const courses = await repo.listCourses({ petId: pet.id });
+    const medications = await repo.listMedications();
+    const courseIds = courses.map((c) => c.id);
+    const doseEvents = await repo.listDoseEvents({ courseIds });
+    const courseEvents = await repo.listCourseEvents({ courseIds });
+    const entries = buildLogEntries({ courses, medications, doseEvents, courseEvents });
+    const ctx = { petName: "Clover", from: TODAY, to: TODAY, nameFor: () => "You" };
+
+    const text = exportAsText(entries, ctx);
+    expect(text).toContain("Clover — history");
+    expect(text).toContain("Metacam 0.4 ml");
+    expect(text).toContain("by You");
+
+    const csv = exportAsCsv(entries, ctx);
+    const csvRows = csv.trimEnd().split("\n");
+    expect(csvRows[0]).toBe('"date","time","type","medication","detail","by"');
+    expect(csv).toContain("Metacam 0.4 ml");
+
+    // Both menu items are wired to a real handler: clicking either closes
+    // the export menu without throwing.
+    await user.click(screen.getByRole("menuitem", { name: "Plain text" }));
+    expect(screen.queryByRole("menuitem", { name: "Plain text" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Export history" }));
+    await user.click(screen.getByRole("menuitem", { name: "CSV" }));
+    expect(screen.queryByRole("menuitem", { name: "CSV" })).not.toBeInTheDocument();
+  });
+
+  it("never renders an email address anywhere in the screen (SPEC §12)", async () => {
+    const EMAIL = "clover.mum@example.com";
+    const household: Household = {
+      id: "hh-email-test",
+      name: "Home",
+      createdAt: FIXTURE_NOW,
+      updatedAt: FIXTURE_NOW,
+      deletedAt: null,
+    };
+    const selfUser: User = {
+      id: "user-email-test",
+      householdId: household.id,
+      email: EMAIL,
+      displayName: "Clover's Mum",
+      tint: 1,
+      isSelf: true,
+      joinedAt: FIXTURE_NOW,
+      createdAt: FIXTURE_NOW,
+      updatedAt: FIXTURE_NOW,
+      deletedAt: null,
+    };
+    const repo = createMemoryRepo({ household, users: [selfUser] });
+
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+    const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+    await withClock(givenIso, () =>
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+    );
+
+    const { container } = renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    expect(container.textContent).not.toContain(EMAIL);
+    expect(container.textContent).not.toContain("clover.mum");
+  });
+});
