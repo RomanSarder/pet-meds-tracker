@@ -31,6 +31,7 @@ import { JoinHouseholdPage } from "./JoinHouseholdPage";
 import { YourNamePanel } from "./YourNamePanel";
 import { FirstRunPage } from "@/features/onboarding/FirstRunPage";
 import { PetsPage } from "@/features/pets/PetsPage";
+import { SettingsPage } from "@/features/settings/SettingsPage";
 
 vi.mock("@/shared/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api")>()),
@@ -226,6 +227,15 @@ const SWEPT_SCREENS: Array<{
     name: "PetsPage",
     render: () => <PetsPage />,
     waitForReady: () => screen.findByText("Household · 2 people"),
+  },
+  // Added after a review-lens pass found this screen rendering `user.email` on
+  // its "Signed in" card. SettingsPage predates SPEC §12 — it is exactly the
+  // class of screen this sweep exists to catch: one nobody was thinking about
+  // when the no-email rule was written.
+  {
+    name: "SettingsPage",
+    render: () => <SettingsPage />,
+    waitForReady: () => screen.findByText("Signed in as Roman"),
   },
 ];
 
