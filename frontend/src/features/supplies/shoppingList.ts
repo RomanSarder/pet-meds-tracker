@@ -9,12 +9,9 @@ import type { SupplyItem } from "./model";
 export function shoppingListText(items: SupplyItem[]): string {
   return items
     .map((item) => {
-      // neededLabel's packSize-null branch formats a bare quantity ("6 ml")
-      // using the medication's unit, but neither SupplyItem nor
-      // MedicationProjection carries `unit` — every fixture medication has
-      // a packSize, so that branch never actually fires here. "" is an
-      // inert fallback rather than threading `unit` through the contract.
-      const quantity = neededLabel(item.projection.neededPacks, item.projection.needed, "");
+      // The pack branch renders "N more pack(s)"; the no-packSize branch
+      // renders a unit-bearing quantity (e.g. "3 ml").
+      const quantity = neededLabel(item.projection.neededPacks, item.projection.needed, item.unit);
       return joinMeta([item.name, quantity, item.petNames.join(", ") || undefined]);
     })
     .join("\n");

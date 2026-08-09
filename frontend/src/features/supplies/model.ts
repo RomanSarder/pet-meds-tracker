@@ -13,6 +13,8 @@ export interface SupplyItem {
   medicationId: string;
   /** SupplyRow `name` — the medication name alone. */
   name: string;
+  /** Medication unit, e.g. "ml" | "tab" | "drop". Needed to format a quantity. */
+  unit: string;
   forWhom: string;
   stock: string;
   tone: SupplyTone;
@@ -105,6 +107,7 @@ export function buildSupplyItems(input: {
     return {
       medicationId: medication.id,
       name: medication.name,
+      unit: medication.unit,
       forWhom,
       stock,
       tone: projection.tone,

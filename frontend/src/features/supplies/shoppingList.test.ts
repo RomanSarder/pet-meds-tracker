@@ -28,6 +28,7 @@ function supplyItem(overrides: Partial<SupplyItem> = {}): SupplyItem {
   return {
     medicationId: MED_ID,
     name: "Metacam",
+    unit: "ml",
     forWhom: "Clover · 2× daily",
     stock: "1 bottle",
     tone: "out",
@@ -68,5 +69,17 @@ describe("shoppingListText", () => {
 
   it("empty input -> ''", () => {
     expect(shoppingListText([])).toBe("");
+  });
+
+  it("an item whose medication has no packSize renders its quantity with the unit", () => {
+    const items = [
+      supplyItem({
+        name: "Metacam",
+        unit: "ml",
+        petNames: ["Clover"],
+        projection: projection({ neededPacks: null, needed: 3 }),
+      }),
+    ];
+    expect(shoppingListText(items)).toBe("Metacam · 3 ml · Clover");
   });
 });
