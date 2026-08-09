@@ -226,25 +226,47 @@ export function PetDetailView({ petId }: { petId: string }) {
           );
         })}
 
-        <SectionLabel>Recent</SectionLabel>
+        <SectionLabel
+          trailing={
+            <button
+              onClick={() => navigate({ to: "/pets/$petId/history", params: { petId } })}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                color: "var(--accent)",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              See all history
+            </button>
+          }
+        >
+          Recent
+        </SectionLabel>
         <Card tone="quiet" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {recentEvents.map((e) => {
-            const course = activeCourses.find((c) => c.id === e.courseId);
-            const label = course
-              ? courseLabel(medicationName(course.medicationId), course.doseAmount, course.doseUnit)
-              : "";
-            const suffix = e.status === "skipped" ? " · Skipped" : e.status === "missed" ? " · Missed" : "";
+          {recentLog.map((entry) => {
+            const suffix =
+              entry.status === "skipped"
+                ? " · Skipped"
+                : entry.status === "missed"
+                  ? " · Missed"
+                  : entry.status === "course"
+                    ? ` · ${entry.detail}`
+                    : "";
             return (
               <div
-                key={e.id}
+                key={entry.id}
                 style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: "var(--ink-2)" }}
               >
                 <span>
-                  {label}
+                  {entry.title}
                   {suffix}
                 </span>
                 <span style={{ color: "var(--ink-3)", fontSize: 13 }}>
-                  {eventWhenLabel(new Date(e.givenAt), today)}
+                  {eventWhenLabel(new Date(entry.at), today)} · by {nameFor(entry.actorId)}
                 </span>
               </div>
             );

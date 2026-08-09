@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import { useRouterState } from "@tanstack/react-router";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import {
@@ -300,14 +301,17 @@ describe("PetDetailView", () => {
     const recentCard = recentLabel.closest("div")!.nextElementSibling as HTMLElement;
     const rows = Array.from(recentCard.children) as HTMLElement[];
 
-    // Clover's three dose events, newest `loggedAt` first: Metacam given
-    // (Aug 7 18:58), Metoclopramide given (Aug 6 22:00), Metacam skipped
-    // (Aug 6 07:05) — see fixtures.ts.
-    expect(rows).toHaveLength(3);
+    // Recent now renders the same widened event-log model History (§6.4)
+    // uses (SPEC §6.3), so Clover's three dose events are joined by each of
+    // her two active courses' own "started" lifecycle entry. Newest `at`
+    // first: Metacam given (Aug 7 19:00), Metoclopramide given (Aug 6 22:00),
+    // Metacam course started (Aug 6 08:00), Metacam skipped (Aug 6 07:00),
+    // Metoclopramide course started (Aug 1 08:00) — see fixtures.ts.
+    expect(rows).toHaveLength(5);
     expect(rows[0].textContent).toContain("Metacam");
     expect(rows[0].textContent).not.toContain("Skipped");
-    expect(rows[2].textContent).toContain("Metacam");
-    expect(rows[2].textContent).toContain("Skipped");
+    expect(rows[3].textContent).toContain("Metacam");
+    expect(rows[3].textContent).toContain("Skipped");
   });
 
   it("caps the Recent list at 10 events", async () => {
@@ -345,6 +349,72 @@ describe("PetDetailView", () => {
     const recentLabel = await screen.findByText("Recent");
     const recentCard = recentLabel.closest("div")!.nextElementSibling as HTMLElement;
     expect(recentCard.children).toHaveLength(10);
+  });
+
+  it("shows who logged each Recent event, resolved through displayNameFor rather than a raw id", async () => {
+    const pet = clover();
+    renderWithProviders(<PetDetailView petId={pet.id} />);
+
+    const recentLabel = await screen.findByText("Recent");
+    const recentCard = recentLabel.closest("div")!.nextElementSibling as HTMLElement;
+
+    // Every one of Clover's Recent entries is attributed to Roman (fixtures.ts).
+    const roman = fixtures.users.find((u) => u.displayName === "Roman")!;
+    const rows = Array.from(recentCard.children) as HTMLElement[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.textContent).toContain(`by ${roman.displayName}`);
+    }
+  });
+
+  it("shows a course pause in Recent even though pausing writes no DoseEvent", async () => {
+    const custom = cloneFixtures();
+    const pet = custom.pets.find((p) => p.name === "Clover")!;
+    const course = custom.courses.find(
+      (c) => c.petId === pet.id && c.schedule.kind === "fixedTimes",
+    )!;
+    const repo = createMemoryRepo(custom);
+    const eventsBeforePause = await repo.listDoseEvents({ courseIds: [course.id] });
+    // Seeded through the repo's real write path (CONTRACT.md §3.1), so the
+    // resulting CourseEvent is exactly what production writes on a pause.
+    await repo.setCourseStatus(course.id, "paused");
+
+    renderWithProviders(<PetDetailView petId={pet.id} />, { repo });
+
+    const recentLabel = await screen.findByText("Recent");
+    const recentCard = recentLabel.closest("div")!.nextElementSibling as HTMLElement;
+    expect(await within(recentCard).findByText(/Course paused/)).toBeInTheDocument();
+
+    // The pause itself never wrote a DoseEvent.
+    const eventsAfterPause = await repo.listDoseEvents({ courseIds: [course.id] });
+    expect(eventsAfterPause).toHaveLength(eventsBeforePause.length);
+  });
+
+  it("offers a 'See all history' affordance that navigates to the pet's history route", async () => {
+    function LocationProbe() {
+      const pathname = useRouterState({ select: (s) => s.location.pathname });
+      return <span data-testid="pathname">{pathname}</span>;
+    }
+
+    const pet = clover();
+    // The harness router has no `/pets/$petId/history` route (see
+    // renderWithProviders.tsx), so navigation intent is witnessed the same
+    // way TodayPage.test.tsx does it: a `LocationProbe` mounted alongside the
+    // page under test, reading `useRouterState` rather than the DOM, since the
+    // catch-all route keeps the page itself mounted regardless of the path.
+    renderWithProviders(
+      <>
+        <PetDetailView petId={pet.id} />
+        <LocationProbe />
+      </>,
+    );
+    const user = userEvent.setup();
+
+    await screen.findByText(pet.name);
+    const link = screen.getByRole("button", { name: "See all history" });
+    await user.click(link);
+
+    expect(screen.getByTestId("pathname")).toHaveTextContent(`/pets/${pet.id}/history`);
   });
 
   it("archives the pet via the overflow menu, leaving its courses and dose history untouched", async () => {

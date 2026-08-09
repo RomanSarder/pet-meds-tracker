@@ -784,4 +784,209 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
       expect(JSON.stringify(e)).not.toContain("@");
     }
   });
+
+  // --- 26. CourseEvent ledger (SPEC §6.4) -------------------------------------
+
+  it("createCourse records exactly one 'started' CourseEvent, before === null, after matching the created course", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+
+    const events = await repo.listCourseEvents({ courseId });
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe("started");
+    expect(events[0].before).toBeNull();
+
+    const course = await repo.getCourse(courseId);
+    expect(events[0].after).toEqual({
+      schedule: course?.schedule,
+      doseAmount: course?.doseAmount,
+      doseUnit: course?.doseUnit,
+      startDate: course?.startDate,
+      endDate: course?.endDate,
+    });
+  });
+
+  it("SPEC §12: pause -> resume -> pause again yields exactly the four events ['started','paused','resumed','paused'] in that order — a second cycle a Course-derived history (updatedAt/resumedAt only remember the latest transition) could not survive", async () => {
+    // Fixed BEFORE `setupCourse` too, so the "started" event's `at` is
+    // earlier than every transition below — otherwise `setupCourse` stamps
+    // it with the real (later) system clock and it would sort last.
+    const tStarted = new Date("2026-08-08T07:00:00.000Z");
+    setClock(fixedClock(tStarted.toISOString()));
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+
+    // Distinct, strictly increasing instants for each transition so ordering
+    // is pinned by `at` alone — not left to depend on the `id` tie-break,
+    // which is a random UUID and carries no chronological information (see
+    // the "no deterministic order under a frozen clock" finding below).
+    const t0 = new Date(tStarted.getTime() + 60_000);
+    setClock(fixedClock(t0.toISOString()));
+    await repo.setCourseStatus(courseId, "paused");
+
+    const t1 = new Date(tStarted.getTime() + 120_000);
+    setClock(fixedClock(t1.toISOString()));
+    await repo.setCourseStatus(courseId, "active");
+
+    const t2 = new Date(tStarted.getTime() + 180_000);
+    setClock(fixedClock(t2.toISOString()));
+    await repo.setCourseStatus(courseId, "paused");
+
+    const events = await repo.listCourseEvents({ courseId });
+    expect(events.map((e) => e.kind)).toEqual(["started", "paused", "resumed", "paused"]);
+    expect(events.map((e) => e.at)).toEqual([
+      tStarted.toISOString(),
+      t0.toISOString(),
+      t1.toISOString(),
+      t2.toISOString(),
+    ]);
+  });
+
+  it("a no-op setCourseStatus (setting the status a course already has) records no CourseEvent", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+
+    const before = await repo.listCourseEvents({ courseId });
+    await repo.setCourseStatus(courseId, "active"); // already active — no-op
+    const after = await repo.listCourseEvents({ courseId });
+
+    expect(after).toHaveLength(before.length);
+  });
+
+  it("updateCourse changing the schedule records exactly one 'edited' event with before.schedule the old value and after.schedule the new one", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+    const original = await repo.getCourse(courseId);
+    const newSchedule = { kind: "fixedTimes" as const, times: ["08:00", "20:00"] };
+
+    await repo.updateCourse(courseId, { schedule: newSchedule });
+
+    const events = await repo.listCourseEvents({ courseId });
+    const edited = events.filter((e) => e.kind === "edited");
+    expect(edited).toHaveLength(1);
+    expect(edited[0].before?.schedule).toEqual(original?.schedule);
+    expect(edited[0].after.schedule).toEqual(newSchedule);
+  });
+
+  it("updateCourse changing only notes records no CourseEvent", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+
+    const before = await repo.listCourseEvents({ courseId });
+    await repo.updateCourse(courseId, { notes: "watch for drowsiness" });
+    const after = await repo.listCourseEvents({ courseId });
+
+    expect(after).toHaveLength(before.length);
+  });
+
+  it("updateCourse changing only instructions records no CourseEvent", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+
+    const before = await repo.listCourseEvents({ courseId });
+    await repo.updateCourse(courseId, { instructions: "give with food" });
+    const after = await repo.listCourseEvents({ courseId });
+
+    expect(after).toHaveLength(before.length);
+  });
+
+  it("every recorded CourseEvent's actorId equals currentActorId()", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+    await repo.setCourseStatus(courseId, "paused");
+    await repo.setCourseStatus(courseId, "active");
+    await repo.updateCourse(courseId, { doseAmount: 0.8 });
+
+    const actorId = await repo.currentActorId();
+    const events = await repo.listCourseEvents({ courseId });
+    expect(events.length).toBeGreaterThan(0);
+    for (const e of events) {
+      expect(e.actorId).toBe(actorId);
+    }
+  });
+
+  it("listCourseEvents honours courseId, courseIds, from, to, limit and newestFirst", async () => {
+    const repo = makeRepo();
+    const t0 = new Date("2026-08-08T07:00:00.000Z");
+
+    setClock(fixedClock(t0.toISOString()));
+    const courseA = await setupCourse(repo); // "started" at t0
+
+    const t1 = new Date(t0.getTime() + 60_000);
+    setClock(fixedClock(t1.toISOString()));
+    const courseB = await setupIntervalCourse(repo); // "started" at t1
+
+    const t2 = new Date(t0.getTime() + 120_000);
+    setClock(fixedClock(t2.toISOString()));
+    await repo.setCourseStatus(courseA.courseId, "paused"); // A paused at t2
+
+    const t3 = new Date(t0.getTime() + 180_000);
+    setClock(fixedClock(t3.toISOString()));
+    await repo.setCourseStatus(courseA.courseId, "active"); // A resumed at t3
+
+    const t4 = new Date(t0.getTime() + 240_000);
+    setClock(fixedClock(t4.toISOString()));
+    await repo.setCourseStatus(courseB.courseId, "paused"); // B paused at t4
+
+    // courseId: only course A's own four events, in order.
+    const aEvents = await repo.listCourseEvents({ courseId: courseA.courseId });
+    expect(aEvents.map((e) => e.kind)).toEqual(["started", "paused", "resumed"]);
+
+    // courseIds: the union of both courses' events.
+    const bothEvents = await repo.listCourseEvents({ courseIds: [courseA.courseId, courseB.courseId] });
+    expect(bothEvents).toHaveLength(5);
+    expect(new Set(bothEvents.map((e) => e.courseId))).toEqual(
+      new Set([courseA.courseId, courseB.courseId]),
+    );
+
+    // from/to: the window [t2, t3] holds exactly A's paused and resumed events.
+    const ranged = await repo.listCourseEvents({
+      courseIds: [courseA.courseId, courseB.courseId],
+      from: t2.toISOString(),
+      to: t3.toISOString(),
+    });
+    expect(ranged.map((e) => e.kind)).toEqual(["paused", "resumed"]);
+
+    // limit: the two earliest of the five, oldest-first by default.
+    const limited = await repo.listCourseEvents({
+      courseIds: [courseA.courseId, courseB.courseId],
+      limit: 2,
+    });
+    expect(limited.map((e) => e.courseId)).toEqual([courseA.courseId, courseB.courseId]);
+
+    // newestFirst: the full five, reversed.
+    const newestFirst = await repo.listCourseEvents({
+      courseIds: [courseA.courseId, courseB.courseId],
+      newestFirst: true,
+    });
+    expect(newestFirst.map((e) => e.courseId)).toEqual([
+      courseB.courseId,
+      courseA.courseId,
+      courseA.courseId,
+      courseB.courseId,
+      courseA.courseId,
+    ]);
+    expect(newestFirst.map((e) => e.kind)).toEqual(["paused", "resumed", "paused", "started", "started"]);
+  });
+
+  it("setCourseStatus to 'stopped' records a 'stopped' event with before.endDate null and after.endDate set", async () => {
+    const repo = makeRepo();
+    const { courseId } = await setupCourse(repo);
+
+    const stopped = await repo.setCourseStatus(courseId, "stopped");
+    expect(stopped.endDate).not.toBeNull();
+
+    const events = await repo.listCourseEvents({ courseId });
+    const stoppedEvent = events.find((e) => e.kind === "stopped");
+    expect(stoppedEvent).toBeDefined();
+    expect(stoppedEvent?.before?.endDate).toBeNull();
+    expect(stoppedEvent?.after.endDate).toBe(stopped.endDate);
+  });
+
+  it("exposes no CourseEvent mutator: recordCourseEvent, updateCourseEvent and deleteCourseEvent are all undefined — append-only is enforced by the Repo's shape, exactly as for DoseEvent", async () => {
+    const repo = makeRepo();
+    const untyped = repo as unknown as Record<string, unknown>;
+    expect(untyped.recordCourseEvent).toBeUndefined();
+    expect(untyped.updateCourseEvent).toBeUndefined();
+    expect(untyped.deleteCourseEvent).toBeUndefined();
+  });
 });
