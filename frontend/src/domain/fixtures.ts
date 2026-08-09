@@ -15,13 +15,77 @@ import { occurrenceKeyFor } from "./keys";
 import type {
   Course,
   DoseEvent,
+  Household,
+  JoinCode,
   Medication,
   Pet,
   StockAdjustment,
+  User,
 } from "./types";
 
 /** 08:00 local (Europe/London BST) on a Saturday. Everything below is relative to this instant. */
 export const FIXTURE_NOW = "2026-08-08T07:00:00.000Z";
+
+// --- Household & members -----------------------------------------------
+// One household, two members: Roman (self, tint 1) and Marta (tint 2).
+// SPEC §5/§11 — attribution across doseEvents/stockAdjustments below is
+// split between both so `displayNameFor` has real coverage to resolve.
+
+const HOUSEHOLD_ID = "f0000000-0000-4000-8000-000000000001";
+const ROMAN_ID = "g0000000-0000-4000-8000-000000000001";
+const MARTA_ID = "g0000000-0000-4000-8000-000000000002";
+const JOIN_CODE_ID = "h0000000-0000-4000-8000-000000000001";
+
+const household: Household = {
+  id: HOUSEHOLD_ID,
+  name: "Home",
+  createdAt: "2026-06-01T09:00:00.000Z",
+  updatedAt: "2026-06-01T09:00:00.000Z",
+  deletedAt: null,
+};
+
+const users: User[] = [
+  {
+    id: ROMAN_ID,
+    householdId: HOUSEHOLD_ID,
+    email: null,
+    displayName: "Roman",
+    tint: 1,
+    isSelf: true,
+    joinedAt: "2026-06-01T09:00:00.000Z",
+    createdAt: "2026-06-01T09:00:00.000Z",
+    updatedAt: "2026-06-01T09:00:00.000Z",
+    deletedAt: null,
+  },
+  {
+    id: MARTA_ID,
+    householdId: HOUSEHOLD_ID,
+    email: null,
+    displayName: "Marta",
+    tint: 2,
+    isSelf: false,
+    joinedAt: "2026-06-02T09:00:00.000Z",
+    createdAt: "2026-06-02T09:00:00.000Z",
+    updatedAt: "2026-06-02T09:00:00.000Z",
+    deletedAt: null,
+  },
+];
+
+// Every character below is verified to be in JOIN_CODE_ALPHABET by fixtures.test.ts.
+const joinCodes: JoinCode[] = [
+  {
+    id: JOIN_CODE_ID,
+    householdId: HOUSEHOLD_ID,
+    code: "K7RMQ4",
+    createdBy: ROMAN_ID,
+    expiresAt: "2026-08-09T07:00:00.000Z",
+    usedBy: null,
+    revokedAt: null,
+    createdAt: "2026-08-08T07:00:00.000Z",
+    updatedAt: "2026-08-08T07:00:00.000Z",
+    deletedAt: null,
+  },
+];
 
 // --- Pets ------------------------------------------------------------------
 // Clover the rabbit (tint 1), Nugget and Biscuit the guinea pigs (tints 2, 3).
@@ -39,6 +103,7 @@ const pets: Pet[] = [
     weightGrams: 1900,
     tint: 1,
     archived: false,
+    householdId: HOUSEHOLD_ID,
     createdAt: "2026-06-01T09:00:00.000Z",
     updatedAt: "2026-06-01T09:00:00.000Z",
     deletedAt: null,
@@ -51,6 +116,7 @@ const pets: Pet[] = [
     weightGrams: 900,
     tint: 2,
     archived: false,
+    householdId: HOUSEHOLD_ID,
     createdAt: "2026-06-01T09:00:00.000Z",
     updatedAt: "2026-06-01T09:00:00.000Z",
     deletedAt: null,
@@ -63,6 +129,7 @@ const pets: Pet[] = [
     weightGrams: 1000,
     tint: 3,
     archived: false,
+    householdId: HOUSEHOLD_ID,
     createdAt: "2026-06-01T09:00:00.000Z",
     updatedAt: "2026-06-01T09:00:00.000Z",
     deletedAt: null,
@@ -321,6 +388,7 @@ const doseEvents: DoseEvent[] = [
     note: "Vomited after breakfast — skipped on vet advice",
     occurrenceKey: occurrenceKeyFor(COURSE_CLOVER_METACAM, "2026-08-06T07:00:00.000Z"),
     supersedesId: null,
+    actorId: ROMAN_ID,
     createdAt: "2026-08-06T07:05:00.000Z",
     updatedAt: "2026-08-06T07:05:00.000Z",
     deletedAt: null,
@@ -336,6 +404,7 @@ const doseEvents: DoseEvent[] = [
     note: null,
     occurrenceKey: occurrenceKeyFor(COURSE_CLOVER_METACAM, "2026-08-07T19:00:00.000Z"),
     supersedesId: null,
+    actorId: ROMAN_ID,
     createdAt: "2026-08-07T18:58:00.000Z",
     updatedAt: "2026-08-07T18:58:00.000Z",
     deletedAt: null,
@@ -351,6 +420,7 @@ const doseEvents: DoseEvent[] = [
     note: null,
     occurrenceKey: occurrenceKeyFor(COURSE_CLOVER_BAYTRIL, "2026-08-07T19:00:00.000Z"),
     supersedesId: null,
+    actorId: ROMAN_ID,
     createdAt: "2026-08-07T19:04:00.000Z",
     updatedAt: "2026-08-07T19:04:00.000Z",
     deletedAt: null,
@@ -367,6 +437,7 @@ const doseEvents: DoseEvent[] = [
     note: null,
     occurrenceKey: occurrenceKeyFor(COURSE_CLOVER_METOCLOPRAMIDE, null),
     supersedesId: null,
+    actorId: ROMAN_ID,
     createdAt: "2026-08-06T22:00:00.000Z",
     updatedAt: "2026-08-06T22:00:00.000Z",
     deletedAt: null,
@@ -383,6 +454,7 @@ const doseEvents: DoseEvent[] = [
     note: null,
     occurrenceKey: occurrenceKeyFor(COURSE_NUGGET_METACAM, "2026-08-06T08:00:00.000Z"),
     supersedesId: null,
+    actorId: MARTA_ID,
     createdAt: "2026-08-06T20:00:00.000Z",
     updatedAt: "2026-08-06T20:00:00.000Z",
     deletedAt: null,
@@ -398,6 +470,7 @@ const doseEvents: DoseEvent[] = [
     note: null,
     occurrenceKey: occurrenceKeyFor(COURSE_NUGGET_IVERMECTIN, "2026-08-08T06:00:00.000Z"),
     supersedesId: null,
+    actorId: MARTA_ID,
     createdAt: "2026-08-08T06:10:00.000Z",
     updatedAt: "2026-08-08T06:10:00.000Z",
     deletedAt: null,
@@ -413,6 +486,7 @@ const doseEvents: DoseEvent[] = [
     note: null,
     occurrenceKey: occurrenceKeyFor(COURSE_BISCUIT_IVERMECTIN, "2026-08-08T06:00:00.000Z"),
     supersedesId: null,
+    actorId: MARTA_ID,
     createdAt: "2026-08-08T06:12:00.000Z",
     updatedAt: "2026-08-08T06:12:00.000Z",
     deletedAt: null,
@@ -428,6 +502,7 @@ const doseEvents: DoseEvent[] = [
     note: null,
     occurrenceKey: occurrenceKeyFor(COURSE_NUGGET_VITAMIN_C, "2026-08-07T08:00:00.000Z"),
     supersedesId: null,
+    actorId: MARTA_ID,
     createdAt: "2026-08-07T08:02:00.000Z",
     updatedAt: "2026-08-07T08:02:00.000Z",
     deletedAt: null,
@@ -445,6 +520,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: 15,
     reason: "purchase",
     note: "New 15 ml bottle",
+    actorId: ROMAN_ID,
     createdAt: "2026-07-20T09:00:00.000Z",
     updatedAt: "2026-07-20T09:00:00.000Z",
     deletedAt: null,
@@ -455,6 +531,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: -11.7,
     reason: "correction",
     note: "Counted bottle, less than expected",
+    actorId: ROMAN_ID,
     createdAt: "2026-08-01T09:00:00.000Z",
     updatedAt: "2026-08-01T09:00:00.000Z",
     deletedAt: null,
@@ -465,6 +542,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: 30,
     reason: "purchase",
     note: "Two 15 ml bottles",
+    actorId: ROMAN_ID,
     createdAt: "2026-07-15T09:00:00.000Z",
     updatedAt: "2026-07-15T09:00:00.000Z",
     deletedAt: null,
@@ -475,6 +553,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: 60,
     reason: "purchase",
     note: "60-tablet pack",
+    actorId: ROMAN_ID,
     createdAt: "2026-07-10T09:00:00.000Z",
     updatedAt: "2026-07-10T09:00:00.000Z",
     deletedAt: null,
@@ -485,6 +564,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: -6,
     reason: "correction",
     note: "Recount",
+    actorId: ROMAN_ID,
     createdAt: "2026-08-01T09:00:00.000Z",
     updatedAt: "2026-08-01T09:00:00.000Z",
     deletedAt: null,
@@ -495,6 +575,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: 10,
     reason: "purchase",
     note: "New vial",
+    actorId: MARTA_ID,
     createdAt: "2026-07-01T09:00:00.000Z",
     updatedAt: "2026-07-01T09:00:00.000Z",
     deletedAt: null,
@@ -505,6 +586,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: -6.2,
     reason: "correction",
     note: "Recount — shared between two pets",
+    actorId: MARTA_ID,
     createdAt: "2026-08-05T09:00:00.000Z",
     updatedAt: "2026-08-05T09:00:00.000Z",
     deletedAt: null,
@@ -515,6 +597,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: 10,
     reason: "purchase",
     note: "New 10 ml bottle",
+    actorId: MARTA_ID,
     createdAt: "2026-07-18T09:00:00.000Z",
     updatedAt: "2026-07-18T09:00:00.000Z",
     deletedAt: null,
@@ -525,6 +608,7 @@ const stockAdjustments: StockAdjustment[] = [
     deltaUnits: -5.6,
     reason: "correction",
     note: "Recount",
+    actorId: MARTA_ID,
     createdAt: "2026-08-02T09:00:00.000Z",
     updatedAt: "2026-08-02T09:00:00.000Z",
     deletedAt: null,
@@ -532,6 +616,9 @@ const stockAdjustments: StockAdjustment[] = [
 ];
 
 export interface FixtureData {
+  household: Household;
+  users: User[];
+  joinCodes: JoinCode[];
   pets: Pet[];
   medications: Medication[];
   courses: Course[];
@@ -540,6 +627,9 @@ export interface FixtureData {
 }
 
 export const fixtures: FixtureData = {
+  household,
+  users,
+  joinCodes,
   pets,
   medications,
   courses,

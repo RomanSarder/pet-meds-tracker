@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { cloneFixtures, fixtures } from "./fixtures";
 import { occurrenceKeyFor } from "./keys";
+import { JOIN_CODE_ALPHABET } from "./constants";
 
 describe("fixtures", () => {
   it("resolves every course's petId and medicationId", () => {
@@ -113,6 +114,38 @@ describe("fixtures", () => {
     ]) {
       for (const row of collection) {
         expect(row.deletedAt).toBeNull();
+      }
+    }
+  });
+
+  it("stamps every pet with the fixture household's id", () => {
+    for (const pet of fixtures.pets) {
+      expect(pet.householdId).toBe(fixtures.household.id);
+    }
+  });
+
+  it("stamps every doseEvent and stockAdjustment with a non-empty actorId", () => {
+    for (const event of fixtures.doseEvents) {
+      expect(event.actorId).toBeTruthy();
+    }
+    for (const adjustment of fixtures.stockAdjustments) {
+      expect(adjustment.actorId).toBeTruthy();
+    }
+  });
+
+  it("splits doseEvent attribution across exactly two actors", () => {
+    const actorIds = new Set(fixtures.doseEvents.map((e) => e.actorId));
+    expect(actorIds.size).toBe(2);
+  });
+
+  it("serialises with no '@' character anywhere in the fixture data", () => {
+    expect(JSON.stringify(fixtures)).not.toContain("@");
+  });
+
+  it("gives the fixture join code only characters from JOIN_CODE_ALPHABET", () => {
+    for (const joinCode of fixtures.joinCodes) {
+      for (const char of joinCode.code) {
+        expect(JOIN_CODE_ALPHABET.includes(char)).toBe(true);
       }
     }
   });

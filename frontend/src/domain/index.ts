@@ -15,6 +15,9 @@ export type {
   Course,
   DoseEvent,
   StockAdjustment,
+  Household,
+  User,
+  JoinCode,
   MetaShape,
   HouseholdBackup,
   ImportReport,
@@ -46,7 +49,19 @@ export {
   GRACE_INTERVAL_MIN,
   DUE_PRE_WINDOW_MIN,
   MISSED_AFTER_HOURS,
+  UNKNOWN_ACTOR_NAME,
+  DISPLAY_NAME_MIN,
+  DISPLAY_NAME_MAX,
+  DEFAULT_HOUSEHOLD_NAME,
+  JOIN_CODE_ALPHABET,
+  JOIN_CODE_LENGTH,
+  JOIN_CODE_TTL_MS,
+  DEFAULT_SELF_DISPLAY_NAME,
 } from "./constants";
+
+export { displayNameFor, displayNameLookup } from "./identity";
+
+export { generateJoinCode, isWellFormedJoinCode, isJoinCodeUsable } from "./joinCodes";
 
 export type { CourseFilter, EventFilter } from "./queryKeys";
 export { qk } from "./queryKeys";

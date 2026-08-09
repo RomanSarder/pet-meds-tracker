@@ -13,6 +13,10 @@ import { PetFormPage } from "./features/pets/PetFormPage";
 import { CourseFormPage } from "./features/courses/CourseFormPage";
 import { SuppliesPage } from "./features/supplies/SuppliesPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import { HistoryPage } from "./features/history/HistoryPage";
+import { HouseholdPage } from "./features/household/HouseholdPage";
+import { JoinHouseholdPage } from "./features/household/JoinHouseholdPage";
+import { FirstRunPage } from "./features/onboarding/FirstRunPage";
 
 // Marks routes that should not render the tab bar / app chrome (full-screen
 // forms). Augments the router's own (empty by default) staticData shape, so
@@ -99,6 +103,12 @@ const petEditRoute = createRoute({
   staticData: { chrome: "none" },
 });
 
+const petHistoryRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/pets/$petId/history",
+  component: HistoryPage,
+});
+
 interface CourseFormSearch {
   petId?: string;
 }
@@ -132,6 +142,26 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const householdRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/household",
+  component: HouseholdPage,
+});
+
+const householdJoinRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/household/join",
+  component: JoinHouseholdPage,
+  staticData: { chrome: "none" },
+});
+
+const welcomeRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/welcome",
+  component: FirstRunPage,
+  staticData: { chrome: "none" },
+});
+
 const appRoute = appLayoutRoute.addChildren([
   appIndexRoute,
   todayRoute,
@@ -139,10 +169,14 @@ const appRoute = appLayoutRoute.addChildren([
   petsNewRoute,
   petDetailRoute,
   petEditRoute,
+  petHistoryRoute,
   courseNewRoute,
   courseDetailRoute,
   suppliesRoute,
   settingsRoute,
+  householdRoute,
+  householdJoinRoute,
+  welcomeRoute,
 ]);
 
 const routeTree = rootRoute.addChildren([signInRoute, verifyRoute, appRoute]);
