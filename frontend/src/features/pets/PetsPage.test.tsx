@@ -152,4 +152,47 @@ describe("PetsPage", () => {
     await screen.findByText("No pets yet");
     expect(screen.getAllByRole("button", { name: "Add a pet" })).toHaveLength(1);
   });
+
+  it("shows a Household row below the roster with the member count from useMembers", async () => {
+    renderWithProviders(<PetsPage />);
+    await screen.findByText("Clover");
+
+    // The default fixtures seed a two-person household (Roman + Marta).
+    expect(await screen.findByText("Household · 2 people")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Household, 2 people" })).toBeInTheDocument();
+  });
+
+  it("singularises the Household row's label at one person", async () => {
+    const repo = onePetNoCoursesRepo();
+    renderWithProviders(<PetsPage />, { repo });
+    await screen.findByText("Solo");
+
+    expect(await screen.findByText("Household · 1 person")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Household, 1 person" })).toBeInTheDocument();
+  });
+
+  it("shows the Household row in the empty-roster branch too", async () => {
+    const repo = createMemoryRepo({
+      pets: [],
+      medications: [],
+      courses: [],
+      doseEvents: [],
+      stockAdjustments: [],
+    });
+    renderWithProviders(<PetsPage />, { repo });
+
+    await screen.findByText("No pets yet");
+    expect(await screen.findByText("Household · 1 person")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Household, 1 person" })).toBeInTheDocument();
+  });
+
+  it("navigates to /household when the Household row is activated", async () => {
+    renderPets();
+    await screen.findByText("Clover");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Household, 2 people" }));
+
+    expect(pathname()).toBe("/household");
+  });
 });
