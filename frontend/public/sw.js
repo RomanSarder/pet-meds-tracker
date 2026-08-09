@@ -32,10 +32,11 @@ function noop() {}
 
 function handleInstall(event) {
   self.skipWaiting();
+  event.waitUntil(precacheShell());
 }
 
 function handleActivate(event) {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(Promise.all([self.clients.claim(), deleteStaleCaches()]));
 }
 
 /**
@@ -88,18 +89,167 @@ function handleNotificationClick(event) {
   );
 }
 
+// --- slice 11 (PWA & polish): offline app shell ------------------------
+//
+// The app's DATA already lives in IndexedDB and the app already renders
+// with the network down (see `frontend/src/data/`) — this worker is not
+// re-solving that. It only makes the SHELL (the HTML document, manifest
+// and icons) available offline, so the page has something to boot from
+// before IndexedDB and the rest of the JS bundle take over.
+//
+// `CACHE_NAME` is versioned by hand: bump the suffix when the precache
+// list changes so `handleActivate` evicts the old shell instead of an
+// install leaving two caches around.
+var CACHE_NAME = "petmeds-shell-v1";
+
+// Small, stable, hash-free — deliberately excludes `/assets/...` (Vite's
+// content-hashed build output, handled by the cache-first branch of the
+// fetch handler below) and excludes `/sw.js` itself.
+var PRECACHE_URLS = [
+  "/",
+  "/manifest.webmanifest",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
+];
+
+function precacheShell() {
+  return self.caches
+    .open(CACHE_NAME)
+    .then(function (cache) {
+      // Each asset is added independently: one missing/failing asset must
+      // not reject the whole precache (and must not brick install).
+      return Promise.all(
+        PRECACHE_URLS.map(function (url) {
+          return cache.add(url).catch(noop);
+        }),
+      );
+    })
+    .catch(noop);
+}
+
+function deleteStaleCaches() {
+  return self.caches
+    .keys()
+    .then(function (names) {
+      return Promise.all(
+        names
+          .filter(function (name) {
+            return name !== CACHE_NAME;
+          })
+          .map(function (name) {
+            return self.caches.delete(name);
+          }),
+      );
+    })
+    .catch(noop);
+}
+
+function isSameOrigin(url) {
+  return url.origin === self.location.origin;
+}
+
+function isApiPath(url) {
+  return url.pathname === "/api" || url.pathname.indexOf("/api/") === 0;
+}
+
+function isHashedAsset(url) {
+  return url.pathname.indexOf("/assets/") === 0;
+}
+
+/** Never cache anything but a normal, successful same-origin response. */
+function isCacheable(response) {
+  return !!response && response.status === 200 && response.type === "basic";
+}
+
+function putInCache(request, response) {
+  self.caches
+    .open(CACHE_NAME)
+    .then(function (cache) {
+      cache.put(request, response);
+    })
+    .catch(noop);
+}
+
+/**
+ * Navigations are network-first: a stale cached document must never pin a
+ * user to a dead build once the network is back. The cached shell is only
+ * a fallback for when the network fetch itself fails.
+ */
+function handleNavigation(request) {
+  return self
+    .fetch(request)
+    .then(function (response) {
+      if (isCacheable(response)) {
+        putInCache(request, response.clone());
+      }
+      return response;
+    })
+    .catch(function () {
+      return self.caches.match("/").then(function (cached) {
+        return cached || self.caches.match(request);
+      });
+    })
+    .catch(noop);
+}
+
+/** Hashed `/assets/...` URLs are immutable, so cache-first is safe. */
+function handleHashedAsset(request) {
+  return self.caches
+    .match(request)
+    .then(function (cached) {
+      if (cached) {
+        return cached;
+      }
+      return self.fetch(request).then(function (response) {
+        if (isCacheable(response)) {
+          putInCache(request, response.clone());
+        }
+        return response;
+      });
+    })
+    .catch(noop);
+}
+
+function handleFetch(event) {
+  var request = event.request;
+  if (request.method !== "GET") {
+    return;
+  }
+
+  var url;
+  try {
+    url = new URL(request.url);
+  } catch (err) {
+    return;
+  }
+
+  if (!isSameOrigin(url) || isApiPath(url)) {
+    return;
+  }
+
+  if (request.mode === "navigate") {
+    event.respondWith(handleNavigation(request));
+    return;
+  }
+
+  if (isHashedAsset(url)) {
+    event.respondWith(handleHashedAsset(request));
+  }
+}
+
 // --- registration -------------------------------------------------------
 
 self.addEventListener("install", handleInstall);
 self.addEventListener("activate", handleActivate);
 self.addEventListener("notificationclick", handleNotificationClick);
+self.addEventListener("fetch", handleFetch);
 
-// --- slice 11 (PWA & polish) extends here: precache list, install/activate
-// cache steps, and a fetch listener for the offline shell. Nothing above
-// needs to change. Any future code that shows a notification MUST go
-// through the page's `AlertLedger.claim()` first (see
-// `frontend/src/notifications/ledger.ts`) — never call
-// `self.registration.showNotification(...)` directly from this worker. That
-// was tried once (an unguarded `message` handler for a `petmeds/show`
-// message) and removed because it was a second, unguarded call site sitting
-// next to the one enforcement point the whole design depends on. ---
+// Any future code that shows a notification MUST go through the page's
+// `AlertLedger.claim()` first (see `frontend/src/notifications/ledger.ts`)
+// — never call `self.registration.showNotification(...)` directly from
+// this worker, and never add a `message` handler. That was tried once (an
+// unguarded `message` handler for a `petmeds/show` message) and removed
+// because it was a second, unguarded call site sitting next to the one
+// enforcement point the whole design depends on.
