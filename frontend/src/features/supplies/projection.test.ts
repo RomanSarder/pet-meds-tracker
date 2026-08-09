@@ -184,6 +184,74 @@ describe("horizonDays", () => {
     });
     expect(proj.horizonDays).toBe(HORIZON_DAYS);
   });
+
+  // SPEC §8 says "30 days, or the course end date when it is sooner" and does
+  // not say WHICH end date when several active courses share one medication.
+  // This slice reads it as the LATEST active-course end, capped at 30: the
+  // soonest reading would stop buying at the first course's end and leave the
+  // pet on the longer course without medication. These three tests pin that
+  // reading so it cannot be silently flipped to `min` later.
+  it("takes the LATEST end date when two active courses share a medication", () => {
+    const proj = projectMedication({
+      medication: medication(),
+      courses: [
+        // 4 days from FIXTURE_NOW's local day (2026-08-08).
+        course({ id: "y0000000-0000-4000-8000-000000000001", endDate: "2026-08-12" }),
+        // 12 days.
+        course({ id: "y0000000-0000-4000-8000-000000000002", endDate: "2026-08-20" }),
+      ],
+      adjustments: [],
+      now: NOW,
+    });
+    expect(proj.horizonDays).toBe(12);
+    // Not the soonest end, and not the uncapped default.
+    expect(proj.horizonDays).not.toBe(4);
+    expect(proj.horizonDays).not.toBe(HORIZON_DAYS);
+  });
+
+  it("still caps at 30 when the latest of several end dates is beyond the horizon", () => {
+    const proj = projectMedication({
+      medication: medication(),
+      courses: [
+        course({ id: "y0000000-0000-4000-8000-000000000001", endDate: "2026-08-20" }), // 12 days
+        course({ id: "y0000000-0000-4000-8000-000000000002", endDate: "2026-12-01" }), // ~115 days
+      ],
+      adjustments: [],
+      now: NOW,
+    });
+    expect(proj.horizonDays).toBe(HORIZON_DAYS);
+  });
+
+  it("lets an ongoing course's 30-day contribution win over a shorter dated course", () => {
+    const proj = projectMedication({
+      medication: medication(),
+      courses: [
+        course({ id: "y0000000-0000-4000-8000-000000000001", endDate: "2026-08-12" }), // 4 days
+        course({ id: "y0000000-0000-4000-8000-000000000002", endDate: null }), // ongoing -> 30
+      ],
+      adjustments: [],
+      now: NOW,
+    });
+    expect(proj.horizonDays).toBe(HORIZON_DAYS);
+    expect(proj.horizonDays).not.toBe(4);
+  });
+
+  it("ignores a non-active course when choosing the latest end date", () => {
+    const proj = projectMedication({
+      medication: medication(),
+      courses: [
+        course({ id: "y0000000-0000-4000-8000-000000000001", endDate: "2026-08-12" }), // 4 days, active
+        course({
+          id: "y0000000-0000-4000-8000-000000000002",
+          endDate: "2026-08-20", // 12 days, but stopped
+          status: "stopped",
+        }),
+      ],
+      adjustments: [],
+      now: NOW,
+    });
+    expect(proj.horizonDays).toBe(4);
+  });
 });
 
 describe("two pets sharing one medication", () => {
