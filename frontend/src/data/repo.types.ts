@@ -6,6 +6,7 @@
 // four other branches import this file.
 import type {
   Course,
+  CourseEvent,
   CourseStatus,
   DoseEvent,
   DoseEventStatus,
@@ -89,6 +90,21 @@ export interface Repo {
     >,
   ): Promise<Course>;
   setCourseStatus(id: string, status: CourseStatus): Promise<Course>;
+
+  /**
+   * SPEC §6.4's course lifecycle ledger. Append-only and READ-ONLY to callers:
+   * rows are written only from inside `createCourse`, `setCourseStatus` and
+   * `updateCourse`, which is why there is no `recordCourseEvent` here. A
+   * feature never writes one.
+   */
+  listCourseEvents(filter: {
+    courseId?: string;
+    courseIds?: string[];
+    from?: IsoDateTime;
+    to?: IsoDateTime;
+    limit?: number;
+    newestFirst?: boolean;
+  }): Promise<CourseEvent[]>;
 
   listDoseEvents(filter: {
     courseId?: string;

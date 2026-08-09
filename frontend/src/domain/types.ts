@@ -104,6 +104,54 @@ export interface DoseEvent extends Timestamped {
   actorId: string;
 }
 
+/**
+ * SPEC §6.4: the log shows "every course lifecycle change (started, paused,
+ * resumed, stopped, schedule or dose edited)". None of those write a
+ * `DoseEvent`, and `Course` alone cannot reconstruct them — `updatedAt` and
+ * `resumedAt` only ever remember the LATEST transition, so a second
+ * pause/resume cycle erases the first, and an edit's before-value (needed for
+ * §6.4's "Interval changed · every 12h to 2× daily") is stored nowhere at all.
+ *
+ * Hence this append-only ledger, written ONLY from inside `createCourse`,
+ * `setCourseStatus` and `updateCourse`. There is deliberately no public
+ * create/update/delete method for it: like `DoseEvent` and `StockAdjustment`,
+ * append-only is enforced by the shape of `Repo`, not by discipline.
+ */
+export type CourseEventKind =
+  | "started"
+  | "paused"
+  | "resumed"
+  | "stopped"
+  | "finished"
+  | "edited";
+
+/**
+ * The course fields §6.4's detail lines compare across a change. Only the
+ * fields a detail line can render — `notes` and `instructions` are excluded,
+ * since editing them is not a lifecycle change and records no event.
+ */
+export interface CourseSnapshot {
+  schedule: Schedule;
+  doseAmount: number;
+  doseUnit: string;
+  startDate: LocalDate;
+  endDate: LocalDate | null;
+}
+
+export interface CourseEvent extends Timestamped {
+  id: string;
+  courseId: string;
+  kind: CourseEventKind;
+  /** When the change happened. The ordering and day-grouping key for §6.4. */
+  at: IsoDateTime;
+  /** SPEC §5: who did it; never null. Stamped by the repo from `currentActorId()`. */
+  actorId: string;
+  /** The course as it was before the change. `null` only for `started`. */
+  before: CourseSnapshot | null;
+  /** The course as it is after the change. Never null. */
+  after: CourseSnapshot;
+}
+
 export interface StockAdjustment extends Timestamped {
   id: string;
   medicationId: string;
@@ -171,6 +219,8 @@ export interface HouseholdBackup {
   medications: Medication[];
   courses: Course[];
   doseEvents: DoseEvent[];
+  /** Optional so a v2 backup (which predates the ledger) still imports. */
+  courseEvents?: CourseEvent[];
   stockAdjustments: StockAdjustment[];
   meta?: Pick<MetaShape, "tintCursor" | "lastSweepDay">;
 }
