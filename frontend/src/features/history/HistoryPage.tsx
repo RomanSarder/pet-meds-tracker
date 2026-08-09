@@ -258,13 +258,19 @@ export function HistoryView({ petId }: { petId: string }) {
       </Menu.Root>
 
       <div style={{ padding: "0 22px 14px", display: "flex", gap: 8 }}>
-        <Chip selected={filter === "all"} onClick={() => setFilter("all")}>
+        {/*
+          `Chip` styles its selected state with colour alone, so the selection
+          has to be exposed programmatically too (SPEC §10). `Chip` spreads
+          its rest props onto the <button>, so the caller supplies this — the
+          frozen DS component is not changed.
+        */}
+        <Chip aria-pressed={filter === "all"} selected={filter === "all"} onClick={() => setFilter("all")}>
           All
         </Chip>
-        <Chip selected={filter === "doses"} onClick={() => setFilter("doses")}>
+        <Chip aria-pressed={filter === "doses"} selected={filter === "doses"} onClick={() => setFilter("doses")}>
           Doses
         </Chip>
-        <Chip selected={filter === "courses"} onClick={() => setFilter("courses")}>
+        <Chip aria-pressed={filter === "courses"} selected={filter === "courses"} onClick={() => setFilter("courses")}>
           Courses
         </Chip>
       </div>

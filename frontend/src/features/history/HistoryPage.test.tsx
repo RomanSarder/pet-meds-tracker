@@ -159,6 +159,27 @@ describe("HistoryView", () => {
     expect(rowCount()).toBe(6);
   });
 
+  // SPEC §10: state is never colour-only. `Chip` distinguishes the selected
+  // filter by background/text colour alone, so the selection must also be
+  // exposed programmatically or a screen-reader user cannot tell which
+  // filter is active.
+  it("exposes the selected filter through aria-pressed, not colour alone", async () => {
+    const { repo, petId } = await seedMixedScenario();
+    renderWithProviders(<HistoryView petId={petId} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    const chip = (name: string) => screen.getByRole("button", { name });
+    expect(chip("All")).toHaveAttribute("aria-pressed", "true");
+    expect(chip("Doses")).toHaveAttribute("aria-pressed", "false");
+    expect(chip("Courses")).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(chip("Doses"));
+    expect(chip("Doses")).toHaveAttribute("aria-pressed", "true");
+    expect(chip("All")).toHaveAttribute("aria-pressed", "false");
+    expect(chip("Courses")).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("groups entries by day with Today/Yesterday/plain-date headings shaped 'Ddd D Mmm'", async () => {
     const { repo, petId } = await seedMixedScenario();
     renderWithProviders(<HistoryView petId={petId} />, { repo });

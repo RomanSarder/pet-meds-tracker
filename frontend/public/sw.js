@@ -176,6 +176,20 @@ function isCacheable(response) {
   return !!response && response.status === 200 && response.type === "basic";
 }
 
+/**
+ * A real Response for the "offline and not cached" case. Without this the
+ * strategies below resolve to `undefined`, and `event.respondWith(undefined)`
+ * is invalid — the browser reports it as an opaque network error, which is a
+ * worse and harder-to-diagnose failure than an explicit 504. Guarded because
+ * the worker is also evaluated in tests against a stubbed `self`.
+ */
+function offlineFallback() {
+  if (typeof self.Response === "function") {
+    return new self.Response("", { status: 504, statusText: "Offline" });
+  }
+  return undefined;
+}
+
 function putInCache(request, response) {
   self.caches
     .open(CACHE_NAME)
@@ -201,10 +215,13 @@ function handleNavigation(request) {
     })
     .catch(function () {
       return self.caches.match("/").then(function (cached) {
-        return cached || self.caches.match(request);
+        if (cached) return cached;
+        return self.caches.match(request).then(function (exact) {
+          return exact || offlineFallback();
+        });
       });
     })
-    .catch(noop);
+    .catch(offlineFallback);
 }
 
 /**
@@ -226,7 +243,7 @@ function handleCacheFirst(request) {
         return response;
       });
     })
-    .catch(noop);
+    .catch(offlineFallback);
 }
 
 function handleFetch(event) {

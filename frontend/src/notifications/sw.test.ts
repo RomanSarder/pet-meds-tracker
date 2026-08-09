@@ -116,6 +116,8 @@ interface FakeSelf {
   location: { origin: string };
   caches: FakeCacheStorage;
   fetch: ReturnType<typeof vi.fn>;
+  /** The real global — the worker constructs a 504 from it when offline and uncached. */
+  Response: typeof Response;
 }
 
 type Handler = (event: FakeEvent) => unknown;
@@ -162,6 +164,7 @@ function loadWorker(
     location: { origin: "https://example.com" },
     caches: options.caches ?? makeFakeCaches().caches,
     fetch: options.fetch ?? vi.fn().mockResolvedValue(makeResponse()),
+    Response,
   };
   const fakeAddEventListener = (type: string, handler: Handler): void => {
     handlers.set(type, handler);
@@ -449,6 +452,39 @@ describe("fetch: strategy", () => {
     // The network copy wins, not the cached one — otherwise an update could
     // never reach a user whose cache already holds a document.
     expect(result).toBe(fresh);
+    assertSilent();
+  });
+
+  // `event.respondWith(undefined)` is invalid and surfaces as an opaque
+  // network error. Offline-and-not-cached must resolve to a real Response.
+  // This is the state a user lands in when a new worker activated (new
+  // document cached, new hashed assets not yet fetched) and they then go
+  // offline and reload.
+  it("an asset that is offline AND not cached resolves to a real 504 Response, never undefined", async () => {
+    const { caches } = makeFakeCaches();
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const { handlers } = loadWorker([], { caches, fetch: fetchMock });
+    const { event, responded } = makeFetchEvent({ method: "GET", url: "https://example.com/assets/index-new-hash.js", mode: "same-origin" });
+
+    handlers.get("fetch")!(event as unknown as FakeEvent);
+    const result = (await responded()) as Response | undefined;
+
+    expect(result).toBeDefined();
+    expect(result!.status).toBe(504);
+    assertSilent();
+  });
+
+  it("a navigation that is offline with nothing cached at all resolves to a real Response, never undefined", async () => {
+    const { caches } = makeFakeCaches();
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const { handlers } = loadWorker([], { caches, fetch: fetchMock });
+    const { event, responded } = makeFetchEvent({ method: "GET", url: "https://example.com/", mode: "navigate" });
+
+    handlers.get("fetch")!(event as unknown as FakeEvent);
+    const result = (await responded()) as Response | undefined;
+
+    expect(result).toBeDefined();
+    expect(result!.status).toBe(504);
     assertSilent();
   });
 
