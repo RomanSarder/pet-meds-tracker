@@ -144,19 +144,70 @@ describe("FirstRunPage", () => {
   });
 
   it("SPEC §5: the name is skippable — Start a household still proceeds with an empty name", async () => {
+    // A real click happens once the session (and thus provisioning) can
+    // succeed — the "no session" default above models the earlier moment
+    // before the pre-fill has resolved, not the state at click time.
+    mockApiClient.mockResolvedValue({ id: "u-1", email: "roman@example.com" });
     const repo = freshSelfRepo();
     renderFirstRun({ repo });
 
-    await waitFor(() => expect(nameInput()).toHaveValue(""));
+    await waitFor(() => expect(nameInput()).toHaveValue("Roman"));
+    const user = userEvent.setup();
+    await user.clear(nameInput());
     expect(screen.getByRole("button", { name: "Start a household" })).toBeEnabled();
 
-    const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Start a household" }));
 
     await waitFor(() => expect(pathname()).toBe("/today"));
     // Nothing meaningful was given, so nothing was saved over the placeholder.
     const self = await repo.getCurrentUser();
     expect(self.displayName.trim().length).toBeGreaterThan(0);
+  });
+
+  it("Start a household provisions the server household with the local household id", async () => {
+    mockApiClient.mockResolvedValue({ id: "u-1", email: "roman@example.com" });
+    const repo = freshSelfRepo();
+    renderFirstRun({ repo });
+
+    await waitFor(() => expect(nameInput()).toHaveValue("Roman"));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Start a household" }));
+
+    await waitFor(() => expect(pathname()).toBe("/today"));
+
+    const localHouseholdId = await repo.currentHouseholdId();
+    // `.at(-1)`, not `.find` — the mock is shared (and un-cleared) across every
+    // test in this suite, so an earlier test's own "/household" call would
+    // otherwise be matched instead of this test's.
+    const householdCalls = mockApiClient.mock.calls.filter(([path]) => path === "/household");
+    const call = householdCalls.at(-1);
+    expect(call).toBeDefined();
+    const [, options] = call!;
+    expect(options).toMatchObject({ method: "POST" });
+    expect(JSON.parse((options as { body: string }).body)).toMatchObject({
+      id: localHouseholdId,
+      displayName: "Roman",
+    });
+  });
+
+  it("does not navigate to /today when server-side provisioning fails", async () => {
+    mockApiClient.mockImplementation((path: string) => {
+      if (path === "/household") {
+        return Promise.reject(new Error("network error"));
+      }
+      return Promise.resolve({ id: "u-1", email: "roman@example.com" });
+    });
+    const repo = freshSelfRepo();
+    renderFirstRun({ repo });
+
+    await waitFor(() => expect(nameInput()).toHaveValue("Roman"));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Start a household" }));
+
+    // Stays on /welcome — a failed provisioning must not silently drop the
+    // user into an app whose sync will 404 forever.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start a household" })).toBeEnabled());
+    expect(pathname()).not.toBe("/today");
   });
 
   it("SPEC §5: the name is skippable — I have a join code still proceeds with an empty name", async () => {

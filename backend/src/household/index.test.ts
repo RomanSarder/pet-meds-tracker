@@ -103,7 +103,13 @@ describe("POST /household", () => {
   it("creates a household, makes the caller a member, and sets the display name", async () => {
     const household = makeHousehold({ name: null });
     const user = makeUser({ householdId: household.id, displayName: "Roman", tint: 1 });
-    const db = mockDbMulti([await buildSession()], [], [household], [user]);
+    const db = mockDbMulti(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: null })], // caller has no household yet
+      [household],
+      [user],
+    );
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -116,6 +122,62 @@ describe("POST /household", () => {
     expect(body.members).toHaveLength(1);
     expect(body.self.displayName).toBe("Roman");
     expect(body.self.tint).toBe(1);
+  });
+
+  // The integration gap this closes: the frontend already mints a household
+  // id locally on first DB open (W5's IndexedDB stub). SPEC §9 requires
+  // stable client-generated ids with no dependency on server-assigned ones,
+  // so the server must accept and use that id rather than minting its own —
+  // otherwise the local and server rows would need a mapping.
+  it("accepts a client-supplied id and uses it as the household's id", async () => {
+    const CLIENT_ID = "00000000-0000-0000-0000-0000000000c1";
+    const household = makeHousehold({ id: CLIENT_ID, name: null });
+    const user = makeUser({ householdId: CLIENT_ID, displayName: "Roman", tint: 1 });
+    const db = mockDbMulti(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: null })],
+      [household],
+      [user],
+    );
+    const valuesSpy = vi.spyOn(db, "values");
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household",
+      payload: { id: CLIENT_ID, displayName: "Roman" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().household.id).toBe(CLIENT_ID);
+    expect(valuesSpy).toHaveBeenCalledWith(expect.objectContaining({ id: CLIENT_ID }));
+  });
+
+  // SPEC §5: "a user belongs to exactly one household at a time." Re-submitting
+  // (e.g. revisiting /welcome, or a double click) must not mint a second
+  // household and reassign the caller into it — this is what makes the
+  // frontend's fix-up safe to call unconditionally rather than needing to
+  // first check whether provisioning already happened.
+  it("is idempotent: a caller who already belongs to a household gets that household back, and nothing is inserted", async () => {
+    const household = makeHousehold();
+    const user = makeUser({ displayName: "Marta" });
+    const db = mockDbMulti(
+      [await buildSession()],
+      [],
+      [user], // caller already has HOUSEHOLD_ID
+      [household],
+      [user], // members
+    );
+    const insertSpy = vi.spyOn(db, "insert");
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household",
+      payload: { id: "00000000-0000-0000-0000-0000000000c1", displayName: "Someone else" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().household.id).toBe(HOUSEHOLD_ID);
+    expect(res.json().self.displayName).toBe("Marta");
+    expect(insertSpy).not.toHaveBeenCalled();
   });
 });
 

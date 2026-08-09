@@ -148,18 +148,47 @@ export default fastifyPlugin(async (fastify) => {
         body: {
           type: "object",
           properties: {
+            id: { type: "string", format: "uuid" },
             name: { type: "string" },
             displayName: { type: "string" },
           },
         },
       },
     },
-    async (request): Promise<HouseholdStateDto> => {
-      const { name, displayName } = request.body ?? {};
+    async (request, reply): Promise<HouseholdStateDto> => {
+      const { id, name, displayName } = request.body ?? {};
 
+      const [caller] = await fastify.db.select().from(users).where(eq(users.id, request.userId));
+      if (!caller) {
+        return reply.unauthorized();
+      }
+
+      // SPEC §5: "a user belongs to exactly one household at a time." A caller who
+      // already has one (e.g. re-submitting the first-run screen, or revisiting
+      // /welcome after already provisioning) is not a new household — this is the
+      // idempotent no-op twin of /household/join's "already_in_household" refusal,
+      // returning their existing state unchanged rather than erroring or minting a
+      // second household.
+      if (caller.householdId) {
+        const [existingHousehold] = await fastify.db
+          .select()
+          .from(households)
+          .where(eq(households.id, caller.householdId));
+        const members = await fastify.db.select().from(users).where(eq(users.householdId, caller.householdId));
+        return {
+          household: toHouseholdDto(existingHousehold),
+          members: members.map(toMemberDto),
+          self: toSelfDto(caller),
+        };
+      }
+
+      // SPEC §9: `id`, when supplied, is the household id the client already
+      // minted locally (W5's IndexedDB stub) — using it here, instead of the
+      // column's `defaultRandom()`, is what keeps the local and server rows the
+      // same id rather than requiring a mapping between two ids.
       const [household] = await fastify.db
         .insert(households)
-        .values({ name: name?.trim() ? name.trim() : null })
+        .values({ ...(id ? { id } : {}), name: name?.trim() ? name.trim() : null })
         .returning();
 
       const updateValues: Partial<typeof users.$inferInsert> = {

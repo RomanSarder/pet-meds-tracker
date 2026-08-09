@@ -114,8 +114,17 @@ export interface SetDisplayNameBody {
   displayName: string;
 }
 
-/** `POST /household` request body. */
+/**
+ * `POST /household` request body.
+ *
+ * `id` is the client-generated household id (SPEC §9: stable UUIDs minted
+ * client-side, no dependency on server-assigned ids). The frontend always
+ * sends the id it already created locally on first DB open, so the local and
+ * server rows are the same id rather than two ids needing a mapping. Optional
+ * only so a caller that omits it still gets a server-assigned id.
+ */
 export interface CreateHouseholdBody {
+  id?: string;
   name?: string;
   displayName?: string;
 }

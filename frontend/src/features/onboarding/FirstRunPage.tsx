@@ -7,8 +7,11 @@
 // screen." One screen means one screen — no carousel, no permission prompts.
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ds";
 import { DISPLAY_NAME_MAX } from "@/domain";
+import { getRepo } from "@/data";
+import { apiClient } from "@/shared/api";
 import { Field } from "@/features/forms/Field";
 import { needsDisplayName, useSelf, useSessionEmail, useSetDisplayName } from "@/features/household/hooks";
 import { suggestNameFromEmail } from "./nameSuggestion";
@@ -21,6 +24,24 @@ export function FirstRunPage() {
   const selfQuery = useSelf();
   const sessionEmail = useSessionEmail();
   const setDisplayName = useSetDisplayName();
+
+  // SPEC §6.9 / §5: "Start a household" is the one place a server-side
+  // household gets created. `id` is the household this device already
+  // created locally on first DB open (W5's stub) — sending it here, instead
+  // of letting the server mint its own, is what keeps the local and server
+  // rows the same id (SPEC §9: client-generated, no dependency on
+  // server-assigned ids) rather than needing a mapping between two. The
+  // route is idempotent for a caller who already has a household, so
+  // re-submitting (e.g. revisiting /welcome) is harmless.
+  const provisionHousehold = useMutation({
+    mutationFn: async (displayName: string) => {
+      const householdId = await getRepo().currentHouseholdId();
+      await apiClient("/household", {
+        method: "POST",
+        body: JSON.stringify({ id: householdId, displayName }),
+      });
+    },
+  });
 
   const [name, setName] = useState("");
   // Stops recomputing the suggestion the moment the person edits the field, so a
@@ -48,6 +69,14 @@ export function FirstRunPage() {
 
   async function handleStartHousehold() {
     await saveNameIfGiven();
+    try {
+      await provisionHousehold.mutateAsync(trimmed);
+    } catch {
+      // No error UI is specified for this screen (mirrors JoinHouseholdPage);
+      // staying put lets the person retry rather than entering the app with
+      // sync silently broken.
+      return;
+    }
     navigate({ to: "/today" });
   }
 
@@ -120,7 +149,7 @@ export function FirstRunPage() {
           variant="ink"
           size="lg"
           block
-          disabled={setDisplayName.isPending}
+          disabled={setDisplayName.isPending || provisionHousehold.isPending}
           onClick={handleStartHousehold}
         >
           Start a household
