@@ -28,18 +28,10 @@ import { getRepo } from "@/data";
 import { apiClient } from "@/shared/api";
 import { JoinCodeRejectedError, evaluateJoinCode } from "./joinCode";
 
-/**
- * Local key factory. `qk` in `@/domain` is frozen and has no household keys, so
- * these live here — every key is prefixed `["household"]` so one invalidation of
- * that prefix refreshes members, self, the household row and the live code.
- */
-export const hqk = {
-  all: () => ["household"] as const,
-  household: () => ["household", "row"] as const,
-  members: () => ["household", "members"] as const,
-  self: () => ["household", "self"] as const,
-  liveCode: () => ["household", "liveCode"] as const,
-} as const;
+// Household query keys live in the shared `qk` factory in `@/domain`, appended at
+// the end of that object — cross-feature cache invalidation must not need
+// cross-feature ownership, and history (W6) invalidates the same prefix when a
+// rename has to re-render past events.
 
 const QUERY_OPTS = { staleTime: 0, retry: false, refetchOnWindowFocus: true } as const;
 
@@ -48,7 +40,7 @@ const QUERY_OPTS = { staleTime: 0, retry: false, refetchOnWindowFocus: true } as
 // surface that renders a name through `displayNameFor` — history and Today
 // included, which is why those two prefixes are here.
 const PREFIX = {
-  household: hqk.all(),
+  household: qk.household(),
   events: qk.events({}).slice(0, 1),
   today: qk.today("1970-01-01").slice(0, 1),
 } as const;
@@ -58,7 +50,7 @@ const PREFIX = {
 /** The local household row. SPEC §2: `name` may be null; render "Home". */
 export function useHousehold(): UseQueryResult<Household, Error> {
   return useQuery({
-    queryKey: hqk.household(),
+    queryKey: qk.householdRow(),
     queryFn: () => getRepo().getCurrentHousehold(),
     ...QUERY_OPTS,
   });
@@ -71,7 +63,7 @@ export function useHousehold(): UseQueryResult<Household, Error> {
  */
 export function useMembers(): UseQueryResult<User[], Error> {
   return useQuery({
-    queryKey: hqk.members(),
+    queryKey: qk.householdMembers(),
     queryFn: () => getRepo().listUsers(),
     ...QUERY_OPTS,
   });
@@ -84,7 +76,7 @@ export function useMembers(): UseQueryResult<User[], Error> {
  */
 export function useAllMembers(): UseQueryResult<User[], Error> {
   return useQuery({
-    queryKey: [...hqk.members(), "includeRemoved"] as const,
+    queryKey: qk.householdMembers({ includeRemoved: true }),
     queryFn: () => getRepo().listUsers({ includeRemoved: true }),
     ...QUERY_OPTS,
   });
@@ -93,7 +85,7 @@ export function useAllMembers(): UseQueryResult<User[], Error> {
 /** The signed-in user's own member row. Never null — the repo mints one on demand. */
 export function useSelf(): UseQueryResult<User, Error> {
   return useQuery({
-    queryKey: hqk.self(),
+    queryKey: qk.householdSelf(),
     queryFn: () => getRepo().getCurrentUser(),
     ...QUERY_OPTS,
   });
@@ -102,7 +94,7 @@ export function useSelf(): UseQueryResult<User, Error> {
 /** SPEC §5: at most one live code per household. Null when none is live. */
 export function useLiveJoinCode(): UseQueryResult<JoinCode | null, Error> {
   return useQuery({
-    queryKey: hqk.liveCode(),
+    queryKey: qk.householdLiveCode(),
     queryFn: async () => liveJoinCode(),
     ...QUERY_OPTS,
   });
@@ -152,7 +144,7 @@ export function useSessionEmail(): string | null {
 export function useJoinPreview(rawCode: string): UseQueryResult<Pet[] | null, Error> {
   const code = rawCode.trim().toUpperCase();
   return useQuery({
-    queryKey: [...hqk.all(), "joinPreview", code] as const,
+    queryKey: qk.householdJoinPreview(code),
     queryFn: async () => {
       const repo = getRepo();
       const row = await repo.getJoinCodeByCode(code);
