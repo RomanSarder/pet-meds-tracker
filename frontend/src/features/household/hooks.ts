@@ -14,10 +14,11 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { SessionUser } from "@pet-tracker/shared";
-import type { Household, JoinCode, User } from "@/domain";
+import type { Household, JoinCode, Pet, User } from "@/domain";
 import {
   DEFAULT_SELF_DISPLAY_NAME,
   DISPLAY_NAME_MAX,
+  JOIN_CODE_LENGTH,
   JOIN_CODE_TTL_MS,
   generateJoinCode,
   now,
@@ -131,6 +132,39 @@ export function useSessionEmail(): string | null {
     staleTime: Infinity,
   });
   return query.data?.email ?? null;
+}
+
+/**
+ * SPEC §5 step 3: the joiner is shown the pets they are about to get access
+ * to *before* joining. Resolves the entered code through the exact same
+ * `evaluateJoinCode` gate `useRedeemJoinCode` uses, but never mutates
+ * anything. Disabled until a full-length code is typed; `null` covers both
+ * "not enough characters yet" and "no usable code found", so the screen
+ * falls back to the same quiet prompt either way — the refusal *reason* is
+ * only ever surfaced by pressing Join (SPEC §5: "not on the last
+ * keystroke"), never merely by typing.
+ *
+ * CONTRACT-W8.md §0: the frontend only ever talks to the local repo, which
+ * models a single household. `getRepo().listPets()` therefore stands in for
+ * "the pets of the household behind this code" in this slice; wiring a real
+ * cross-household lookup against the server is slice 9.
+ */
+export function useJoinPreview(rawCode: string): UseQueryResult<Pet[] | null, Error> {
+  const code = rawCode.trim().toUpperCase();
+  return useQuery({
+    queryKey: [...hqk.all(), "joinPreview", code] as const,
+    queryFn: async () => {
+      const repo = getRepo();
+      const row = await repo.getJoinCodeByCode(code);
+      const verdict = evaluateJoinCode(row, now());
+      if (!verdict.ok) {
+        return null;
+      }
+      return repo.listPets();
+    },
+    enabled: code.length === JOIN_CODE_LENGTH,
+    ...QUERY_OPTS,
+  });
 }
 
 // --- mutations -----------------------------------------------------------
