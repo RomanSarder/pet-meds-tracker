@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTitle, formatAmount } from "./copy";
+import { buildTitle } from "./copy";
 
 describe("buildTitle", () => {
   it("produces the exact SPEC §7 fixture for a due dose", () => {
@@ -38,15 +38,15 @@ describe("buildTitle", () => {
     // A crude but effective emoji sweep: no character outside the BMP.
     expect([...title].every((ch) => ch.codePointAt(0)! <= 0xffff)).toBe(true);
   });
-});
 
-describe("formatAmount", () => {
-  it.each([
-    [0.4, "0.4"],
-    [1, "1"],
-    [0.5, "0.5"],
-    [12.5, "12.5"],
-  ])("formatAmount(%s) === %s", (input, expected) => {
-    expect(formatAmount(input)).toBe(expected);
+  it("pluralises a countable unit via the reused doseLabel formatter", () => {
+    const title = buildTitle({
+      petName: "Nugget",
+      medicationName: "Ivermectin",
+      amount: 2,
+      unit: "drop",
+      state: "due",
+    });
+    expect(title).toBe("Nugget · Ivermectin 2 drops due now");
   });
 });

@@ -118,6 +118,51 @@ describe("armPermissionRequest", () => {
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
+  it("does not latch the asked flag on a gesture with no active course", async () => {
+    const requestPermission = installSupport("default");
+    const target = new EventTarget();
+    const hasActiveCourse = vi.fn().mockResolvedValue(false);
+    const storage = memoryStorage();
+    armPermissionRequest({ hasActiveCourse, target, storage });
+
+    gesture(target);
+    await vi.waitFor(() => expect(hasActiveCourse).toHaveBeenCalledTimes(1));
+
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(storage.read()).toBeNull();
+  });
+
+  it("re-evaluates on a LATER gesture once an active course exists, and asks then", async () => {
+    const requestPermission = installSupport("default");
+    const target = new EventTarget();
+    let active = false;
+    const hasActiveCourse = vi.fn(() => Promise.resolve(active));
+    const storage = memoryStorage();
+    armPermissionRequest({ hasActiveCourse, target, storage });
+
+    // First gesture: no course yet — proves the earlier refusal, so the
+    // later success below is not vacuous.
+    gesture(target);
+    await vi.waitFor(() => expect(hasActiveCourse).toHaveBeenCalledTimes(1));
+    expect(requestPermission).not.toHaveBeenCalled();
+    // Let the handler's in-flight guard finish resetting (it clears on the
+    // microtask following hasActiveCourse's resolution) before firing again.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // A course now exists; a later gesture gets a fresh chance because the
+    // first one never latched the flag or detached the listener.
+    active = true;
+    gesture(target);
+    await vi.waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
+    expect(storage.read()).toBe("1");
+
+    // And a THIRD gesture, after the real ask, never asks again.
+    gesture(target);
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+  });
+
   it("does not request when permission is already granted", async () => {
     const requestPermission = installSupport("granted");
     const target = new EventTarget();

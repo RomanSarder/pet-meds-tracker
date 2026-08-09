@@ -39,19 +39,27 @@ export interface PermissionArmOptions {
 }
 
 /**
- * Attaches one-shot `pointerup` and `keydown` listeners. On the first
- * gesture — ever, whichever fires first — it asks
- * `Notification.requestPermission()` only if all of: notifications are
+ * Attaches `pointerup` and `keydown` listeners that stay armed and
+ * re-evaluate on EVERY gesture until an actual ask happens — deliberately
+ * not `{ once: true }`. A gesture that arrives before the user has an active
+ * course (e.g. tapping around on first run) must not burn the one-shot: it
+ * asks `Notification.requestPermission()` only if all of notifications are
  * supported, `permissionState() === "default"`, we have never asked before
- * (the persisted flag), and `await hasActiveCourse()` is true. It then
- * records the flag and detaches, whatever the answer. It never asks twice.
+ * (the persisted flag), and `await hasActiveCourse()` is true. Only once
+ * `requestPermission()` is ABOUT to be called does it record the flag and
+ * detach — whatever the answer turns out to be. Any other outcome (no active
+ * course yet, already asked, unsupported, not "default") leaves the
+ * listeners armed so a later gesture gets a fresh chance. It never asks more
+ * than once in total.
  *
  * Rationale: the gesture requirement is what several browsers demand anyway
  * — calling `requestPermission()` outside a user gesture is silently
  * ignored or auto-denied in some engines — and the active-course condition
  * means we only ask a user who has actually set up a medication schedule,
  * the population for whom a reminder is the point. A user who has only
- * signed in is never asked.
+ * signed in is never asked, and — the point of this fix — is not
+ * permanently disqualified from ever being asked either: the very next
+ * gesture after they create their first course tries again.
  *
  * Every step is wrapped so nothing can throw or log. Returns a disarm
  * function that detaches the listeners early (e.g. on unmount).
@@ -60,6 +68,10 @@ export function armPermissionRequest(opts: PermissionArmOptions): () => void {
   const target = opts.target ?? (typeof document !== "undefined" ? document : undefined);
   const storage = opts.storage ?? askedFlagStorage();
   let disarmed = false;
+  // Synchronous re-entrancy guard: `hasActiveCourse()` is awaited, so a
+  // second gesture arriving while the first is still mid-flight must not
+  // race it into asking twice.
+  let inFlight = false;
 
   const disarm = (): void => {
     if (disarmed) return;
@@ -69,9 +81,8 @@ export function armPermissionRequest(opts: PermissionArmOptions): () => void {
   };
 
   const onGesture = (): void => {
-    // One-shot: detach immediately so a second gesture can never re-enter
-    // this handler, regardless of what the checks below decide.
-    disarm();
+    if (disarmed || inFlight) return;
+    inFlight = true;
 
     void silentlyAsync(async () => {
       if (!notificationsSupported()) return;
@@ -79,12 +90,19 @@ export function armPermissionRequest(opts: PermissionArmOptions): () => void {
       if (hasAskedBefore(storage)) return;
       const active = await opts.hasActiveCourse();
       if (!active) return;
+      // An ask is actually about to happen: latch now, before awaiting the
+      // prompt itself, so the flag reflects "we asked" rather than "we
+      // merely considered it" and a concurrent gesture cannot slip through.
+      disarm();
+      markAsked(storage);
       await Notification.requestPermission();
-    }).then(() => markAsked(storage));
+    }).then(() => {
+      inFlight = false;
+    });
   };
 
-  silently(() => target?.addEventListener("pointerup", onGesture, { once: true }));
-  silently(() => target?.addEventListener("keydown", onGesture, { once: true }));
+  silently(() => target?.addEventListener("pointerup", onGesture));
+  silently(() => target?.addEventListener("keydown", onGesture));
 
   return disarm;
 }

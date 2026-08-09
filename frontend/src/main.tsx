@@ -7,6 +7,7 @@ import { router } from "./router";
 import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { startBackgroundSync } from "./sync";
+import { startNotifications } from "./notifications";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -18,3 +19,4 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>
 );
 startBackgroundSync();
+startNotifications();
