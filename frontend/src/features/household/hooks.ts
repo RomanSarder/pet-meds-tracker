@@ -13,20 +13,12 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { SessionUser } from "@pet-tracker/shared";
+import type { HouseholdStateDto, JoinCodeDto, SessionUser } from "@pet-tracker/shared";
 import type { Household, JoinCode, Pet, User } from "@/domain";
-import {
-  DEFAULT_SELF_DISPLAY_NAME,
-  DISPLAY_NAME_MAX,
-  JOIN_CODE_LENGTH,
-  JOIN_CODE_TTL_MS,
-  generateJoinCode,
-  now,
-  qk,
-} from "@/domain";
+import { DEFAULT_SELF_DISPLAY_NAME, DISPLAY_NAME_MAX, JOIN_CODE_LENGTH, now, qk } from "@/domain";
 import { getRepo } from "@/data";
-import { apiClient } from "@/shared/api";
-import { JoinCodeRejectedError, evaluateJoinCode } from "./joinCode";
+import { apiClient, ApiError } from "@/shared/api";
+import { JoinCodeRejectedError, evaluateJoinCode, type JoinCodeRejection } from "./joinCode";
 
 // Household query keys live in the shared `qk` factory in `@/domain`, appended at
 // the end of that object — cross-feature cache invalidation must not need
@@ -188,17 +180,18 @@ export function useSetDisplayName(): UseMutationResult<User, Error, string> {
 }
 
 /**
- * SPEC §5: issuing a new code revokes the previous one. The repo's
- * `createJoinCode` performs that revocation, which is why this never revokes
- * by hand first.
+ * SPEC §5: issuing a new code revokes the previous one — enforced server-side
+ * now (W8's `POST /household/codes`), since a code must be redeemable by a
+ * DIFFERENT device that has no way to read this device's local `joinCodes`
+ * store. The local row this mirrors the server's response into is what
+ * `useLiveJoinCode`/the Invite card actually render (SPEC §9: local store is
+ * the read source) — the server row is what `/household/join` checks.
  */
 export function useIssueJoinCode(): UseMutationResult<JoinCode, Error, void> {
-  return useHouseholdMutation(async () =>
-    getRepo().createJoinCode({
-      code: generateJoinCode(),
-      expiresAt: new Date(now().getTime() + JOIN_CODE_TTL_MS).toISOString(),
-    }),
-  );
+  return useHouseholdMutation(async () => {
+    const dto = await apiClient<JoinCodeDto>("/household/codes", { method: "POST" });
+    return getRepo().createJoinCode({ code: dto.code, expiresAt: dto.expiresAt });
+  });
 }
 
 /**
@@ -228,23 +221,143 @@ export function leaveDeletesHousehold(members: readonly User[]): boolean {
 }
 
 /**
- * SPEC §5 step 4: redeem, once. Every refusal SPEC §5 names is decided here
- * rather than in the screen, so the screen cannot accidentally allow one.
+ * SPEC §9: stable, matching ids on both sides. `POST /household/join`
+ * resolves to the household the code belongs to — normally a different id
+ * than the solo household this device already minted for itself before
+ * signing in (the local-open stub every fresh IndexedDB gets). This mirrors
+ * that household's row, and this device's own member row, into the local
+ * store under the SERVER's id: the mirror image of `FirstRunPage`'s
+ * provisioning, which sends the LOCAL id to the server because nothing
+ * existed there yet. Here the household already exists server-side, so the
+ * local id is the one that has to give way.
+ *
+ * MUST go through `importHousehold(..., "replace")`, not `"merge"`: both
+ * repos treat "which household is current" and `meta.householdId` as a pair
+ * that has to move together (see `memoryRepo`'s `currentHouseholdId` — the
+ * moment the two disagree it self-heals by MINTING A THIRD, random
+ * household, which is worse than doing nothing). Only `"replace"` updates
+ * both atomically; `"merge"` only ever inserts-or-updates rows and never
+ * repoints which one is current, so it cannot switch identity at all. To
+ * avoid "replace"'s normal cost — it clears every store first — this
+ * round-trips every entity this device already has, unchanged, back through
+ * the same call, so the net effect on everything except the household/self
+ * identity is a no-op. The one honest gap: `listPets`/`listMedications`/
+ * `listCourses` cannot return soft-deleted rows (no Repo method exposes
+ * them), so a device with prior LOCAL tombstones for those three tables
+ * loses them here — for the flow this exists for (a freshly signed-in
+ * device joining a household it has never touched before), there is
+ * nothing to lose.
  */
-export function useRedeemJoinCode(): UseMutationResult<JoinCode, Error, string> {
-  return useHouseholdMutation(async (raw: string) => {
-    const code = raw.trim().toUpperCase();
-    const repo = getRepo();
-    const row = await repo.getJoinCodeByCode(code);
-    const verdict = evaluateJoinCode(row, now());
-    if (!verdict.ok || !row) {
-      throw new JoinCodeRejectedError(verdict.ok ? "not_found" : verdict.reason);
+async function adoptJoinedHousehold(state: HouseholdStateDto, displayName?: string): Promise<void> {
+  const repo = getRepo();
+  const localHouseholdId = await repo.currentHouseholdId();
+  const self = await repo.getCurrentUser();
+  const ts = now().toISOString();
+  const trimmedName = displayName?.trim();
+  const nextDisplayName = trimmedName ? trimmedName : self.displayName;
+
+  if (state.household.id === localHouseholdId) {
+    // Already the same household locally (e.g. a retried join after a
+    // previous attempt already adopted it) — nothing to re-key, only the
+    // name might still need saving.
+    if (nextDisplayName !== self.displayName) {
+      await repo.updateUser(self.id, { displayName: nextDisplayName });
     }
-    const self = await repo.getCurrentUser();
-    if (row.householdId === self.householdId) {
-      throw new JoinCodeRejectedError("already_in_household");
-    }
-    return repo.markJoinCodeUsed(row.id, self.id);
+    return;
+  }
+
+  const household: Household = {
+    id: state.household.id,
+    name: state.household.name,
+    createdAt: state.household.createdAt,
+    updatedAt: ts,
+    deletedAt: null,
+  };
+  const updatedSelf: User = {
+    ...self,
+    householdId: household.id,
+    displayName: nextDisplayName,
+    updatedAt: ts,
+  };
+
+  const [users, pets, medications, courses, doseEvents, courseEvents, stockAdjustments] = await Promise.all([
+    repo.listUsers({ includeRemoved: true }),
+    repo.listPets({ includeArchived: true }),
+    repo.listMedications(),
+    repo.listCourses(),
+    repo.listDoseEvents({}),
+    repo.listCourseEvents({}),
+    repo.listStockAdjustments(),
+  ]);
+  const otherUsers = users.filter((u) => u.id !== self.id);
+
+  await repo.importHousehold(
+    {
+      schemaVersion: (await repo.getMeta("schemaVersion")) ?? 2,
+      exportedAt: ts,
+      households: [household],
+      users: [updatedSelf, ...otherUsers],
+      pets,
+      medications,
+      courses,
+      doseEvents,
+      courseEvents,
+      stockAdjustments,
+    },
+    "replace",
+  );
+}
+
+/**
+ * SPEC §5 step 4: redeem, once, against the server — `POST /household/join`
+ * (W8) is the sole authority on single-use, 24h expiry, and "a newer code was
+ * issued", exactly because a code must be checked against what OTHER devices
+ * have done to it, which this device's local `joinCodes` store cannot see.
+ * `evaluateJoinCode`/`JoinCodeRejectedError` still translate the refusal
+ * reason into the same screen-facing error they always have, so
+ * `JoinHouseholdPage`'s rendering of a refusal needed no change.
+ */
+export function useRedeemJoinCode(): UseMutationResult<
+  HouseholdStateDto,
+  Error,
+  { code: string; displayName?: string }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ code: raw, displayName }: { code: string; displayName?: string }) => {
+      const code = raw.trim().toUpperCase();
+      let state: HouseholdStateDto;
+      try {
+        state = await apiClient<HouseholdStateDto>("/household/join", {
+          method: "POST",
+          body: JSON.stringify({ code, displayName: displayName?.trim() || undefined }),
+        });
+      } catch (err) {
+        if (
+          err instanceof ApiError &&
+          err.data.error === "join_code_rejected" &&
+          typeof err.data.reason === "string"
+        ) {
+          throw new JoinCodeRejectedError(err.data.reason as JoinCodeRejection);
+        }
+        // Anything else (network down, an unexpected 5xx) is a genuine
+        // failure, not a redemption refusal — the caller must see it as an
+        // error rather than have the join silently proceed locally.
+        throw err;
+      }
+      await adoptJoinedHousehold(state, displayName);
+      return state;
+    },
+    // Broader than `useHouseholdMutation`'s fixed household/events/today
+    // prefixes on purpose — adopting a joined household can change the
+    // household id itself (unlike every other mutation on this page), so
+    // every query backed by `getRepo()` needs a refetch, not just the
+    // household-shaped ones. Mirrors `SettingsPage`'s recovery after a
+    // merge-mode backup restore, the other place local identity can shift
+    // under a live query cache.
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+    },
   });
 }
 

@@ -182,6 +182,26 @@ describe("HouseholdPage", () => {
     const self = user({ id: "u-self" });
     const code = joinCode({ id: "jc-1", code: "ABCDEF" });
     const repo = repoWith({ users: [self], joinCodes: [code] });
+    // Defect 2 sibling fix: issuing now calls the backend (`POST
+    // /household/codes`, W8) first — the server is the authority on "only
+    // one code live per household" — and mirrors its response into the
+    // local row this screen actually renders (SPEC §9: local is the read
+    // source).
+    mockApiClient.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path === "/household/codes" && options?.method === "POST") {
+        return {
+          id: "jc-server-2",
+          householdId: HOUSEHOLD.id,
+          code: "ZYXWVU",
+          createdBy: "u-self",
+          expiresAt: "2026-08-10T07:00:00.000Z",
+          usedBy: null,
+          revokedAt: null,
+          createdAt: "2026-08-08T07:00:00.000Z",
+        };
+      }
+      return Promise.reject(new Error("no session"));
+    });
     renderWithProviders(<HouseholdPage />, { repo });
 
     const group = await screen.findByRole("group", { name: "Join code ABCDEF" });
@@ -195,6 +215,8 @@ describe("HouseholdPage", () => {
       expect(screen.getByRole("group")).not.toHaveAccessibleName("Join code ABCDEF");
     });
 
+    expect(mockApiClient).toHaveBeenCalledWith("/household/codes", expect.objectContaining({ method: "POST" }));
+
     const codesAfter = await repo.listJoinCodes();
     const original = codesAfter.find((c) => c.id === "jc-1");
     expect(original?.revokedAt).not.toBeNull();
@@ -203,6 +225,7 @@ describe("HouseholdPage", () => {
     const live = codesAfter.filter((c) => c.revokedAt === null && c.usedBy === null);
     expect(live).toHaveLength(1);
     expect(live[0].id).not.toBe("jc-1");
+    expect(live[0].code).toBe("ZYXWVU");
   });
 
   it("SPEC §5: invite actions are disabled while the self row still carries the placeholder name", async () => {

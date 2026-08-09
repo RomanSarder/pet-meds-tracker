@@ -10,14 +10,7 @@ import { JOIN_CODE_ALPHABET, JOIN_CODE_LENGTH } from "@/domain";
 import { Field } from "@/features/forms/Field";
 import { speciesLabel } from "@/features/pets/format";
 import { suggestNameFromEmail } from "@/features/onboarding/nameSuggestion";
-import {
-  needsDisplayName,
-  useJoinPreview,
-  useRedeemJoinCode,
-  useSelf,
-  useSessionEmail,
-  useSetDisplayName,
-} from "./hooks";
+import { needsDisplayName, useJoinPreview, useRedeemJoinCode, useSelf, useSessionEmail } from "./hooks";
 import { JoinCodeRejectedError, joinCodeRejectionMessage, type JoinCodeRejection } from "./joinCode";
 
 const NAME_INPUT_ID = "join-household-name";
@@ -29,12 +22,16 @@ export function JoinHouseholdPage() {
   const selfQuery = useSelf();
   const sessionEmail = useSessionEmail();
   const redeemJoinCode = useRedeemJoinCode();
-  const setDisplayName = useSetDisplayName();
 
   const [name, setName] = useState("");
   const hasEditedName = useRef(false);
   const [chars, setChars] = useState<string[]>(EMPTY_CHARS);
   const [rejection, setRejection] = useState<JoinCodeRejection | null>(null);
+  // SPEC §5: "the client must surface a failure" for anything the server
+  // refuses that is not itself a redemption rejection (network down, an
+  // unexpected server error) — distinct from `rejection`, which is reserved
+  // for the four reasons the server actually names.
+  const [joinFailed, setJoinFailed] = useState(false);
   const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
 
   const code = chars.join("");
@@ -95,20 +92,23 @@ export function JoinHouseholdPage() {
 
   async function handleJoin() {
     setRejection(null);
+    setJoinFailed(false);
     try {
-      await redeemJoinCode.mutateAsync(code);
-      const trimmedName = name.trim();
-      if (trimmedName.length > 0 && trimmedName !== selfQuery.data?.displayName) {
-        await setDisplayName.mutateAsync(trimmedName);
-      }
+      // SPEC §5: redemption is decided server-side (single use, 24h expiry,
+      // "a newer code was issued") — the display name travels in the same
+      // round trip (`RedeemJoinCodeBody.displayName`) rather than a second,
+      // separate write.
+      await redeemJoinCode.mutateAsync({ code, displayName: name });
       navigate({ to: "/today" });
     } catch (err) {
       if (err instanceof JoinCodeRejectedError) {
         setRejection(err.reason);
         return;
       }
-      // No error UI is specified for anything else (mirrors PetFormPage);
-      // the user simply stays on the form.
+      // The server refused for some other reason (network down, an
+      // unexpected error) — surfaced rather than silently proceeding as if
+      // the join had worked.
+      setJoinFailed(true);
     }
   }
 
@@ -244,6 +244,10 @@ export function JoinHouseholdPage() {
         {rejection ? (
           <div role="alert" style={{ fontSize: 13, color: "var(--alert)" }}>
             {joinCodeRejectionMessage(rejection)}
+          </div>
+        ) : joinFailed ? (
+          <div role="alert" style={{ fontSize: 13, color: "var(--alert)" }}>
+            Something went wrong. Try again.
           </div>
         ) : null}
         <Button

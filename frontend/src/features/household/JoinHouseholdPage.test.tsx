@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { useRouterState } from "@tanstack/react-router";
+import type { HouseholdStateDto } from "@pet-tracker/shared";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Household, JoinCode, Pet, User } from "@/domain";
-import { apiClient } from "@/shared/api";
+import { apiClient, ApiError } from "@/shared/api";
 import { joinCodeRejectionMessage } from "./joinCode";
 import { JoinHouseholdPage } from "./JoinHouseholdPage";
 
 // Same pattern as YourNamePanel.test.tsx / HouseholdPage.test.tsx: mock the
 // session lookup `useSessionEmail` makes so tests control what it resolves.
+// `apiClient` is also how redemption itself now travels (defect 2 — Join
+// household used to only call the local repo), so most tests here give it a
+// per-path implementation rather than a single blanket resolve/reject.
 vi.mock("@/shared/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api")>()),
   apiClient: vi.fn(),
@@ -62,12 +66,6 @@ function pet(overrides: Partial<Pet>): Pet {
   };
 }
 
-// `householdId` deliberately differs from `HOUSEHOLD.id` (self's own
-// household): CONTRACT-W8.md §0 — the frontend only ever models one
-// household locally, so `getRepo().listPets()` stands in for "the pets of
-// the household behind this code". Keeping the code's householdId distinct
-// from self's throughout means a successful redemption never trips the
-// unrelated "already_in_household" refusal these tests are not about.
 function joinCode(overrides: Partial<JoinCode>): JoinCode {
   return {
     id: "jc-1",
@@ -82,6 +80,29 @@ function joinCode(overrides: Partial<JoinCode>): JoinCode {
     deletedAt: null,
     ...overrides,
   };
+}
+
+/** The `POST /household/join` success body — the household on the OTHER end of the code. */
+function householdStateDto(overrides?: Partial<HouseholdStateDto>): HouseholdStateDto {
+  return {
+    household: { id: "hh-server", name: "The Clover House", createdAt: "2026-06-01T09:00:00.000Z" },
+    members: [{ id: "u-elsewhere", householdId: "hh-server", displayName: "Marta", tint: 2, joinedAt: "2026-06-01T09:00:00.000Z" }],
+    self: {
+      id: "u-self",
+      householdId: "hh-server",
+      displayName: "Roman",
+      tint: 1,
+      joinedAt: "2026-08-08T06:00:00.000Z",
+      email: "roman@example.com",
+    },
+    ...overrides,
+  };
+}
+
+/** 4xx body `POST /household/join` sends for a refused code (backend/src/household/index.ts `sendJoinCodeRejection`). */
+function rejectedError(reason: "already_used" | "expired" | "revoked" | "not_found" | "already_in_household") {
+  const status = reason === "not_found" ? 404 : 409;
+  return new ApiError(status, "rejected", { error: "join_code_rejected", reason, message: "rejected" });
 }
 
 function repoWith(opts: { users: User[]; joinCodes?: JoinCode[]; pets?: Pet[] }) {
@@ -117,6 +138,17 @@ async function typeCode(user2: ReturnType<typeof userEvent.setup>, code: string)
   await user2.type(box1, code);
 }
 
+/** Only `/household/join` gets a real implementation; everything else (e.g. `/auth/me`) still rejects. */
+function mockJoin(impl: (body: { code: string; displayName?: string }) => HouseholdStateDto) {
+  mockApiClient.mockImplementation(async (path: string, options?: RequestInit) => {
+    if (path !== "/household/join") {
+      return Promise.reject(new Error("no session"));
+    }
+    const body = JSON.parse((options?.body as string) ?? "{}");
+    return impl(body);
+  });
+}
+
 describe("JoinHouseholdPage", () => {
   it("SPEC §5 step 3: lists the pets being joined before joining", async () => {
     const self = user({ id: "u-self" });
@@ -136,13 +168,13 @@ describe("JoinHouseholdPage", () => {
     expect(screen.queryByText("Enter the code to see what you are joining")).not.toBeInTheDocument();
 
     // The preview must not itself have joined anything.
-    expect((await repo.getJoinCodeByCode("ABCDEF"))?.usedBy).toBeNull();
+    expect(mockApiClient).not.toHaveBeenCalledWith("/household/join", expect.anything());
   });
 
   it('SPEC §5: joining is explicit, not on the last keystroke — only pressing "Join household" joins', async () => {
     const self = user({ id: "u-self" });
-    const code = joinCode({ code: "ABCDEF" });
-    const repo = repoWith({ users: [self], joinCodes: [code] });
+    const repo = repoWith({ users: [self] });
+    mockJoin(() => householdStateDto());
     renderJoin({ repo });
 
     const user2 = userEvent.setup();
@@ -151,21 +183,47 @@ describe("JoinHouseholdPage", () => {
     const joinButton = screen.getByRole("button", { name: "Join household" });
     await waitFor(() => expect(joinButton).toBeEnabled());
 
-    // Typing the last character alone must not have joined.
-    expect((await repo.getJoinCodeByCode("ABCDEF"))?.usedBy).toBeNull();
+    // Typing the last character alone must not have called the backend.
+    expect(mockApiClient).not.toHaveBeenCalledWith("/household/join", expect.anything());
     expect(screen.getByTestId("pathname")).toHaveTextContent("/");
 
     await user2.click(joinButton);
 
-    await waitFor(async () => {
-      expect((await repo.getJoinCodeByCode("ABCDEF"))?.usedBy).not.toBeNull();
+    await waitFor(() => {
+      expect(mockApiClient).toHaveBeenCalledWith("/household/join", expect.objectContaining({ method: "POST" }));
     });
+    await waitFor(() => expect(screen.getByTestId("pathname")).toHaveTextContent("/today"));
   });
 
-  it("refuses a code that was already used, with the used-code message, and stays on the screen", async () => {
+  it("calls POST /household/join with the entered code and name, and adopts the server's household id locally", async () => {
+    const self = user({ id: "u-self", householdId: HOUSEHOLD.id });
+    const repo = repoWith({ users: [self] });
+    mockJoin(() => householdStateDto());
+    renderJoin({ repo });
+
+    const user2 = userEvent.setup();
+    await typeCode(user2, "ABCDEF");
+    await user2.click(screen.getByRole("button", { name: "Join household" }));
+
+    await waitFor(() => expect(screen.getByTestId("pathname")).toHaveTextContent("/today"));
+
+    const call = mockApiClient.mock.calls.find(([path]) => path === "/household/join");
+    expect(call).toBeDefined();
+    const [, options] = call!;
+    expect(JSON.parse((options as { body: string }).body)).toMatchObject({ code: "ABCDEF", displayName: "Roman" });
+
+    // SPEC §9: local and server ids match after the join, the mirror image
+    // of FirstRunPage's provisioning.
+    expect(await repo.currentHouseholdId()).toBe("hh-server");
+    expect((await repo.getCurrentUser()).householdId).toBe("hh-server");
+  });
+
+  it("refuses a code that was already used, with the used-code message, stays on the screen, and does not join locally", async () => {
     const self = user({ id: "u-self" });
-    const code = joinCode({ code: "ABCDEF", usedBy: "someone-else" });
-    const repo = repoWith({ users: [self], joinCodes: [code] });
+    const repo = repoWith({ users: [self] });
+    mockJoin(() => {
+      throw rejectedError("already_used");
+    });
     renderJoin({ repo });
 
     const user2 = userEvent.setup();
@@ -177,40 +235,58 @@ describe("JoinHouseholdPage", () => {
     );
     expect(screen.getByTestId("pathname")).toHaveTextContent("/");
     expect(screen.getByRole("textbox", { name: "Code character 1" })).toBeInTheDocument();
+    expect((await repo.getCurrentUser()).householdId).toBe(HOUSEHOLD.id);
   });
 
   it("refuses a code past its expiry, with the expired message, and stays on the screen", async () => {
     const self = user({ id: "u-self" });
-    const code = joinCode({ code: "ABCDEF", expiresAt: "2026-08-01T00:00:00.000Z" });
-    const repo = repoWith({ users: [self], joinCodes: [code] });
+    const repo = repoWith({ users: [self] });
+    mockJoin(() => {
+      throw rejectedError("expired");
+    });
     renderJoin({ repo });
 
     const user2 = userEvent.setup();
     await typeCode(user2, "ABCDEF");
     await user2.click(await screen.findByRole("button", { name: "Join household" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      joinCodeRejectionMessage("expired"),
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(joinCodeRejectionMessage("expired"));
     expect(screen.getByTestId("pathname")).toHaveTextContent("/");
     expect(screen.getByRole("textbox", { name: "Code character 1" })).toBeInTheDocument();
   });
 
   it("refuses a code revoked because a newer one was issued, with the revoked message, and stays on the screen", async () => {
     const self = user({ id: "u-self" });
-    const code = joinCode({ code: "ABCDEF", revokedAt: "2026-08-08T06:30:00.000Z" });
-    const repo = repoWith({ users: [self], joinCodes: [code] });
+    const repo = repoWith({ users: [self] });
+    mockJoin(() => {
+      throw rejectedError("revoked");
+    });
     renderJoin({ repo });
 
     const user2 = userEvent.setup();
     await typeCode(user2, "ABCDEF");
     await user2.click(await screen.findByRole("button", { name: "Join household" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      joinCodeRejectionMessage("revoked"),
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(joinCodeRejectionMessage("revoked"));
     expect(screen.getByTestId("pathname")).toHaveTextContent("/");
     expect(screen.getByRole("textbox", { name: "Code character 1" })).toBeInTheDocument();
+  });
+
+  it("surfaces a generic failure (network down, unexpected server error) instead of joining locally as if it worked", async () => {
+    const self = user({ id: "u-self" });
+    const repo = repoWith({ users: [self] });
+    mockJoin(() => {
+      throw new Error("network error");
+    });
+    renderJoin({ repo });
+
+    const user2 = userEvent.setup();
+    await typeCode(user2, "ABCDEF");
+    await user2.click(await screen.findByRole("button", { name: "Join household" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong. Try again.");
+    expect(screen.getByTestId("pathname")).toHaveTextContent("/");
+    expect((await repo.getCurrentUser()).householdId).toBe(HOUSEHOLD.id);
   });
 
   it("accepts a pasted six-character code and rejects characters outside the alphabet", async () => {

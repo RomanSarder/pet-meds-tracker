@@ -70,8 +70,38 @@ function unauthorizedResponse(): Response {
   } as Response;
 }
 
-function mockAuthenticated() {
-  globalThis.fetch = vi.fn().mockResolvedValue(okResponse(SESSION_USER));
+function notFoundResponse(): Response {
+  return {
+    ok: false,
+    status: 404,
+    statusText: "Not Found",
+    json: async () => ({ message: "Not Found" }),
+    text: async () => JSON.stringify({ message: "Not Found" }),
+  } as Response;
+}
+
+/**
+ * `hasHousehold` controls what `GET /household` answers (200 vs 404), which
+ * is exactly what `appIndexRoute`'s beforeLoad reads to choose between
+ * /today and /welcome. `householdNetworkError` models the household check
+ * itself being unreachable (offline, a dropped connection) — distinct from
+ * `mockUnauthenticated`, which models no session at all.
+ */
+function mockAuthenticated(opts?: { hasHousehold?: boolean; householdNetworkError?: boolean }) {
+  const hasHousehold = opts?.hasHousehold ?? true;
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/auth/me")) {
+      return okResponse(SESSION_USER);
+    }
+    if (url.endsWith("/household")) {
+      if (opts?.householdNetworkError) {
+        throw new TypeError("network error");
+      }
+      return hasHousehold ? okResponse({}) : notFoundResponse();
+    }
+    return okResponse(SESSION_USER);
+  });
 }
 
 function mockUnauthenticated() {
@@ -128,11 +158,43 @@ describe("router", () => {
       mockAuthenticated();
     });
 
-    it("redirects / to /today", async () => {
+    it("redirects / to /today when the signed-in user already has a server-side household", async () => {
       const { router } = renderApp("/");
 
       await screen.findByText(TODAY_HEADING);
       expect(router.state.location.pathname).toBe("/today");
+    });
+
+    // SPEC §6.9 / defect 1: a freshly verified user (or an existing account
+    // stranded with `household_id` null server-side) must land on the
+    // first-run screen instead of an app whose sync 404s forever.
+    it("redirects / to /welcome when the signed-in user has no server-side household", async () => {
+      mockAuthenticated({ hasHousehold: false });
+      const { router } = renderApp("/");
+
+      await screen.findByText("What should we call you?");
+      expect(router.state.location.pathname).toBe("/welcome");
+    });
+
+    // The household check must fail OPEN: an offline or flaky household
+    // lookup must not trap an otherwise fully offline-capable user (SPEC §9)
+    // on /welcome, and must not throw/hang the navigation.
+    it("redirects / to /today when the household check cannot reach the network", async () => {
+      mockAuthenticated({ householdNetworkError: true });
+      const { router } = renderApp("/");
+
+      await screen.findByText(TODAY_HEADING);
+      expect(router.state.location.pathname).toBe("/today");
+    });
+
+    // /welcome itself carries no household guard — only "/" does — so
+    // reaching it directly never redirect-loops back through the check.
+    it("does not redirect away from /welcome (no household guard on ordinary navigation)", async () => {
+      mockAuthenticated({ hasHousehold: false });
+      const { router } = renderApp("/welcome");
+
+      await screen.findByText("What should we call you?");
+      expect(router.state.location.pathname).toBe("/welcome");
     });
 
     it("renders the Today screen at /today", async () => {

@@ -63,11 +63,47 @@ const appLayoutRoute = createRoute({
   },
 });
 
+// SPEC §6.9: a freshly verified user must land on the first-run screen, not
+// straight into an app whose sync 404s forever because no server-side
+// household exists yet (defect confirmed live: a brand-new sign-in landed on
+// /today with no household provisioned). This key is deliberately not in the
+// shared `qk` factory (frozen for this wave) — it only needs to be unique and
+// stable within this file.
+const householdExistsQueryKey = ["household", "server-exists"] as const;
+
 const appIndexRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/",
-  beforeLoad: () => {
-    throw redirect({ to: "/today" });
+  // `/` is only ever hit right after auth (VerifyPage's `navigate({ to: "/"
+  // })`) or an explicit deep link to it — never as part of ordinary in-app
+  // navigation between /today, /pets, /supplies, etc. — so this is the one
+  // place a "does this user have a server-side household yet" check can run
+  // without becoming a second blocking network call on every navigation the
+  // way adding it to `appLayoutRoute`'s beforeLoad (which DOES run on every
+  // navigation, since it guards the session for the whole app shell) would.
+  //
+  // Fails OPEN to /today on anything but a definitive "no household" (404):
+  // offline, a flaky network, or an unexpected server error must not trap an
+  // otherwise fully offline-capable user (SPEC §9) on /welcome. There is no
+  // redirect-loop risk either way — this beforeLoad only ever fires once per
+  // visit to "/" and always resolves to one of two terminal siblings
+  // (/today, /welcome), neither of which re-enters it.
+  beforeLoad: async () => {
+    const hasHousehold = await queryClient.ensureQueryData({
+      queryKey: householdExistsQueryKey,
+      queryFn: async () => {
+        try {
+          await apiClient("/household");
+          return true;
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) return false;
+          return true;
+        }
+      },
+      staleTime: 0,
+      retry: false,
+    });
+    throw redirect({ to: hasHousehold ? "/today" : "/welcome" });
   },
 });
 
