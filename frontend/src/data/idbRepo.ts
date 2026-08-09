@@ -7,9 +7,11 @@ import type {
   CourseStatus,
   DoseEvent,
   DoseEventStatus,
+  Household,
   HouseholdBackup,
   ImportReport,
   IsoDateTime,
+  JoinCode,
   Medication,
   MedicationForm,
   MetaShape,
@@ -18,8 +20,12 @@ import type {
   StockAdjustment,
   StockReason,
   Timestamped,
+  User,
 } from "@/domain";
 import {
+  DEFAULT_SELF_DISPLAY_NAME,
+  GRACE_FIXED_MIN,
+  GRACE_INTERVAL_MIN,
   localDayKey,
   newId,
   now,
@@ -28,7 +34,7 @@ import {
   TINT_COUNT,
   UNDO_WINDOW_MS,
 } from "@/domain";
-import { RetractWindowExpiredError } from "./errors";
+import { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 import { DB_NAME, openPetMedsDb, type PetMedsDB, type StoredMedication } from "./db";
 import type { Repo } from "./repo.types";
 
@@ -93,6 +99,77 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
   const db = (): Promise<IDBPDatabase<PetMedsDB>> =>
     (dbPromise ??= openPetMedsDb(opts?.dbName ?? DB_NAME));
 
+  // --- identity: current actor / household -------------------------------
+  // The v2 migration always populates `meta.householdId`/`meta.selfUserId`,
+  // so the normal path below is a single `meta` read. Cached in the closure
+  // after the first read so the five write paths that stamp `actorId`/
+  // `householdId` do not each pay a `meta` round trip. Mirrors memoryRepo's
+  // never-null, never-throws guarantee: an absent key mints the row on
+  // demand exactly as the migration does.
+
+  let cachedHouseholdId: string | null = null;
+  let cachedSelfUserId: string | null = null;
+
+  async function currentHouseholdId(): Promise<string> {
+    if (cachedHouseholdId) return cachedHouseholdId;
+    const conn = await db();
+    const rec = await conn.get("meta", "householdId");
+    const existing = rec?.value as string | null | undefined;
+    if (existing) {
+      cachedHouseholdId = existing;
+      return existing;
+    }
+    const ts = now().toISOString();
+    const household: Household = { id: newId(), name: null, createdAt: ts, updatedAt: ts, deletedAt: null };
+    const tx = conn.transaction(["households", "meta"], "readwrite");
+    await tx.objectStore("households").put(household);
+    await tx.objectStore("meta").put({ key: "householdId", value: household.id });
+    await tx.done;
+    cachedHouseholdId = household.id;
+    return household.id;
+  }
+
+  async function currentActorId(): Promise<string> {
+    if (cachedSelfUserId) return cachedSelfUserId;
+    const conn = await db();
+    const rec = await conn.get("meta", "selfUserId");
+    const existing = rec?.value as string | null | undefined;
+    if (existing) {
+      const row = await conn.get("users", existing);
+      if (row) {
+        cachedSelfUserId = existing;
+        return existing;
+      }
+    }
+    const householdId = await currentHouseholdId();
+    const usersInHousehold = await conn.getAllFromIndex("users", "by_householdId", householdId);
+    const selfUser = usersInHousehold.find((u) => u.isSelf);
+    if (selfUser) {
+      cachedSelfUserId = selfUser.id;
+      await conn.put("meta", { key: "selfUserId", value: selfUser.id });
+      return selfUser.id;
+    }
+    const ts = now().toISOString();
+    const user: User = {
+      id: newId(),
+      householdId,
+      email: null,
+      displayName: DEFAULT_SELF_DISPLAY_NAME,
+      tint: 1,
+      isSelf: true,
+      joinedAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+      deletedAt: null,
+    };
+    const tx = conn.transaction(["users", "meta"], "readwrite");
+    await tx.objectStore("users").put(user);
+    await tx.objectStore("meta").put({ key: "selfUserId", value: user.id });
+    await tx.done;
+    cachedSelfUserId = user.id;
+    return user.id;
+  }
+
   // --- pets ---------------------------------------------------------------
 
   async function listPets(opts?: { includeArchived?: boolean }): Promise<Pet[]> {
@@ -112,6 +189,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     birthdate?: string | null;
     weightGrams?: number | null;
   }): Promise<Pet> {
+    const householdId = await currentHouseholdId();
     const conn = await db();
     const tx = conn.transaction(["pets", "meta"], "readwrite");
     const metaStore = tx.objectStore("meta");
@@ -131,6 +209,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       weightGrams: input.weightGrams ?? null,
       tint,
       archived: false,
+      householdId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -367,6 +446,24 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     return result;
   }
 
+  /**
+   * SPEC §5 concurrent-log dedup guard, per CONTRACT.md §6: rows for this
+   * course that are not soft-deleted, not superseded by a later
+   * `correctDose` row, and whose status is `given` or `skipped` (a `missed`
+   * row written by the sweep never blocks a real log). Mirrors memoryRepo's
+   * `liveDoseEventsForCourse` exactly.
+   */
+  function liveDoseEventsForCourse(courseEvents: DoseEvent[]): DoseEvent[] {
+    const superseded = new Set(
+      courseEvents
+        .filter((e) => e.deletedAt === null && e.supersedesId !== null)
+        .map((e) => e.supersedesId as string),
+    );
+    return courseEvents.filter(
+      (e) => e.deletedAt === null && !superseded.has(e.id) && (e.status === "given" || e.status === "skipped"),
+    );
+  }
+
   async function logDose(input: {
     courseId: string;
     status: "given" | "skipped";
@@ -375,21 +472,47 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     amount: number;
     note?: string;
   }): Promise<DoseEvent> {
+    const actorId = await currentActorId();
     const conn = await db();
-    const tx = conn.transaction(["doseEvents"], "readwrite");
+    // Course read and dose-event read+write share one transaction (courses,
+    // doseEvents) so the dedup check and the insert cannot interleave with a
+    // concurrent log for the same course.
+    const tx = conn.transaction(["courses", "doseEvents"], "readwrite");
+    const coursesStore = tx.objectStore("courses");
     const store = tx.objectStore("doseEvents");
+
+    const course = await coursesStore.get(input.courseId);
+    if (!course || course.deletedAt !== null) notFound("Course", input.courseId);
+
     const ts = now().toISOString();
+    const givenAt = input.givenAt ?? ts;
+    const graceMin = course.schedule.kind === "fixedTimes" ? GRACE_FIXED_MIN : GRACE_INTERVAL_MIN;
+    const graceMs = graceMin * 60_000;
+    const givenAtMs = new Date(givenAt).getTime();
+
+    const courseEvents = await store.index("by_courseId").getAll(input.courseId);
+    const duplicate = liveDoseEventsForCourse(courseEvents).find((e) => {
+      if (input.scheduledFor !== null && e.scheduledFor === input.scheduledFor) {
+        return true;
+      }
+      return Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs;
+    });
+    if (duplicate) {
+      throw new DuplicateDoseError(duplicate);
+    }
+
     const event: DoseEvent = {
       id: newId(),
       courseId: input.courseId,
       scheduledFor: input.scheduledFor,
       status: input.status,
       loggedAt: ts,
-      givenAt: input.givenAt ?? ts,
+      givenAt,
       amount: input.amount,
       note: input.note ?? null,
       occurrenceKey: occurrenceKeyFor(input.courseId, input.scheduledFor),
       supersedesId: null,
+      actorId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -403,6 +526,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     originalId: string,
     patch: { givenAt?: IsoDateTime; amount?: number; status?: DoseEventStatus; note?: string },
   ): Promise<DoseEvent> {
+    const actorId = await currentActorId();
     const conn = await db();
     const tx = conn.transaction(["doseEvents"], "readwrite");
     const store = tx.objectStore("doseEvents");
@@ -418,6 +542,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       note: patch.note ?? original.note,
       loggedAt: ts,
       supersedesId: originalId,
+      actorId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -456,6 +581,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
   async function recordMissed(
     inputs: Array<{ courseId: string; scheduledFor: IsoDateTime; amount: number }>,
   ): Promise<DoseEvent[]> {
+    const actorId = await currentActorId();
     const conn = await db();
     const tx = conn.transaction(["doseEvents"], "readwrite");
     const store = tx.objectStore("doseEvents");
@@ -479,6 +605,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
         note: null,
         occurrenceKey,
         supersedesId: null,
+        actorId,
         createdAt: ts,
         updatedAt: ts,
         deletedAt: null,
@@ -507,6 +634,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     reason: StockReason;
     note?: string;
   }): Promise<StockAdjustment> {
+    const actorId = await currentActorId();
     const conn = await db();
     const tx = conn.transaction(["stockAdjustments", "medications"], "readwrite");
     const stockStore = tx.objectStore("stockAdjustments");
@@ -519,6 +647,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       deltaUnits: input.deltaUnits,
       reason: input.reason,
       note: input.note ?? null,
+      actorId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -540,6 +669,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     units: number,
     note?: string,
   ): Promise<StockAdjustment> {
+    const actorId = await currentActorId();
     const conn = await db();
     const tx = conn.transaction(["stockAdjustments", "medications"], "readwrite");
     const stockStore = tx.objectStore("stockAdjustments");
@@ -555,6 +685,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       deltaUnits: units - currentTotal,
       reason: "correction",
       note: note ?? null,
+      actorId,
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -574,26 +705,42 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
   async function exportHousehold(): Promise<HouseholdBackup> {
     const conn = await db();
     const tx = conn.transaction(
-      ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "meta"],
+      ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "meta", "households", "users"],
       "readonly",
     );
-    const [pets, meds, courses, doseEvents, stockAdjustments, schemaVersionRec, tintCursorRec, lastSweepDayRec] =
-      await Promise.all([
-        tx.objectStore("pets").getAll(),
-        tx.objectStore("medications").getAll(),
-        tx.objectStore("courses").getAll(),
-        tx.objectStore("doseEvents").getAll(),
-        tx.objectStore("stockAdjustments").getAll(),
-        tx.objectStore("meta").get("schemaVersion"),
-        tx.objectStore("meta").get("tintCursor"),
-        tx.objectStore("meta").get("lastSweepDay"),
-      ]);
+    const [
+      pets,
+      meds,
+      courses,
+      doseEvents,
+      stockAdjustments,
+      households,
+      users,
+      schemaVersionRec,
+      tintCursorRec,
+      lastSweepDayRec,
+    ] = await Promise.all([
+      tx.objectStore("pets").getAll(),
+      tx.objectStore("medications").getAll(),
+      tx.objectStore("courses").getAll(),
+      tx.objectStore("doseEvents").getAll(),
+      tx.objectStore("stockAdjustments").getAll(),
+      tx.objectStore("households").getAll(),
+      tx.objectStore("users").getAll(),
+      tx.objectStore("meta").get("schemaVersion"),
+      tx.objectStore("meta").get("tintCursor"),
+      tx.objectStore("meta").get("lastSweepDay"),
+    ]);
     await tx.done;
     // Includes soft-deleted rows in every array — a backup that drops
-    // tombstones cannot later sync (SPEC §8).
+    // tombstones cannot later sync (SPEC §8). Join codes are deliberately
+    // excluded (CONTRACT.md §1): short-lived single-use secrets, not backup
+    // material.
     return {
-      schemaVersion: (schemaVersionRec?.value as number | undefined) ?? 1,
+      schemaVersion: (schemaVersionRec?.value as number | undefined) ?? 2,
       exportedAt: now().toISOString(),
+      households,
+      users,
       pets,
       medications: meds.map(toMedication),
       courses,
@@ -607,9 +754,16 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
   }
 
   async function importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport> {
+    // Backfill targets are resolved BEFORE any household/user replacement, so
+    // a v1-shaped backup (no `households`/`users` keys, rows lacking
+    // `householdId`/`actorId`) backfills against the identity this repo
+    // already has, not one import is about to discard.
+    const fallbackHouseholdId = await currentHouseholdId();
+    const fallbackActorId = await currentActorId();
+
     const conn = await db();
     const tx = conn.transaction(
-      ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "meta"],
+      ["pets", "medications", "courses", "doseEvents", "stockAdjustments", "meta", "households", "users"],
       "readwrite",
     );
     const petsStore = tx.objectStore("pets");
@@ -618,6 +772,15 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     const eventsStore = tx.objectStore("doseEvents");
     const stockStore = tx.objectStore("stockAdjustments");
     const metaStore = tx.objectStore("meta");
+    const householdsStore = tx.objectStore("households");
+    const usersStore = tx.objectStore("users");
+
+    const backfillPets = (rows: Pet[]): Pet[] =>
+      rows.map((p) => (p.householdId ? p : { ...p, householdId: fallbackHouseholdId }));
+    const backfillEvents = (rows: DoseEvent[]): DoseEvent[] =>
+      rows.map((e) => (e.actorId ? e : { ...e, actorId: fallbackActorId }));
+    const backfillAdjustments = (rows: StockAdjustment[]): StockAdjustment[] =>
+      rows.map((a) => (a.actorId ? a : { ...a, actorId: fallbackActorId }));
 
     if (mode === "replace") {
       await Promise.all([
@@ -627,11 +790,29 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
         eventsStore.clear(),
         stockStore.clear(),
       ]);
-      for (const p of b.pets) await petsStore.put(p);
+      for (const p of backfillPets(b.pets)) await petsStore.put(p);
       for (const m of b.medications) await medsStore.put(toStoredMedication(m));
       for (const c of b.courses) await coursesStore.put(c);
-      for (const e of b.doseEvents) await eventsStore.put(e);
-      for (const a of b.stockAdjustments) await stockStore.put(a);
+      for (const e of backfillEvents(b.doseEvents)) await eventsStore.put(e);
+      for (const a of backfillAdjustments(b.stockAdjustments)) await stockStore.put(a);
+
+      // Only replace households/users when the backup actually carries them —
+      // a v1 backup has neither key, and the existing rows (and hence the
+      // current identity) must survive untouched, exactly as memoryRepo's
+      // `household`/`users` variables do when `b.households`/`b.users` are
+      // absent.
+      let householdId = fallbackHouseholdId;
+      if (b.households && b.households[0]) {
+        await householdsStore.clear();
+        for (const h of b.households) await householdsStore.put(h);
+        householdId = b.households[0].id;
+      }
+      let selfUserId = fallbackActorId;
+      if (b.users) {
+        await usersStore.clear();
+        for (const u of b.users) await usersStore.put(u);
+        selfUserId = b.users.find((u) => u.isSelf)?.id ?? fallbackActorId;
+      }
 
       // Transport the real cursor/sweep-day when the backup carries them
       // (a v1 backup written after this fix); fall back to the old,
@@ -639,7 +820,15 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       await metaStore.put({ key: "tintCursor", value: b.meta?.tintCursor ?? b.pets.length });
       await metaStore.put({ key: "schemaVersion", value: b.schemaVersion });
       await metaStore.put({ key: "lastSweepDay", value: b.meta?.lastSweepDay ?? null });
+      await metaStore.put({ key: "householdId", value: householdId });
+      await metaStore.put({ key: "selfUserId", value: selfUserId });
       await tx.done;
+
+      // The closure cache must track whatever identity replace just
+      // installed — a stale cache would stamp new writes with an id that no
+      // longer resolves to a row in this database.
+      cachedHouseholdId = householdId;
+      cachedSelfUserId = selfUserId;
 
       return {
         mode,
@@ -653,7 +842,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     }
 
     const petsR = await mergeRows(
-      b.pets,
+      backfillPets(b.pets),
       (id) => petsStore.get(id),
       (row) => petsStore.put(row),
     );
@@ -668,15 +857,32 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       (row) => coursesStore.put(row),
     );
     const eventsR = await mergeRows(
-      b.doseEvents,
+      backfillEvents(b.doseEvents),
       (id) => eventsStore.get(id),
       (row) => eventsStore.put(row),
     );
     const stockR = await mergeRows(
-      b.stockAdjustments,
+      backfillAdjustments(b.stockAdjustments),
       (id) => stockStore.get(id),
       (row) => stockStore.put(row),
     );
+
+    // Merge never changes whose local repo this is — only the replace path
+    // reassigns `meta.householdId`/`meta.selfUserId`, matching memoryRepo.
+    if (b.users) {
+      await mergeRows(
+        b.users,
+        (id) => usersStore.get(id),
+        (row) => usersStore.put(row),
+      );
+    }
+    if (b.households && b.households[0]) {
+      await mergeRows(
+        b.households,
+        (id) => householdsStore.get(id),
+        (row) => householdsStore.put(row),
+      );
+    }
 
     // Merge only ever moves the cursor forward, and only when the incoming
     // backup actually carries one — an old backup without `meta` must not
@@ -698,6 +904,160 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       stockAdjustments: stockR.written,
       skipped: petsR.skipped + medsR.skipped + coursesR.skipped + eventsR.skipped + stockR.skipped,
     };
+  }
+
+  // --- household -----------------------------------------------------
+
+  async function getHousehold(id: string): Promise<Household | null> {
+    const h = await (await db()).get("households", id);
+    return h && h.deletedAt === null ? h : null;
+  }
+
+  async function getCurrentHousehold(): Promise<Household> {
+    const id = await currentHouseholdId();
+    const h = await (await db()).get("households", id);
+    if (!h) notFound("Household", id);
+    return h;
+  }
+
+  async function updateHousehold(
+    id: string,
+    patch: Partial<Pick<Household, "name">>,
+  ): Promise<Household> {
+    const conn = await db();
+    const tx = conn.transaction(["households"], "readwrite");
+    const store = tx.objectStore("households");
+    const existing = assertAlive(await store.get(id), "Household", id);
+    const updated: Household = { ...existing, ...patch, updatedAt: now().toISOString() };
+    await store.put(updated);
+    await tx.done;
+    return updated;
+  }
+
+  // --- users -----------------------------------------------------------
+
+  async function listUsers(opts?: { includeRemoved?: boolean }): Promise<User[]> {
+    const includeRemoved = opts?.includeRemoved ?? false;
+    const all = await (await db()).getAll("users");
+    return all.filter((u) => includeRemoved || u.deletedAt === null);
+  }
+
+  async function getUser(id: string): Promise<User | null> {
+    const u = await (await db()).get("users", id);
+    return u && u.deletedAt === null ? u : null;
+  }
+
+  async function getCurrentUser(): Promise<User> {
+    const id = await currentActorId();
+    const u = await (await db()).get("users", id);
+    if (!u) notFound("User", id);
+    return u;
+  }
+
+  async function upsertUser(user: User): Promise<User> {
+    await (await db()).put("users", user);
+    return user;
+  }
+
+  async function updateUser(
+    id: string,
+    patch: Partial<Pick<User, "displayName" | "tint">>,
+  ): Promise<User> {
+    const conn = await db();
+    const tx = conn.transaction(["users"], "readwrite");
+    const store = tx.objectStore("users");
+    const existing = assertAlive(await store.get(id), "User", id);
+    const updated: User = { ...existing, ...patch, updatedAt: now().toISOString() };
+    await store.put(updated);
+    await tx.done;
+    return updated;
+  }
+
+  async function removeUser(id: string): Promise<void> {
+    // Soft delete: history keeps `actorId`, and `displayNameFor` still
+    // resolves the name via `listUsers({ includeRemoved: true })`. Never
+    // remove the row.
+    const conn = await db();
+    const tx = conn.transaction(["users"], "readwrite");
+    const store = tx.objectStore("users");
+    const existing = assertAlive(await store.get(id), "User", id);
+    const ts = now().toISOString();
+    await store.put({ ...existing, deletedAt: ts, updatedAt: ts });
+    await tx.done;
+  }
+
+  // --- join codes --------------------------------------------------------
+
+  async function listJoinCodes(): Promise<JoinCode[]> {
+    const all = await (await db()).getAll("joinCodes");
+    return all.filter((c) => c.deletedAt === null);
+  }
+
+  async function getJoinCodeByCode(code: string): Promise<JoinCode | null> {
+    const conn = await db();
+    const matches = await conn.getAllFromIndex("joinCodes", "by_code", code);
+    const alive = matches.find((c) => c.deletedAt === null);
+    return alive ?? null;
+  }
+
+  async function createJoinCode(input: { code: string; expiresAt: IsoDateTime }): Promise<JoinCode> {
+    const householdId = await currentHouseholdId();
+    const createdBy = await currentActorId();
+    const conn = await db();
+    const tx = conn.transaction(["joinCodes"], "readwrite");
+    const store = tx.objectStore("joinCodes");
+    const ts = now().toISOString();
+
+    // SPEC §5: one live code at a time — revoke any other live code for the
+    // household first. "Live" is `revokedAt === null && usedBy === null`,
+    // ignoring `expiresAt` (matches memoryRepo).
+    const existingForHousehold = await store.index("by_householdId").getAll(householdId);
+    for (const jc of existingForHousehold) {
+      if (jc.deletedAt === null && jc.revokedAt === null && jc.usedBy === null) {
+        await store.put({ ...jc, revokedAt: ts, updatedAt: ts });
+      }
+    }
+
+    const joinCode: JoinCode = {
+      id: newId(),
+      householdId,
+      code: input.code,
+      createdBy,
+      expiresAt: input.expiresAt,
+      usedBy: null,
+      revokedAt: null,
+      createdAt: ts,
+      updatedAt: ts,
+      deletedAt: null,
+    };
+    await store.add(joinCode);
+    await tx.done;
+    return joinCode;
+  }
+
+  async function markJoinCodeUsed(id: string, usedBy: string): Promise<JoinCode> {
+    const conn = await db();
+    const tx = conn.transaction(["joinCodes"], "readwrite");
+    const store = tx.objectStore("joinCodes");
+    const jc = await store.get(id);
+    if (!jc) notFound("JoinCode", id);
+    const updated: JoinCode = { ...jc, usedBy, updatedAt: now().toISOString() };
+    await store.put(updated);
+    await tx.done;
+    return updated;
+  }
+
+  async function revokeJoinCode(id: string): Promise<JoinCode> {
+    const conn = await db();
+    const tx = conn.transaction(["joinCodes"], "readwrite");
+    const store = tx.objectStore("joinCodes");
+    const jc = await store.get(id);
+    if (!jc) notFound("JoinCode", id);
+    const ts = now().toISOString();
+    const updated: JoinCode = { ...jc, revokedAt: ts, updatedAt: ts };
+    await store.put(updated);
+    await tx.done;
+    return updated;
   }
 
   // --- meta -----------------------------------------------------------
@@ -740,5 +1100,21 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     importHousehold,
     getMeta,
     setMeta,
+    currentActorId,
+    currentHouseholdId,
+    getHousehold,
+    getCurrentHousehold,
+    updateHousehold,
+    listUsers,
+    getUser,
+    getCurrentUser,
+    upsertUser,
+    updateUser,
+    removeUser,
+    listJoinCodes,
+    getJoinCodeByCode,
+    createJoinCode,
+    markJoinCodeUsed,
+    revokeJoinCode,
   };
 }
