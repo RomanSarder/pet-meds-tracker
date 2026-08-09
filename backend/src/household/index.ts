@@ -240,25 +240,39 @@ export default fastifyPlugin(async (fastify) => {
       const now = new Date();
       const householdId = user.householdId;
 
-      // Issuing a code revokes every other live code first, so at most one is ever live.
-      await fastify.db
-        .update(joinCodes)
-        .set({ revokedAt: now })
-        .where(and(eq(joinCodes.householdId, householdId), isNull(joinCodes.usedBy), isNull(joinCodes.revokedAt)));
+      // SPEC §5: "Only one code is live per household at a time; issuing a new one
+      // revokes the previous." Revoke and insert must land together — a bare
+      // sequence of two statements lets a concurrent issuer interleave between
+      // them, so both see nothing to revoke and both insert a live code. The
+      // partial unique index `join_codes_one_live_per_household` is the backstop
+      // that makes the losing side fail rather than create a second live code.
+      const inserted = await fastify.db.transaction(async (tx) => {
+        await tx
+          .update(joinCodes)
+          .set({ revokedAt: now })
+          .where(
+            and(eq(joinCodes.householdId, householdId), isNull(joinCodes.usedBy), isNull(joinCodes.revokedAt)),
+          );
 
-      let inserted: JoinCodeRow | undefined;
-      for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
-        [inserted] = await fastify.db
-          .insert(joinCodes)
-          .values({
-            householdId,
-            code: generateJoinCode(),
-            createdBy: user.id,
-            expiresAt: new Date(now.getTime() + JOIN_CODE_TTL_MS),
-          })
-          .onConflictDoNothing()
-          .returning();
-      }
+        // Retries cover a collision on the globally unique `code` column only —
+        // six characters from a 32-glyph alphabet is ~1e9 codes, so this
+        // effectively never loops, but a duplicate must not surface as a 500.
+        let row: JoinCodeRow | undefined;
+        for (let attempt = 0; attempt < 5 && !row; attempt++) {
+          [row] = await tx
+            .insert(joinCodes)
+            .values({
+              householdId,
+              code: generateJoinCode(),
+              createdBy: user.id,
+              expiresAt: new Date(now.getTime() + JOIN_CODE_TTL_MS),
+            })
+            .onConflictDoNothing()
+            .returning();
+        }
+        return row;
+      });
+
       if (!inserted) {
         throw fastify.httpErrors.internalServerError();
       }

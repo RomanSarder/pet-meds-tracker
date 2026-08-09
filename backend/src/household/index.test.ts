@@ -3,6 +3,7 @@ import { buildApp, mockDbMulti } from "../test-utils";
 import householdPlugin from "./index";
 import { hashSecret } from "../auth/utils";
 import { addToDate } from "../utils";
+import { getTableConfig } from "drizzle-orm/pg-core";
 import { households, joinCodes, users } from "../db/schema";
 
 const USER_ID = "00000000-0000-0000-0000-000000000001";
@@ -196,6 +197,31 @@ describe("POST /household/codes", () => {
     expect(insertSpy).toHaveBeenCalledTimes(1);
     expect(insertSpy.mock.calls[0][0]).toBe(joinCodes);
     expect(res.json().code).toBe("NEWCODE");
+  });
+
+  // SPEC §5: "Only one code is live per household at a time." Revoke-then-insert
+  // as two loose statements lets a concurrent issuer interleave between them, so
+  // both see nothing to revoke and both insert — leaving the older code live and
+  // redeemable after a newer one was issued, which SPEC §5 forbids.
+  it("revokes and inserts inside one transaction, so two issuers cannot both leave a live code", async () => {
+    const db = mockDbMulti([await buildSession()], [], [makeUser()], [], [makeJoinCode()]);
+    const app = build(db);
+    const res = await authed(app, { method: "POST", url: "/household/codes" });
+    expect(res.statusCode).toBe(200);
+    expect(db.transactions).toBe(1);
+  });
+
+  // The transaction alone is not sufficient at READ COMMITTED, so the invariant is
+  // also expressed in the schema. This asserts the partial unique index exists and
+  // is scoped to live codes only — a plain unique index on household_id would
+  // wrongly forbid a household from ever having a second code at all.
+  it("declares a partial unique index so two live codes per household are unrepresentable", () => {
+    const indexes = getTableConfig(joinCodes).indexes;
+    const live = indexes.find((i) => i.config.name === "join_codes_one_live_per_household");
+    expect(live).toBeDefined();
+    expect(live!.config.unique).toBe(true);
+    expect(live!.config.columns.map((c: any) => c.name)).toEqual(["household_id"]);
+    expect(live!.config.where).toBeDefined();
   });
 });
 
