@@ -36,4 +36,20 @@ describe("TabBar", () => {
     expect(screen.queryByRole("img", { name: "paw-print" })).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "package" })).not.toBeInTheDocument();
   });
+
+  // SPEC §10 tap-target coverage: each tab button measures 56x43.5, below
+  // the 44px minimum. `padding: "4px 0"` grows the border box (and so the
+  // pointer target) to 51.5px tall; the equal negative margin pulls it back
+  // out of flow so the <nav>'s height and every glyph/label position stay
+  // pixel-identical. See ds/README.md "Deliberate differences from the
+  // source".
+  it("gives each tab button the padding/negative-margin pair that grows the pointer target in place", () => {
+    render(<TabBar value="today" />);
+
+    for (const name of ["Today", "Pets", "Supplies"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.style.padding).toBe("4px 0px");
+      expect(button.style.margin).toBe("-4px 0px");
+    }
+  });
 });

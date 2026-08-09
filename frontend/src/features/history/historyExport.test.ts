@@ -8,6 +8,7 @@ function makeEntry(overrides: Partial<LogEntry> = {}): LogEntry {
     kind: "dose",
     status: "given",
     at: "2026-08-01T06:00:00.000Z",
+    displayAt: "2026-08-01T06:00:00.000Z",
     time: "07:00",
     title: "Metacam 0.4 ml",
     detail: "Given",

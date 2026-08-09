@@ -39,17 +39,18 @@ export function ScreenHeader({
       }}
     >
       <div>
-        <div
+        <h1
           style={{
             fontSize: 28,
             fontWeight: 800,
             letterSpacing: "-0.01em",
             lineHeight: 1.1,
             color: "var(--ink-1)",
+            margin: 0,
           }}
         >
           {title}
-        </div>
+        </h1>
         {subtitle ? (
           <div style={{ fontSize: 14, color: "var(--ink-3)", marginTop: 4 }}>
             {subtitle}

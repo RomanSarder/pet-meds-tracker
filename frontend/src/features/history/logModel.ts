@@ -23,13 +23,21 @@ export interface LogEntry {
   /** Drives the dot colour in the screen: green/grey/berry/terracotta. */
   status: LogEntryStatus;
   /**
-   * ISO instant. THE ORDERING AND DAY-GROUPING KEY. For a dose entry this is
-   * `scheduledFor ?? givenAt` (SPEC §3d) — NOT necessarily when the row is
-   * displayed as having happened. For a course entry it is the CourseEvent's
-   * own `at`.
+   * ISO instant. THE DAY-GROUPING KEY ONLY (SPEC §3d — which calendar day an
+   * event belongs to). For a dose entry this is `scheduledFor ?? givenAt`;
+   * for a course entry it is the CourseEvent's own `at`. NOT used for
+   * ordering — see `displayAt` — and NOT necessarily when the row is
+   * displayed as having happened.
    */
   at: string;
-  /** "HH:MM" — what the row displays. Always derived from the actual instant (`givenAt`/`at`), never from `at` above. */
+  /**
+   * ISO instant. THE ORDERING KEY, and what `time` is derived from — SPEC
+   * §6.4's "newest first" means newest as the user reads it on the row, i.e.
+   * the instant actually displayed. For a dose entry this is `de.givenAt`;
+   * for a course entry it is the CourseEvent's own `at`.
+   */
+  displayAt: string;
+  /** "HH:MM" — what the row displays. Always derived from the actual instant (`displayAt`), never from `at` above. */
   time: string;
   /** "Metacam 0.4 ml". */
   title: string;
@@ -153,6 +161,7 @@ function buildDoseEntry(
     kind: "dose",
     status: de.status,
     at,
+    displayAt: de.givenAt,
     time: formatHHMM(givenAtDate),
     title,
     detail: joinMeta(clauses),
@@ -214,6 +223,7 @@ function buildCourseEntry(ce: CourseEvent, medication: Medication): LogEntry {
     kind: "course",
     status: "course",
     at: ce.at,
+    displayAt: ce.at,
     time: formatHHMM(new Date(ce.at)),
     title: courseLabel(medication.name, ce.after.doseAmount, ce.after.doseUnit),
     detail: courseEventDetail(ce),
@@ -221,8 +231,19 @@ function buildCourseEntry(ce: CourseEvent, medication: Medication): LogEntry {
   };
 }
 
+/**
+ * Newest first, in three passes: the DAY an entry belongs to (`at`, per SPEC
+ * §3d — a late-night dose still sorts under the day it was scheduled for),
+ * then the instant actually displayed on the row (`displayAt`, per SPEC
+ * §6.4 — "newest first" means newest as the user reads it), then the
+ * deterministic id tie-break. Day keys are "YYYY-MM-DD" strings, so a plain
+ * string comparison is correct and total.
+ */
 function compareEntriesNewestFirst(a: LogEntry, b: LogEntry): number {
-  const diff = new Date(b.at).getTime() - new Date(a.at).getTime();
+  const dayA = localDayKey(new Date(a.at));
+  const dayB = localDayKey(new Date(b.at));
+  if (dayA !== dayB) return dayA < dayB ? 1 : -1;
+  const diff = new Date(b.displayAt).getTime() - new Date(a.displayAt).getTime();
   if (diff !== 0) return diff;
   // Arbitrary but deterministic tie-break so output is stable across runs.
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;

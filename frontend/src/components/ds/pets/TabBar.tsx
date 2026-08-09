@@ -56,6 +56,15 @@ export function TabBar({
               gap: 5,
               minWidth: 56,
               color: on ? "var(--accent)" : "var(--ink-3)",
+              // SPEC §10: every tap target >= 44px. The button paints no
+              // background/border, so growing the border box via padding
+              // (matched by an equal negative margin) grows the pointer
+              // target to 51.5px tall without moving it out of flow — the
+              // <nav>'s height and every glyph/label position stay
+              // pixel-identical. Do not add padding to the <nav> itself;
+              // AppShell (frozen) overrides its paddingBottom.
+              padding: "4px 0",
+              margin: "-4px 0",
             }}
           >
             <Icon name={t.icon} size={22} aria-hidden />

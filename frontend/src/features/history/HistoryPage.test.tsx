@@ -536,6 +536,71 @@ describe("HistoryView", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
   });
 
+  it("renders exactly one <h1>, the screen title", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const { container } = renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    const headings = container.querySelectorAll("h1");
+    expect(headings).toHaveLength(1);
+    expect(headings[0]?.textContent).toBe("History");
+  });
+
+  it("renders dose rows in the order they are DISPLAYED (SPEC §6.4), not the order they were scheduled", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const medicationB = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Rimadyl", form: "tablet", unit: "tablet" }),
+    );
+    // Two different courses so the repo's dedup guard (doses within the
+    // fixedTimes grace window of one another, checked per-course) never
+    // fires between the two doses below.
+    const courseA = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+    const courseB = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medicationB.id, TODAY));
+
+    // Dose A: scheduled 05:00, given 07:50 -> displays "07:50".
+    // Dose B: scheduled 07:00, given 07:40 -> displays "07:40".
+    // Sorting by the scheduling instant (the pre-fix bug) would put B
+    // (scheduled 07:00) ahead of A (scheduled 05:00) — the wrong order, since
+    // the rows actually read "07:50" then "07:40" to the user. Sorting by the
+    // displayed instant correctly puts A ahead of B.
+    const aScheduled = atLocalTime(TODAY, "05:00").toISOString();
+    const aGiven = atLocalTime(TODAY, "07:50").toISOString();
+    await withClock(aGiven, () =>
+      repo.logDose({
+        courseId: courseA.id,
+        status: "given",
+        scheduledFor: aScheduled,
+        givenAt: aGiven,
+        amount: 0.4,
+      }),
+    );
+
+    const bScheduled = atLocalTime(TODAY, "07:00").toISOString();
+    const bGiven = atLocalTime(TODAY, "07:40").toISOString();
+    await withClock(bGiven, () =>
+      repo.logDose({
+        courseId: courseB.id,
+        status: "given",
+        scheduledFor: bScheduled,
+        givenAt: bGiven,
+        amount: 0.4,
+      }),
+    );
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    const times = (await screen.findAllByText(/^\d{2}:\d{2}$/)).map((el) => el.textContent);
+    expect(times.indexOf("07:50")).toBeGreaterThanOrEqual(0);
+    expect(times.indexOf("07:40")).toBeGreaterThanOrEqual(0);
+    expect(times.indexOf("07:50")).toBeLessThan(times.indexOf("07:40"));
+  });
+
   it("never renders an email address anywhere in the screen (SPEC §12)", async () => {
     const EMAIL = "clover.mum@example.com";
     const household: Household = {

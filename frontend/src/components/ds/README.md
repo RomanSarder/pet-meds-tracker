@@ -75,16 +75,46 @@ Outside `DsRoot` the tokens do not resolve and components render unstyled.
   lucide token). `actionLabel` is optional and additive; screens that pass no `action` at all
   are unaffected. Zero-pixel change; should upstream, together with real copy for every
   `ScreenHeader` call site that has an action.
+- **Tap targets below SPEC §10's 44px minimum now hit 44px, without moving any visible pixel.**
+  Re-measured in source rather than trusting the prior numbers, which turned out to be
+  half-wrong: `TabBar` items are 56×43.5, `IconButton`'s default `size` is 40×40, and `Chip`
+  (also used by `SegmentedControl`, unchanged) is 34px tall — all confirmed. `Button` at
+  `size="md"` is **44px tall already** (`SIZES.md.height` is 44, not 36); the real violation is
+  `size="sm"` at 36px. Two mechanisms, chosen per control:
+  - `TabBar`'s tab `<button>` paints no background/border, so its box is invisible — growing the
+    box itself costs nothing visually. Each tab now carries `padding: "4px 0"` matched by
+    `margin: "-4px 0"`: the padding grows the border box (and so the pointer target) to 51.5px
+    tall, and the equal negative margin pulls it back out of flow, so the `<nav>`'s height and
+    every glyph/label position are pixel-identical to before. (`AppShell`, frozen, overrides the
+    `<nav>`'s `paddingBottom`, which is why the fix lives on the tab buttons and not the `<nav>`.)
+  - `IconButton`, `Chip`, and `Button` at `size="sm"` each paint a visible background or border
+    on their own box, so padding would enlarge what's drawn. Instead each carries a shared
+    `.ds-hit-44` class (`ds.css`): a `::after` pseudo-element, centred via
+    `position: relative` + `top/left: 50%` + `transform: translate(-50%, -50%)`, sized
+    `max(100%, 44px)` square. It paints nothing, sits outside layout, and hit-tests as the
+    control — a true no-op on any control already ≥44px, which is why `Button` at `size="md"`/
+    `"lg"` and any caller-supplied `IconButton` `size` ≥44 are untouched. Each component merges
+    this class with a caller-supplied `className` rather than clobbering it. Visual sizes are
+    unchanged: `IconButton`'s default is still 40×40, `Chip` is still 34px tall, and no `SIZES`
+    entry in `Button.tsx` changed. Pointer targets are now 44×44 (`IconButton`, `Chip`, `Button`
+    `size="sm"`) or 56×51.5 (`TabBar`). Zero-pixel change; should upstream.
+- **`ScreenHeader`'s title is an `<h1>`**, not a `<div>`. It is the only heading-shaped element on
+  any screen that uses `ScreenHeader`, so promoting it gives those screens their first `<h1>`.
+  Semantic only: font-size, font-weight and letter-spacing are the same inline values as before,
+  with `margin: 0` now explicit (the DS has no reset that would otherwise zero a heading's
+  default margin, so leaving it implicit would have shifted layout). No class, wrapper or copy
+  changed. Zero-pixel change; should upstream.
 
 ## Known deviations still outstanding (not fixed here)
 
 Measured in a real browser via the accessibility tree; all are upstream work, deliberately
 deferred rather than patched locally because fixing them changes appearance, size or position:
 
-- **Tap targets below SPEC §10's 44px minimum**: `TabBar` items measure 56×43.5, `IconButton`'s
-  default `size` is 40×40, `Button` at `size="md"` is 36px tall, `Chip` is 34px tall.
-- **No screen has an `<h1>`.** `ScreenHeader` renders its title as a `<div>`, not a heading
-  element.
+- **Several screens still have no `<h1>`.** `ScreenHeader`'s title is now one, but
+  `HistoryPage`, `PetDetailPage`, `PetFormPage` and `CourseFormPage` render their own headers
+  outside `ScreenHeader` and were not touched here — they live under `features/`, not `ds/`.
+  (`HistoryPage` already hand-rolls its own `<h1>` at the call site; `PetDetailPage`,
+  `PetFormPage` and `CourseFormPage` still render a plain, non-heading title.)
 
 ## Conventions the components assume
 

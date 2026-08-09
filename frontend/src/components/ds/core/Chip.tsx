@@ -5,9 +5,12 @@ export interface ChipProps extends Omit<ComponentProps<"button">, "style"> {
   style?: CSSProperties;
 }
 
-export function Chip({ selected, children, style, ...rest }: ChipProps) {
+export function Chip({ selected, children, style, className, ...rest }: ChipProps) {
   return (
     <button
+      // SPEC §10: Chip's 34px height is below the 44px tap-target minimum.
+      // `.ds-hit-44` grows the pointer target only — see ds.css.
+      className={["ds-hit-44", className].filter(Boolean).join(" ")}
       style={{
         height: 34,
         padding: "0 14px",

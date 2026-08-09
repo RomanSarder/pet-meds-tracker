@@ -215,17 +215,18 @@ export function HistoryView({ petId }: { petId: string }) {
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <PetAvatar name={petData.name} tint={petData.tint} size={52} />
             <div>
-              <div
+              <h1
                 style={{
                   fontSize: 28,
                   fontWeight: 800,
                   letterSpacing: "-0.01em",
                   lineHeight: 1.1,
                   color: "var(--ink-1)",
+                  margin: 0,
                 }}
               >
                 History
-              </div>
+              </h1>
               <div style={{ fontSize: 14, color: "var(--ink-3)", marginTop: 3 }}>
                 {speciesLabel(petData.species)} · {activeCourseCount} active courses
               </div>

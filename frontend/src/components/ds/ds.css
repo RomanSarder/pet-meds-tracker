@@ -21,3 +21,19 @@
   /* Times and counts align in columns. */
   font-variant-numeric: tabular-nums;
 }
+
+/* SPEC §10 — every tap target >= 44px. Grows the POINTER target without
+   moving a pixel: the pseudo-element is centred on the control, is outside
+   layout, paints nothing, and hit-tests as the control itself. */
+.ds-hit-44 {
+  position: relative;
+}
+.ds-hit-44::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}

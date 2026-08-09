@@ -26,6 +26,7 @@ export function Button({
   block,
   children,
   style,
+  className,
   ...rest
 }: ButtonProps) {
   const s = SIZES[size] ?? SIZES.md;
@@ -71,6 +72,12 @@ export function Button({
       onMouseLeave={(e) => {
         e.currentTarget.style.transform = "none";
       }}
+      // SPEC §10: only size="sm" (36px tall) is below the 44px tap-target
+      // minimum — "md" (44px) and "lg" (52px) already pass, so the hit-area
+      // class (see ds.css) is applied to "sm" only.
+      className={
+        size === "sm" ? ["ds-hit-44", className].filter(Boolean).join(" ") : className
+      }
       style={{ ...base, ...variants[variant], ...style }}
       {...rest}
     >

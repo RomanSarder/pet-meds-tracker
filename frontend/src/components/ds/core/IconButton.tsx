@@ -18,6 +18,7 @@ export function IconButton({
   variant = "outline",
   label,
   style,
+  className,
   ...rest
 }: IconButtonProps) {
   const variants: Record<NonNullable<IconButtonProps["variant"]>, CSSProperties> = {
@@ -40,6 +41,10 @@ export function IconButton({
   return (
     <button
       aria-label={label || icon}
+      // SPEC §10: default size (40) is below the 44px tap-target minimum.
+      // `.ds-hit-44` grows the pointer target only — see ds.css — and is a
+      // no-op once a caller sizes this 44px or larger.
+      className={["ds-hit-44", className].filter(Boolean).join(" ")}
       style={{
         width: size,
         height: size,

@@ -154,6 +154,67 @@ describe("buildLogEntries", () => {
     expect(entries.map((e) => e.id)).toEqual(["dose-late", "cev-mid", "dose-early"]);
   });
 
+  describe("within-day ordering: sorts by the displayed time, not the scheduling instant", () => {
+    it("a dose given late sorts by its givenAt, not its scheduledFor", () => {
+      const course = makeCourse();
+      const medication = makeMedication();
+      // Dose A: scheduled 08:00, given 19:10 — displays "19:10".
+      // Sorting by `at` (== scheduledFor here, since both are `given`) would
+      // put B (scheduled 19:00) ahead of A (scheduled 08:00) — the wrong,
+      // pre-fix order. Sorting by `displayAt` (== givenAt) correctly puts A
+      // (given 19:10) ahead of B (given 19:09).
+      const doseA = makeDoseEvent({
+        id: "dose-a",
+        scheduledFor: "2026-08-01T07:00:00.000Z", // 08:00 BST
+        givenAt: "2026-08-01T18:10:00.000Z", // 19:10 BST
+      });
+      // Dose B: scheduled 19:00, given 19:09 — displays "19:09".
+      const doseB = makeDoseEvent({
+        id: "dose-b",
+        scheduledFor: "2026-08-01T18:00:00.000Z", // 19:00 BST
+        givenAt: "2026-08-01T18:09:00.000Z", // 19:09 BST
+      });
+
+      const entries = buildLogEntries(
+        srcOf({ courses: [course], medications: [medication], doseEvents: [doseA, doseB] }),
+      );
+
+      expect(entries.map((e) => e.id)).toEqual(["dose-a", "dose-b"]);
+      expect(entries.map((e) => e.time)).toEqual(["19:10", "19:09"]);
+    });
+
+    it("a course lifecycle event interleaves with doses on the same day by its displayed time", () => {
+      const course = makeCourse();
+      const medication = makeMedication();
+      const doseMorning = makeDoseEvent({
+        id: "dose-morning",
+        scheduledFor: "2026-08-01T07:00:00.000Z", // 08:00 BST
+        givenAt: "2026-08-01T07:00:00.000Z", // 08:00 BST
+      });
+      const coursePaused = makeCourseEvent({
+        id: "cev-paused",
+        kind: "paused",
+        at: "2026-08-01T11:00:00.000Z", // 12:00 BST — between the two doses
+      });
+      const doseEvening = makeDoseEvent({
+        id: "dose-evening",
+        scheduledFor: "2026-08-01T18:00:00.000Z", // 19:00 BST
+        givenAt: "2026-08-01T18:00:00.000Z", // 19:00 BST
+      });
+
+      const entries = buildLogEntries(
+        srcOf({
+          courses: [course],
+          medications: [medication],
+          doseEvents: [doseMorning, doseEvening],
+          courseEvents: [coursePaused],
+        }),
+      );
+
+      expect(entries.map((e) => e.id)).toEqual(["dose-evening", "cev-paused", "dose-morning"]);
+    });
+  });
+
   describe("§3d day boundary: a 23:00-scheduled dose logged at 00:20", () => {
     it("groups to the day it was scheduled for, not the day it was logged", () => {
       const course = makeCourse({ schedule: { kind: "fixedTimes", times: ["23:00"] } });

@@ -202,26 +202,26 @@ describe("router", () => {
 
       const title = await screen.findByText(TODAY_HEADING);
       expect(title).toBeInTheDocument();
-      expect(screen.queryByText("Pets", { selector: "div" })).not.toBeInTheDocument();
-      expect(screen.queryByText("Supplies", { selector: "div" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { level: 1, name: "Pets" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { level: 1, name: "Supplies" })).not.toBeInTheDocument();
     });
 
     it("renders the Pets stub at /pets", async () => {
       renderApp("/pets");
 
-      const title = await screen.findByText("Pets", { selector: "div" });
+      const title = await screen.findByRole("heading", { level: 1, name: "Pets" });
       expect(title).toBeInTheDocument();
-      expect(screen.queryByText("Today", { selector: "div" })).not.toBeInTheDocument();
-      expect(screen.queryByText("Supplies", { selector: "div" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { level: 1, name: "Today" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { level: 1, name: "Supplies" })).not.toBeInTheDocument();
     });
 
     it("renders the Supplies stub at /supplies", async () => {
       renderApp("/supplies");
 
-      const title = await screen.findByText("Supplies", { selector: "div" });
+      const title = await screen.findByRole("heading", { level: 1, name: "Supplies" });
       expect(title).toBeInTheDocument();
-      expect(screen.queryByText("Today", { selector: "div" })).not.toBeInTheDocument();
-      expect(screen.queryByText("Pets", { selector: "div" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { level: 1, name: "Today" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { level: 1, name: "Pets" })).not.toBeInTheDocument();
     });
 
     it("switches screens via the tab bar", async () => {
@@ -235,11 +235,11 @@ describe("router", () => {
       // `aria-label` (e.g. "paw-print Pets"), so match by substring rather
       // than the exact visible label.
       await user.click(within(nav).getByRole("button", { name: /pets/i }));
-      await screen.findByText("Pets", { selector: "div" });
+      await screen.findByRole("heading", { level: 1, name: "Pets" });
       expect(router.state.location.pathname).toBe("/pets");
 
       await user.click(within(nav).getByRole("button", { name: /supplies/i }));
-      await screen.findByText("Supplies", { selector: "div" });
+      await screen.findByRole("heading", { level: 1, name: "Supplies" });
       expect(router.state.location.pathname).toBe("/supplies");
     });
   });
