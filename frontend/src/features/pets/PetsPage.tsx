@@ -11,6 +11,7 @@ import { ageLabel } from "./age";
 import { courseLabel, joinMeta, speciesLabel } from "./format";
 import { usePets } from "./hooks";
 import { useCourses, useMedications } from "../courses/hooks";
+import { useMembers } from "../household/hooks";
 
 export function PetsPage() {
   const navigate = useNavigate();
@@ -19,10 +20,13 @@ export function PetsPage() {
   const petsQuery = usePets();
   const coursesQuery = useCourses({ status: ["active"] });
   const medicationsQuery = useMedications();
+  const membersQuery = useMembers();
 
   const pets = petsQuery.data ?? [];
   const courses = coursesQuery.data ?? [];
   const medications = medicationsQuery.data ?? [];
+  const memberCount = membersQuery.data?.length ?? 0;
+  const memberCountLabel = memberCount === 1 ? "1 person" : `${memberCount} people`;
 
   const medicationsById = useMemo(() => {
     const map = new Map<string, Medication>();
@@ -51,6 +55,40 @@ export function PetsPage() {
     navigate({ to: "/pets/new" });
   }
 
+  function openHousehold() {
+    navigate({ to: "/household" });
+  }
+
+  const householdRow = (
+    <Card
+      onClick={openHousehold}
+      role="button"
+      tabIndex={0}
+      aria-label={`Household, ${memberCountLabel}`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          openHousehold();
+        } else if (e.key === " ") {
+          e.preventDefault();
+          openHousehold();
+        }
+      }}
+      style={{
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 8,
+        minHeight: "var(--tap-min)",
+      }}
+    >
+      <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink-1)" }}>
+        {`Household · ${memberCountLabel}`}
+      </span>
+      <span style={{ fontSize: 20, color: "var(--ink-3)" }}>›</span>
+    </Card>
+  );
+
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <ScreenHeader
@@ -60,15 +98,25 @@ export function PetsPage() {
         onAction={() => navigate({ to: "/courses/new" })}
       />
       {petsQuery.isLoading ? null : pets.length === 0 ? (
-        <EmptyState
-          icon="paw-print"
-          title="No pets yet"
-          action={
-            <Button variant="ink" size="lg" onClick={() => navigate({ to: "/pets/new" })}>
-              Add a pet
-            </Button>
-          }
-        />
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <EmptyState
+            icon="paw-print"
+            title="No pets yet"
+            action={
+              <Button variant="ink" size="lg" onClick={() => navigate({ to: "/pets/new" })}>
+                Add a pet
+              </Button>
+            }
+          />
+          <div style={{ padding: "0 22px 22px" }}>{householdRow}</div>
+        </div>
       ) : (
         <div
           style={{
@@ -162,6 +210,7 @@ export function PetsPage() {
             <Icon name="plus" size={18} />
             <span>Add a pet</span>
           </Card>
+          {householdRow}
         </div>
       )}
     </div>

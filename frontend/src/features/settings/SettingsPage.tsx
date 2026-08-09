@@ -2,7 +2,8 @@ import { useRef, useState, type ChangeEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { SessionUser } from "@pet-tracker/shared";
-import { qk } from "@/domain";
+import { displayNameFor, qk } from "@/domain";
+import { needsDisplayName, useMembers, useSelf } from "@/features/household/hooks";
 import { apiClient } from "@/shared/api";
 import { getRepo } from "@/data";
 import { downloadBackup, readBackupFile } from "@/data/backupFile";
@@ -15,14 +16,22 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const {
-    data: user,
-    isPending,
-    isError,
-  } = useQuery({
+  // The session query stays: signing out and the auth-gated states below depend
+  // on it. What it must NOT do any more is render `user.email` — SPEC §12: "No
+  // email address is rendered anywhere in the UI." This card predates that rule.
+  // The identity shown here is the display name, resolved through the same
+  // `displayNameFor` helper every other attribution surface uses (SPEC §5), so
+  // there is exactly one way a person's name reaches the screen.
+  const { isPending, isError } = useQuery({
     queryKey: qk.session(),
     queryFn: () => apiClient<SessionUser>("/auth/me"),
   });
+
+  const selfQuery = useSelf();
+  const membersQuery = useMembers();
+  const self = selfQuery.data ?? null;
+  const signedInName =
+    self && !needsDisplayName(self) ? displayNameFor(self.id, membersQuery.data ?? [self]) : null;
 
   const handleSignOut = async () => {
     await apiClient("/auth/sign-out", { method: "POST" });
@@ -96,7 +105,7 @@ export function SettingsPage() {
               marginBottom: 4,
             }}
           >
-            Signed in
+            {signedInName ? `Signed in as ${signedInName}` : "Signed in"}
           </div>
           {isPending ? (
             <div style={{ fontSize: 14, color: "var(--ink-3)" }}>
@@ -106,9 +115,7 @@ export function SettingsPage() {
             <div role="alert" style={{ fontSize: 14, color: "var(--alert)" }}>
               Could not load your session.
             </div>
-          ) : (
-            <div style={{ fontSize: 14, color: "var(--ink-2)" }}>{user?.email}</div>
-          )}
+          ) : null}
           <Button
             type="button"
             variant="secondary"

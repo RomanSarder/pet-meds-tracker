@@ -28,4 +28,14 @@ export const qk = {
   events: (filter: EventFilter) => ["events", filter] as const,
   courseEvents: (filter: EventFilter) => ["courseEvents", filter] as const,
   today: (day: LocalDate) => ["today", day] as const,
+  // SPEC §5 sharing (slice 8). Every key below is prefixed ["household"], so one
+  // invalidation of `qk.household()` refreshes the row, the members, self and the
+  // live join code together.
+  household: () => ["household"] as const,
+  householdRow: () => ["household", "row"] as const,
+  householdMembers: (opts?: { includeRemoved?: boolean }) =>
+    ["household", "members", opts] as const,
+  householdSelf: () => ["household", "self"] as const,
+  householdLiveCode: () => ["household", "liveCode"] as const,
+  householdJoinPreview: (code: string) => ["household", "joinPreview", code] as const,
 };

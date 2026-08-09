@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "join_codes_one_live_per_household" ON "join_codes" USING btree ("household_id") WHERE "join_codes"."used_by" is null and "join_codes"."revoked_at" is null;

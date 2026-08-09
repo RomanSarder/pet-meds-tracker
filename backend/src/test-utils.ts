@@ -34,6 +34,15 @@ export function mockDbMulti(...results: unknown[]) {
     }
     return Promise.resolve(result).then(res, rej);
   };
+  // Runs the callback against the same chain, so statements inside a transaction
+  // consume the same ordered result list as statements outside one. `transactions`
+  // counts the calls, which is how a test asserts that a multi-statement invariant
+  // (SPEC §5's one-live-join-code) was actually wrapped rather than left racy.
+  chain.transactions = 0;
+  chain.transaction = (fn: (tx: any) => Promise<unknown>) => {
+    chain.transactions++;
+    return fn(chain);
+  };
   return chain;
 }
 
