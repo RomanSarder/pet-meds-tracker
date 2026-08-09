@@ -16,7 +16,10 @@ export interface SupplyItem {
   /** Medication unit, e.g. "ml" | "tab" | "drop". Needed to format a quantity. */
   unit: string;
   forWhom: string;
-  stock: string;
+  /** SupplyRow `stock` — the tone-coloured stock text. undefined when stock
+   *  is not set: that case is rendered through `note` instead (see Task 1
+   *  write-up in projection.ts), so `stock` carries nothing to colour. */
+  stock: string | undefined;
   tone: SupplyTone;
   /** undefined hides the meter (SupplyRow only renders the bar for a number). */
   percent: number | undefined;
@@ -73,7 +76,15 @@ export function buildSupplyItems(input: {
     }
 
     const forWhom = forWhomLabel(petNames, schedules);
-    const stock = stockLabel(medication.stockUnits, medication.unit);
+    const stockText = stockLabel(medication.stockUnits, medication.unit);
+    // Stock-not-set case (Task 1): SupplyRow colours whatever is passed as
+    // `stock` using out/low/good, and "good" (green) is the fallback for
+    // anything that isn't out or low — so a plain string here would read as
+    // a positive assertion about stock that is actually UNKNOWN. Omit it
+    // from the coloured slot; the same "Stock not set" text is carried
+    // through `note` below (styled `var(--ink-2)`, a genuinely neutral
+    // tone) instead.
+    const stock = projection.stockSet ? stockText : undefined;
     const percent = projection.percent ?? undefined;
     const buyNow = projection.runsOutInsideHorizon;
 
@@ -99,8 +110,14 @@ export function buildSupplyItems(input: {
     } else if (projection.stockSet && projection.dailyUse > 0) {
       // Precedence 3: stocked, in-use medications report weeks of cover.
       note = weeksOfCoverLabel(projection.daysOfCover as number);
+    } else if (!projection.stockSet) {
+      // Precedence 4: stock not set. Carries the same "Stock not set" text
+      // that `stock` above deliberately omits, so it still reaches the
+      // user — just through the neutral `note` slot instead of the
+      // tone-coloured `stock` slot.
+      note = stockText;
     } else {
-      // Precedence 4: stock not set, or nothing is currently using it.
+      // Precedence 5: stocked, but nothing is currently using it.
       note = undefined;
     }
 

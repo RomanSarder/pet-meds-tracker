@@ -135,7 +135,14 @@ export function projectMedication(input: {
   let tone: SupplyTone;
   if (!stockSet) {
     // No urgency can be asserted with no stock figure — the row shows
-    // "Stock not set" and carries no meter.
+    // "Stock not set" and carries no meter. `tone` still has to be a valid
+    // SupplyTone to satisfy the type, so "good" is used here, but it is
+    // inert on screen: model.ts routes "Stock not set" through SupplyRow's
+    // neutral `note` slot instead of its tone-coloured `stock` slot (a
+    // green "good" would otherwise falsely assert positive stock for a
+    // figure that is actually UNKNOWN — see SPEC slice 11 Task 1), and
+    // `percent` is null below so no meter renders either. Nothing reads
+    // this tone value for the not-set case.
     tone = "good";
   } else if (medication.lowThreshold !== null) {
     // lowThreshold overrides the numeric day thresholds (SPEC §8) and tone

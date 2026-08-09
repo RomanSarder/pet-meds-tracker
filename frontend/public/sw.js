@@ -100,7 +100,7 @@ function handleNotificationClick(event) {
 // `CACHE_NAME` is versioned by hand: bump the suffix when the precache
 // list changes so `handleActivate` evicts the old shell instead of an
 // install leaving two caches around.
-var CACHE_NAME = "petmeds-shell-v1";
+var CACHE_NAME = "petmeds-shell-v2";
 
 // Small, stable, hash-free — deliberately excludes `/assets/...` (Vite's
 // content-hashed build output, handled by the cache-first branch of the
@@ -112,6 +112,7 @@ var PRECACHE_URLS = [
   "/icon-512.png",
   "/icon-maskable-512.png",
   "/apple-touch-icon.png",
+  "/reduced-motion.css",
 ];
 
 function precacheShell() {
@@ -158,6 +159,18 @@ function isHashedAsset(url) {
   return url.pathname.indexOf("/assets/") === 0;
 }
 
+/**
+ * A precached shell asset other than the document itself (the manifest, the
+ * icons, the reduced-motion stylesheet). These are NOT under `/assets/`, so
+ * without this they would fall through the fetch handler untouched and go
+ * straight to the network — precached but never served from the cache, which
+ * makes them fail offline despite being in `PRECACHE_URLS`. `/` is excluded
+ * because navigations are handled network-first above.
+ */
+function isPrecachedAsset(url) {
+  return url.pathname !== "/" && PRECACHE_URLS.indexOf(url.pathname) !== -1;
+}
+
 /** Never cache anything but a normal, successful same-origin response. */
 function isCacheable(response) {
   return !!response && response.status === 200 && response.type === "basic";
@@ -194,8 +207,12 @@ function handleNavigation(request) {
     .catch(noop);
 }
 
-/** Hashed `/assets/...` URLs are immutable, so cache-first is safe. */
-function handleHashedAsset(request) {
+/**
+ * Cache-first. Safe for hashed `/assets/...` URLs because they are immutable,
+ * and for the precached shell assets because they are scoped to `CACHE_NAME`
+ * and evicted wholesale by `handleActivate` when that version is bumped.
+ */
+function handleCacheFirst(request) {
   return self.caches
     .match(request)
     .then(function (cached) {
@@ -234,8 +251,8 @@ function handleFetch(event) {
     return;
   }
 
-  if (isHashedAsset(url)) {
-    event.respondWith(handleHashedAsset(request));
+  if (isHashedAsset(url) || isPrecachedAsset(url)) {
+    event.respondWith(handleCacheFirst(request));
   }
 }
 

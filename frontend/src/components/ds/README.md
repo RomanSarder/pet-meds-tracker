@@ -48,6 +48,43 @@ Outside `DsRoot` the tokens do not resolve and components render unstyled.
 - **Nunito still loads from Google Fonts**, as in the source. The rest of the app self-hosts
   via `@fontsource-variable/geist`; to match, `npm i @fontsource/nunito` and swap the import
   in `tokens/fonts.css`. The `--font-sans` contract does not change.
+- **`TabBar`'s active tab carries `aria-current="page"`.** SPEC §10 requires state to never
+  be colour-only; the source only distinguished the active tab by `color: var(--accent)` vs
+  `var(--ink-3)`, which is invisible to a screen reader. `TabBar` is a `<nav>` of `<button>`s
+  (not a tablist), so `aria-current="page"` is the correct role for "the current destination"
+  rather than `aria-selected`/`aria-pressed`. Zero-pixel change; should upstream.
+- **`Icon` accepts `aria-hidden` and, when set, stops emitting `role="img"`/`aria-label={name}`.**
+  Needed because `Icon` defaulted to `aria-label={name}` — the raw lucide token — even when a
+  visible label sits right next to it, so a screen reader announced e.g. "calendar-check Today"
+  on `TabBar`'s tabs. Any call site can now mark its icon decorative when adjacent text already
+  names the control; call sites that render an icon with no other label are unaffected (the
+  labelled-`img` default is unchanged). `TabBar` now renders its icon this way. Zero-pixel
+  change (an `aria-*` attribute); should upstream. Note: `IconButton` does **not** need the same
+  treatment. It sets `aria-label` on the `<button>` itself, and an explicit `aria-label` replaces
+  the element's contents for naming, so its inner `Icon` never reaches the accessible name — a
+  browser audit confirmed `IconButton` controls already announce correctly ("More options for
+  Rimadyl", "Export history"). `TabBar` was different only because its label is a sibling
+  `<span>` inside the button rather than an `aria-label` on it, so both text nodes concatenated.
+- **`SegmentedControl` sets `aria-pressed` on each `Chip` it renders.** The selected option was
+  colour-only (SPEC §10), like TabBar's active tab. `SegmentedControl` already knows which
+  option is selected, so it sets `aria-pressed={v === value}` itself — no caller change needed.
+  Zero-pixel change; should upstream.
+- **`ScreenHeader` takes an optional `actionLabel` prop**, forwarded to the trailing
+  `IconButton`'s `label`. Previously `ScreenHeader` never forwarded a label, so the button fell
+  back to `IconButton`'s glyph-token default (e.g. "plus" is not an accessible name — it's the
+  lucide token). `actionLabel` is optional and additive; screens that pass no `action` at all
+  are unaffected. Zero-pixel change; should upstream, together with real copy for every
+  `ScreenHeader` call site that has an action.
+
+## Known deviations still outstanding (not fixed here)
+
+Measured in a real browser via the accessibility tree; all are upstream work, deliberately
+deferred rather than patched locally because fixing them changes appearance, size or position:
+
+- **Tap targets below SPEC §10's 44px minimum**: `TabBar` items measure 56×43.5, `IconButton`'s
+  default `size` is 40×40, `Button` at `size="md"` is 36px tall, `Chip` is 34px tall.
+- **No screen has an `<h1>`.** `ScreenHeader` renders its title as a `<div>`, not a heading
+  element.
 
 ## Conventions the components assume
 

@@ -15,7 +15,7 @@
 // `withClock`, which sets the fixed clock immediately before the call, to
 // land each row in the day its scenario intends.
 import { describe, expect, it } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Repo } from "@/data/repo.types";
@@ -433,8 +433,10 @@ describe("HistoryView", () => {
     const user = userEvent.setup();
     await screen.findByText("History");
 
+    // The menu is a Base UI `Menu` (portalled), so its items mount
+    // asynchronously after the trigger click — `findByRole`, not `getByRole`.
     await user.click(screen.getByRole("button", { name: "Export history" }));
-    expect(screen.getByRole("menuitem", { name: "Plain text" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Plain text" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "CSV" })).toBeInTheDocument();
 
     // The download itself is unobservable in jsdom (no `URL.createObjectURL`
@@ -463,11 +465,54 @@ describe("HistoryView", () => {
     // Both menu items are wired to a real handler: clicking either closes
     // the export menu without throwing.
     await user.click(screen.getByRole("menuitem", { name: "Plain text" }));
-    expect(screen.queryByRole("menuitem", { name: "Plain text" })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("menuitem", { name: "Plain text" })).not.toBeInTheDocument(),
+    );
 
     await user.click(screen.getByRole("button", { name: "Export history" }));
-    await user.click(screen.getByRole("menuitem", { name: "CSV" }));
-    expect(screen.queryByRole("menuitem", { name: "CSV" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: "CSV" }));
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: "CSV" })).not.toBeInTheDocument());
+  });
+
+  it("closes the export menu on Escape and returns focus to its trigger (accessibility fix — was inescapable by keyboard)", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    const trigger = screen.getByRole("button", { name: "Export history" });
+    await user.click(trigger);
+    await screen.findByRole("menuitem", { name: "Plain text" });
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it("dismisses the export menu on a click outside it", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    await user.click(screen.getByRole("button", { name: "Export history" }));
+    await screen.findByRole("menuitem", { name: "Plain text" });
+
+    await user.click(screen.getByText("History"));
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
+
+  it("gives the back button an accessible name", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
   });
 
   it("never renders an email address anywhere in the screen (SPEC §12)", async () => {

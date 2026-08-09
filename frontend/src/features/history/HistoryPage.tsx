@@ -6,6 +6,7 @@
 // slice's own, per the brief's explicit instructions.
 import { useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import { Menu } from "@base-ui/react/menu";
 import { Button, Card, Chip, IconButton, PetAvatar, SectionLabel } from "@/components/ds";
 import {
   addLocalDays,
@@ -23,6 +24,23 @@ import { usePet } from "@/features/pets/hooks";
 import { speciesLabel } from "@/features/pets/format";
 
 const DAYS_PER_PAGE = 30;
+
+// Matches the accent-ghost look the hand-rolled `<Button variant="ghost" block>`
+// menu items had, ported to a real `Menu.Item` (see the "Escape doesn't close
+// the menu" accessibility fix below) — same treatment as the working pattern
+// in `TodayDoseRow.tsx`'s `MENU_ITEM_STYLE`, just accent-coloured to match
+// this menu's former ghost buttons.
+const MENU_ITEM_STYLE = {
+  display: "flex",
+  alignItems: "center",
+  minHeight: 44,
+  padding: "0 16px",
+  fontSize: 15,
+  fontWeight: 600,
+  color: "var(--accent)",
+  cursor: "pointer",
+  userSelect: "none",
+} as const;
 
 // Same dot/title mapping as the kit's `PM_DOT`, keyed by `LogEntryStatus`
 // instead of the fixture's ad hoc status strings.
@@ -152,7 +170,22 @@ export function HistoryView({ petId }: { petId: string }) {
             cursor: "pointer",
             fontSize: 22,
             color: "var(--ink-2)",
-            padding: 0,
+            // SPEC §10: >= 44x44 hit area. The glyph itself (measured ~5.7 x
+            // 33px before this fix) stays the same size — only the box grows,
+            // via an explicit 44x44 box centred on the glyph and pulled back
+            // with a negative margin (half of each dimension's growth) so
+            // neither the glyph's position nor the header's height/width
+            // shifts. `position: relative` + `zIndex: 1` keeps the enlarged
+            // box clickable across its full area even where it now overlaps
+            // the (non-interactive) pet name label to its right.
+            width: 44,
+            height: 44,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            margin: "-5.5px -19.15px",
+            position: "relative",
+            zIndex: 1,
           }}
         >
           ‹
@@ -160,56 +193,69 @@ export function HistoryView({ petId }: { petId: string }) {
         <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)" }}>{petData.name}</span>
       </div>
 
-      <div
-        style={{
-          padding: "0 22px 16px",
-          display: "flex",
-          alignItems: "flex-end",
-          justifyContent: "space-between",
-          gap: 12,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <PetAvatar name={petData.name} tint={petData.tint} size={52} />
-          <div>
-            <div
-              style={{
-                fontSize: 28,
-                fontWeight: 800,
-                letterSpacing: "-0.01em",
-                lineHeight: 1.1,
-                color: "var(--ink-1)",
-              }}
-            >
-              History
-            </div>
-            <div style={{ fontSize: 14, color: "var(--ink-3)", marginTop: 3 }}>
-              {speciesLabel(petData.species)} · {activeCourseCount} active courses
+      {/*
+        Export menu, converted from a hand-rolled `{open ? <div role="menu">…}`
+        toggle to Base UI's `Menu` — the same primitive `TodayDoseRow.tsx`
+        already uses successfully. The hand-rolled version had no keydown
+        handler, roving focus, or click-outside dismissal, so Escape left it
+        open; `Menu` gets all three (plus focus return to the trigger) for
+        free. `Menu.Root` has to wrap both the trigger and the portal, so it
+        wraps this whole header row rather than just the button.
+      */}
+      <Menu.Root open={exportOpen} onOpenChange={(open) => setExportOpen(open)}>
+        <div
+          style={{
+            padding: "0 22px 16px",
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <PetAvatar name={petData.name} tint={petData.tint} size={52} />
+            <div>
+              <div
+                style={{
+                  fontSize: 28,
+                  fontWeight: 800,
+                  letterSpacing: "-0.01em",
+                  lineHeight: 1.1,
+                  color: "var(--ink-1)",
+                }}
+              >
+                History
+              </div>
+              <div style={{ fontSize: 14, color: "var(--ink-3)", marginTop: 3 }}>
+                {speciesLabel(petData.species)} · {activeCourseCount} active courses
+              </div>
             </div>
           </div>
+          <Menu.Trigger render={<IconButton icon="ellipsis" label="Export history" size={44} />} />
         </div>
-        <IconButton
-          icon="ellipsis"
-          label="Export history"
-          size={44}
-          aria-expanded={exportOpen}
-          onClick={() => setExportOpen((v) => !v)}
-        />
-      </div>
 
-      {exportOpen ? (
-        <Card
-          role="menu"
-          style={{ margin: "0 22px 12px", display: "flex", flexDirection: "column", gap: 10 }}
-        >
-          <Button role="menuitem" variant="ghost" size="md" block onClick={() => handleExport("text")}>
-            Plain text
-          </Button>
-          <Button role="menuitem" variant="ghost" size="md" block onClick={() => handleExport("csv")}>
-            CSV
-          </Button>
-        </Card>
-      ) : null}
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={4} align="end">
+            <Menu.Popup
+              style={{
+                minWidth: 180,
+                padding: "6px 0",
+                background: "var(--surface)",
+                border: "1px solid var(--line-quiet)",
+                borderRadius: "var(--radius-md, 12px)",
+                fontFamily: "var(--font-sans)",
+              }}
+            >
+              <Menu.Item style={MENU_ITEM_STYLE} onClick={() => handleExport("text")}>
+                Plain text
+              </Menu.Item>
+              <Menu.Item style={MENU_ITEM_STYLE} onClick={() => handleExport("csv")}>
+                CSV
+              </Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
 
       <div style={{ padding: "0 22px 14px", display: "flex", gap: 8 }}>
         <Chip selected={filter === "all"} onClick={() => setFilter("all")}>

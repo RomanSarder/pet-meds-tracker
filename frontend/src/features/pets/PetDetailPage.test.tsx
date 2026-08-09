@@ -428,8 +428,10 @@ describe("PetDetailView", () => {
     const courseIds = beforeCourses.map((c) => c.id);
     const beforeEvents = await repo.listDoseEvents({ courseIds });
 
+    // The menu is a Base UI `Menu` (portalled), so its items mount
+    // asynchronously after the trigger click — `findByRole`, not `getByRole`.
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Archive pet" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Archive pet" }));
 
     await waitFor(async () => {
       const pets = await repo.listPets();
@@ -444,5 +446,43 @@ describe("PetDetailView", () => {
 
     const afterEvents = await repo.listDoseEvents({ courseIds });
     expect(afterEvents).toHaveLength(beforeEvents.length);
+  });
+
+  it("closes the overflow menu on Escape and returns focus to its trigger (accessibility fix — was inescapable by keyboard)", async () => {
+    const pet = clover();
+    renderWithProviders(<PetDetailView petId={pet.id} />);
+    const user = userEvent.setup();
+    await screen.findByText(pet.name);
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    await user.click(trigger);
+    await screen.findByRole("menuitem", { name: "Edit pet" });
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it("dismisses the overflow menu on a click outside it", async () => {
+    const pet = clover();
+    renderWithProviders(<PetDetailView petId={pet.id} />);
+    const user = userEvent.setup();
+    await screen.findByText(pet.name);
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await screen.findByRole("menuitem", { name: "Edit pet" });
+
+    await user.click(screen.getByText(pet.name));
+
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
+
+  it("gives the back button an accessible name", async () => {
+    const pet = clover();
+    renderWithProviders(<PetDetailView petId={pet.id} />);
+    await screen.findByText(pet.name);
+
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
   });
 });

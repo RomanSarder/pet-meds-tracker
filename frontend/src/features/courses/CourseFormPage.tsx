@@ -226,6 +226,22 @@ export function CourseFormView({
             cursor: "pointer",
             fontSize: 20,
             color: "var(--ink-3)",
+            // SPEC §10: >= 44x44 hit area. The glyph itself (measured ~15 x
+            // 30px before this fix) stays the same size — only the box grows,
+            // via an explicit 44x44 box centred on the glyph and pulled back
+            // with a negative margin (half of each dimension's growth) so
+            // neither the glyph's position nor the header's height/width
+            // shifts. `position: relative` + `zIndex: 1` keeps the enlarged
+            // box clickable across its full area even where it now overlaps
+            // any free space toward the title on its left.
+            width: 44,
+            height: 44,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            margin: "-7px -14.5px",
+            position: "relative",
+            zIndex: 1,
           }}
         >
           ✕

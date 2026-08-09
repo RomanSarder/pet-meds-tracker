@@ -8,6 +8,12 @@ export interface ScreenHeaderProps {
   subtitle?: string;
   /** Lucide icon name for the trailing IconButton. */
   action?: IconName;
+  /**
+   * Accessible label for the trailing IconButton, describing what it does
+   * (e.g. "Add a course"), not the glyph. Forwarded to `IconButton`'s
+   * `label`; when omitted, `IconButton` falls back to the glyph token.
+   */
+  actionLabel?: string;
   onAction?: () => void;
   style?: CSSProperties;
 }
@@ -16,6 +22,7 @@ export function ScreenHeader({
   title,
   subtitle,
   action,
+  actionLabel,
   onAction,
   style,
 }: ScreenHeaderProps) {
@@ -49,7 +56,7 @@ export function ScreenHeader({
           </div>
         ) : null}
       </div>
-      {action ? <IconButton icon={action} onClick={onAction} /> : null}
+      {action ? <IconButton icon={action} label={actionLabel} onClick={onAction} /> : null}
     </div>
   );
 }

@@ -45,6 +45,7 @@ export function TabBar({
           <button
             key={t.value}
             onClick={() => onChange && onChange(t.value)}
+            aria-current={on ? "page" : undefined}
             style={{
               background: "none",
               border: "none",
@@ -57,7 +58,7 @@ export function TabBar({
               color: on ? "var(--accent)" : "var(--ink-3)",
             }}
           >
-            <Icon name={t.icon} size={22} />
+            <Icon name={t.icon} size={22} aria-hidden />
             <span style={{ fontSize: 11, fontWeight: 600 }}>{t.label}</span>
           </button>
         );

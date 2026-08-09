@@ -180,7 +180,7 @@ describe("SPEC §12: logging doses leaves stock unchanged", () => {
 });
 
 describe("stockUnits === null", () => {
-  it("stock is 'Stock not set', percent is undefined, buyNow is false", () => {
+  it("stock is undefined (not the tone-coloured slot), note carries 'Stock not set', percent is undefined, buyNow is false", () => {
     const items = buildSupplyItems({
       medications: [medication({ stockUnits: null })],
       courses: [course()],
@@ -189,7 +189,12 @@ describe("stockUnits === null", () => {
       now: NOW,
     });
     const item = items[0];
-    expect(item.stock).toBe("Stock not set");
+    // "Stock not set" is still shown to the user, but through the neutral
+    // `note` slot rather than SupplyRow's tone-coloured `stock` slot — a
+    // green "good" tone there would falsely assert positive stock for a
+    // figure that is actually unknown (SPEC slice 11 Task 1).
+    expect(item.stock).toBeUndefined();
+    expect(item.note).toBe("Stock not set");
     expect(item.percent).toBeUndefined();
     expect(item.buyNow).toBe(false);
   });

@@ -24,6 +24,7 @@ export function SegmentedControl({
           <Chip
             key={v}
             selected={v === value}
+            aria-pressed={v === value}
             onClick={() => onChange && onChange(v)}
           >
             {l}

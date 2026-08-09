@@ -639,4 +639,27 @@ describe("TodayPage", () => {
       expect(pathname()).toBe(`/pets/${clover.id}`);
     });
   });
+
+  // Audit finding d (ds/README.md "Deliberate differences from the source"):
+  // the header's trailing IconButton had no `label`, so it fell back to the
+  // glyph token "plus". Both the loading pass (no `view` yet) and the loaded
+  // pass render their own `ScreenHeader`, so both need the real name.
+  it("names the header's + control by what it does, not the glyph, before and after data loads", async () => {
+    const user = userEvent.setup();
+    const { repo } = household();
+
+    renderToday(repo);
+
+    const action = await screen.findByRole("button", { name: "Add a course" });
+    expect(screen.queryByRole("button", { name: "plus" })).not.toBeInTheDocument();
+
+    await screen.findByText(/Good (morning|afternoon|evening)/);
+    expect(screen.getByRole("button", { name: "Add a course" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "plus" })).not.toBeInTheDocument();
+
+    await user.click(action);
+    await waitFor(() => {
+      expect(pathname()).toBe("/courses/new");
+    });
+  });
 });

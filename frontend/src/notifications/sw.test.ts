@@ -221,8 +221,8 @@ const DOSE: DoseRef = {
   amount: 0.4,
 };
 
-const CACHE_NAME = "petmeds-shell-v1";
-const PRECACHE_URLS = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png"];
+const CACHE_NAME = "petmeds-shell-v2";
+const PRECACHE_URLS = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png", "/reduced-motion.css"];
 
 describe("install / activate", () => {
   it("skips waiting and waits on clients.claim, without throwing or logging", async () => {
@@ -406,6 +406,49 @@ describe("fetch: strategy", () => {
     await Promise.resolve();
 
     expect(store.get(CACHE_NAME)?.get(url)).toBeUndefined();
+    assertSilent();
+  });
+
+  // Regression: precaching a shell asset is useless on its own. These URLs
+  // are not under `/assets/` and are not navigations, so before
+  // `isPrecachedAsset` existed the fetch handler let them straight through to
+  // the network — precached, but never served from the cache, so they still
+  // failed with the network down.
+  it.each(["/manifest.webmanifest", "/reduced-motion.css", "/icon-192.png"])(
+    "precached shell asset %s is served from the cache without touching the network",
+    async (pathname) => {
+      const { caches, store } = makeFakeCaches();
+      const url = `https://example.com${pathname}`;
+      const cached = makeResponse({ status: 200, type: "basic" });
+      store.set(CACHE_NAME, new Map([[url, cached]]));
+      const fetchMock = vi.fn();
+      const { self, handlers } = loadWorker([], { caches, fetch: fetchMock });
+      const { event, responded } = makeFetchEvent({ method: "GET", url, mode: "same-origin" });
+
+      handlers.get("fetch")!(event as unknown as FakeEvent);
+      const result = await responded();
+
+      expect(result).toBe(cached);
+      expect(self.fetch).not.toHaveBeenCalled();
+      assertSilent();
+    },
+  );
+
+  it("the precached document itself stays network-first: '/' is not diverted to cache-first", async () => {
+    const { caches, store } = makeFakeCaches();
+    const stale = makeResponse({ status: 200, type: "basic" });
+    store.set(CACHE_NAME, new Map([["https://example.com/", stale]]));
+    const fresh = makeResponse({ status: 200, type: "basic" });
+    const fetchMock = vi.fn().mockResolvedValue(fresh);
+    const { handlers } = loadWorker([], { caches, fetch: fetchMock });
+    const { event, responded } = makeFetchEvent({ method: "GET", url: "https://example.com/", mode: "navigate" });
+
+    handlers.get("fetch")!(event as unknown as FakeEvent);
+    const result = await responded();
+
+    // The network copy wins, not the cached one — otherwise an update could
+    // never reach a user whose cache already holds a document.
+    expect(result).toBe(fresh);
     assertSilent();
   });
 

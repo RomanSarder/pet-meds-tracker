@@ -7,7 +7,7 @@ import { useRouterState } from "@tanstack/react-router";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Pet } from "@/domain";
-import { fixtures } from "@/domain";
+import { cloneFixtures, fixtures } from "@/domain";
 import { ageLabel } from "./age";
 import { PetsPage } from "./PetsPage";
 
@@ -57,6 +57,37 @@ function onePetNoCoursesRepo() {
     pets: [pet],
     medications: [],
     courses: [],
+    doseEvents: [],
+    stockAdjustments: [],
+  });
+}
+
+/** One pet, one active course — the singular case for both roster-subtitle counts. */
+function onePetOneCourseRepo() {
+  const data = cloneFixtures();
+  const pet = data.pets.find((p) => p.name === "Clover")!;
+  const course = data.courses.find((c) => c.petId === pet.id && c.status === "active")!;
+  return createMemoryRepo({
+    pets: [pet],
+    medications: data.medications,
+    courses: [course],
+    doseEvents: [],
+    stockAdjustments: [],
+  });
+}
+
+/** Two pets, two active courses — the plural case for both roster-subtitle counts. */
+function twoPetsTwoCoursesRepo() {
+  const data = cloneFixtures();
+  const pets = data.pets.slice(0, 2);
+  const petIds = new Set(pets.map((p) => p.id));
+  const courses = data.courses
+    .filter((c) => petIds.has(c.petId) && c.status === "active")
+    .slice(0, 2);
+  return createMemoryRepo({
+    pets,
+    medications: data.medications,
+    courses,
     doseEvents: [],
     stockAdjustments: [],
   });
@@ -117,10 +148,26 @@ describe("PetsPage", () => {
     expect(card).toBeInTheDocument();
   });
 
-  it("shows the header's + control with an accessible name", async () => {
+  it("shows the header's + control with an accessible name describing the action, not the glyph", async () => {
     renderWithProviders(<PetsPage />);
     await screen.findByText("Pets");
-    expect(screen.getByRole("button", { name: "plus" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a course" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "plus" })).not.toBeInTheDocument();
+  });
+
+  it("pluralises the roster subtitle counts in English", async () => {
+    const singular = onePetOneCourseRepo();
+    renderWithProviders(<PetsPage />, { repo: singular });
+    expect(await screen.findByText("1 animal · 1 active course")).toBeInTheDocument();
+
+    const plural = twoPetsTwoCoursesRepo();
+    renderWithProviders(<PetsPage />, { repo: plural });
+    expect(await screen.findByText("2 animals · 2 active courses")).toBeInTheDocument();
+
+    // Zero is grammatically plural too ("0 active courses", not "0 active course").
+    const zeroCourses = onePetNoCoursesRepo();
+    renderWithProviders(<PetsPage />, { repo: zeroCourses });
+    expect(await screen.findByText("1 animal · 0 active courses")).toBeInTheDocument();
   });
 
   it("shows an 'Add a pet' control at the end of the roster when pets exist", async () => {

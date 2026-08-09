@@ -250,6 +250,7 @@ export function TodayPage(): ReactElement {
           title={greetingFor(now)}
           subtitle={isPending ? "Loading today's doses" : undefined}
           action="plus"
+          actionLabel="Add a course"
           onAction={onAddCourse}
         />
         <div style={LIST_STYLE} />
@@ -265,6 +266,7 @@ export function TodayPage(): ReactElement {
         title={view.greeting}
         subtitle={view.subtitle}
         action="plus"
+        actionLabel="Add a course"
         onAction={onAddCourse}
       />
 

@@ -1,0 +1,37 @@
+/*
+ * SPEC §10: `prefers-reduced-motion: reduce` must drop the button
+ * press-scale (the cross-fade is already handled in feature code via a
+ * `matchMedia` check — untouched by this file).
+ *
+ * Root cause this file works around: `frontend/src/components/ds/core/
+ * Button.tsx` (FROZEN — cannot be edited from this slice) sets
+ * `element.style.transform = "scale(0.97)"` as an INLINE style on
+ * `onMouseDown`, with no `prefers-reduced-motion` check at all. An inline
+ * style beats any stylesheet rule regardless of selector specificity
+ * *unless* that rule uses `!important` — hence the `!important` below.
+ *
+ * Kept surgical on purpose:
+ *   - Selector is `button`, not `*`/`::before`/`::after`. A blanket
+ *     `transform: none !important` reset would also stomp elements that
+ *     use `transform` for actual layout/positioning (e.g. this app's
+ *     dialogs centre themselves with `transform: translate(-50%, -50%)`
+ *     on a non-button wrapper — see UpdateStockDialog.tsx,
+ *     ShoppingListDialog.tsx, LogAtTimeDialog.tsx, HouseholdPage.tsx).
+ *     `button` does not reach those. A repo-wide grep for `transform`
+ *     confirms Button.tsx's `onMouseDown` handler is the only place a
+ *     `<button>` in this codebase ever receives one, so the selector is
+ *     narrow without being fragile.
+ *   - Only the `transform` property is neutralised — `transition` is left
+ *     alone. Base UI dialogs (used by the auth screens' shadcn-style
+ *     `components/ui/button.tsx`) can wait on a `transitionend` event to
+ *     finish their open/close lifecycle; a blanket `transition: none`
+ *     would risk breaking that. Forcing `transform` to a constant `none`
+ *     already means it never changes value, so the (still-declared)
+ *     `transition: transform ...` on Button.tsx has nothing left to
+ *     animate — inert, not disabled.
+ */
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transform: none !important;
+  }
+}

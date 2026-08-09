@@ -93,8 +93,9 @@ export function PetsPage() {
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <ScreenHeader
         title="Pets"
-        subtitle={`${pets.length} animals · ${courses.length} active courses`}
+        subtitle={`${pets.length} ${pets.length === 1 ? "animal" : "animals"} · ${courses.length} active ${courses.length === 1 ? "course" : "courses"}`}
         action="plus"
+        actionLabel="Add a course"
         onAction={() => navigate({ to: "/courses/new" })}
       />
       {petsQuery.isLoading ? null : pets.length === 0 ? (
