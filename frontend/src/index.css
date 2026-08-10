@@ -22,11 +22,15 @@
 }
 
 @layer base {
-  .theme {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
-  }
+  /* Was previously declared on a `.theme` class that no element in the app ever
+     applies, so `html { font-family: var(--font-sans) }` below resolved to nothing
+     and the whole document fell back to the browser's serif default. Declared here
+     on :root, inside @layer base, so it stays the app's shadcn/auth-page token: DS
+     screens are unaffected because .ds-root's own --font-sans (Nunito, set in
+     components/ds/tokens/typography.css, which is unlayered) always wins the
+     cascade over anything in @layer base regardless of selector order. */
   :root {
+    --font-sans: 'Geist Variable', sans-serif;
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);

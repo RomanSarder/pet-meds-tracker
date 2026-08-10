@@ -2,11 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { CheckCircle2, Loader2, PawPrint, XCircle } from "lucide-react";
 import { apiClient, ApiError } from "@/shared/api";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useT } from "@/i18n";
 
 type VerifyState = "verifying" | "success" | "error";
+
+// Brand accent (also the <meta name="theme-color"> value in index.html) and its
+// foreground. Auth screens sit outside .ds-root (see AppShell.tsx / components/ds
+// README), so they cannot reach for DS tokens (--accent, --ink-*, …) and instead
+// use the literal values directly, same as the warm-paper body background below.
+const ACCENT = "#C25A3C";
+const ACCENT_FOREGROUND = "#F6F3EC";
 
 export function VerifyPage() {
   const t = useT();
@@ -50,7 +55,7 @@ export function VerifyPage() {
   }, [navigate]);
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-4">
+    <main className="flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-4">
         <div className="flex items-center justify-center gap-2 text-muted-foreground">
           <PawPrint className="h-4 w-4" aria-hidden="true" />
@@ -59,46 +64,52 @@ export function VerifyPage() {
           </span>
         </div>
 
-        <Card>
+        <div className="space-y-5 rounded-xl border bg-card p-6">
           {state === "verifying" && (
-            <>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
-                  {t("auth.verify.signingIn")}
-                </CardTitle>
-                <CardDescription>{t("auth.verify.verifyingLink")}</CardDescription>
-              </CardHeader>
-            </>
+            <div className="space-y-1">
+              <h1 className="flex items-center gap-2 text-base leading-snug font-medium text-foreground">
+                <Loader2
+                  className="h-4 w-4 shrink-0 animate-spin text-muted-foreground"
+                  aria-hidden="true"
+                />
+                {t("auth.verify.signingIn")}
+              </h1>
+              <p className="text-sm text-muted-foreground">{t("auth.verify.verifyingLink")}</p>
+            </div>
           )}
 
           {state === "success" && (
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
+            <div className="space-y-1">
+              <h1 className="flex items-center gap-2 text-base leading-snug font-medium text-foreground">
+                <CheckCircle2 className="h-4 w-4 shrink-0" style={{ color: ACCENT }} aria-hidden="true" />
                 {t("auth.verify.success")}
-              </CardTitle>
-              <CardDescription>{t("auth.verify.redirecting")}</CardDescription>
-            </CardHeader>
+              </h1>
+              <p className="text-sm text-muted-foreground">{t("auth.verify.redirecting")}</p>
+            </div>
           )}
 
           {state === "error" && (
             <>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <XCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
+              <div className="space-y-1">
+                <h1 className="flex items-center gap-2 text-base leading-snug font-medium text-foreground">
+                  <XCircle className="h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
                   {t("auth.verify.linkNotValid")}
-                </CardTitle>
-                <CardDescription role="alert">{errorMessage}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Button className="w-full" onClick={() => navigate({ to: "/sign-in" })}>
-                  {t("auth.verify.backToSignIn")}
-                </Button>
-              </CardContent>
+                </h1>
+                <p role="alert" className="text-sm text-muted-foreground">
+                  {errorMessage}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate({ to: "/sign-in" })}
+                style={{ backgroundColor: ACCENT, color: ACCENT_FOREGROUND }}
+                className="flex h-11 w-full items-center justify-center rounded-lg px-4 text-sm font-medium transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C25A3C] focus-visible:ring-offset-2"
+              >
+                {t("auth.verify.backToSignIn")}
+              </button>
             </>
           )}
-        </Card>
+        </div>
       </div>
     </main>
   );
