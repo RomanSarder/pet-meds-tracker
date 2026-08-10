@@ -288,7 +288,17 @@ Computed per occurrence, in this precedence order:
 
   `missed` DoseEvent by a daily sweep so history is complete.
 
-- The user can always log a past dose with a corrected `givenAt` ("log it late").
+- The user can always log a past dose with a corrected `givenAt` ("log it late", §6.1a).
+
+- **Scope of a corrected `givenAt`: the current day only.** The picker offers no date field and
+
+  no Today/Yesterday toggle; `givenAt` is constrained to `[00:00 today, now]`. A dose remembered
+
+  after midnight is corrected from history instead. Rationale: nearly every late entry is
+
+  same-day ("I gave it an hour ago and forgot to tap"); a date control would tax all of those
+
+  to serve a rare case.
 
 ---
 
@@ -424,9 +434,9 @@ added for sharing and history are reached from within them, not by a fourth tab:
 
   The tap must not navigate. Undo is available for 5 seconds via a toast.
 
-- Long-press (or the row's overflow) opens: *Log at a different time*, *Skip this dose*,
+- Long-press (or the row's overflow, `⋯`) opens: *Log at a different time* (§6.1a),
 
-  *Open course*.
+  *Skip this dose*, *Open course*. The overflow is hidden once the dose is `given`.
 
 - Tapping the card body (not a button) opens the Pet detail screen.
 
@@ -435,6 +445,58 @@ added for sharing and history are reached from within them, not by a fourth tab:
   ending, a weekly treatment).
 
 - Empty state: "Nothing due today." plus the next due time.
+
+### 6.1a Log at a different time
+
+A bottom sheet over Today, for a dose that was given before it was logged. It treats the entry
+
+as a memory task rather than a clock task: the fast paths are "how long ago" and "at its
+
+scheduled time", and an exact time is the fallback.
+
+- Header: medication, pet, `scheduled HH:MM · <schedule summary>`, and a close control.
+
+- The chosen time is the sheet's headline, set large and tabular, with `today · <N> ago`
+
+  beside it. It turns berry if the value is in the future.
+
+- **Relative offsets** as a chip row: *Just now*, *15 min*, *30 min*, *1 h*, *2 h*. One is
+
+  selected on open; the default is 30 minutes ago.
+
+- **At its scheduled time** as its own full-width row, showing the scheduled clock time, with
+
+  the helper "Given on time, logged afterwards". This is the commonest case and must be one tap.
+
+- **Or set it exactly**: a `− 5 min` / value / `+ 5 min` stepper. `+ 5 min` disables at `now`.
+
+- A helper line under the stepper carries the active constraint: "A dose cannot be logged in the
+
+  future." at the cap, a day-check warning more than 12 h before the scheduled time, otherwise
+
+  "Anything from midnight today. Earlier doses are added from history."
+
+- **Consequence block**, stated before committing, because the chain shift (§3b) is the one
+
+  thing a corrected time actually changes:
+
+  - `fromLastDose` — accent dot, "Next dose moves to HH:MM", and a line explaining that the
+
+    course counts from the last dose so the whole chain follows the entered time, naming the
+
+    delta against the planned time when there is one.
+
+  - `fixedTimes` — quiet dashed treatment, "Next dose stays at HH:MM", and a note that history
+
+    will read "Given N min late".
+
+- Footer: full-width ink **Log at HH:MM**, disabled for a future time, above a ghost
+
+  **Skip this dose instead** that hands off to the skip flow.
+
+- Confirming writes a `given` DoseEvent with `givenAt` set to the chosen time (not `now`), and
+
+  reschedules the course per §3b. Undo behaves as in §6.1.
 
 ### 6.2 Pets
 
@@ -776,7 +838,7 @@ Each slice is independently assignable and ends in something testable.
 
    (pause/resume/stop), Pet detail.
 
-5. **Today screen** — card ordering, one-tap logging with undo, late/skip flows, banner,
+5. **Today screen** — card ordering, one-tap logging with undo, late/skip flows (§6.1a), banner,
 
    empty state.
 
@@ -831,6 +893,12 @@ Each slice is independently assignable and ends in something testable.
 - A `fromLastDose` course logged 90 minutes late moves the next due time by 90 minutes.
 
 - A `fixedTimes` course logged late does **not** move the following dose.
+
+- "At its scheduled time" writes `givenAt` equal to the occurrence's due time, so a
+
+  `fromLastDose` chain stays on its planned grid and the event reads as on time.
+
+- The corrected-time picker cannot produce a `givenAt` in the future or before 00:00 today.
 
 - A dose scheduled 23:00 and logged 00:20 counts against the previous day.
 
