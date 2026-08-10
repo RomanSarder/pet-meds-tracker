@@ -93,12 +93,24 @@ export function HistoryView({ petId }: { petId: string }) {
   const [exportOpen, setExportOpen] = useState(false);
 
   // `useNow()`, not `now()` directly: a bare `now()` call in the render body
-  // returns a fresh millisecond-precision Date on every render, which feeds
-  // `to` below and therefore the event-log query keys — so the key would
-  // never stabilise long enough for a fetch to land before the next render
-  // discarded it for a newer one. `useNow()` memoises the value in state so
-  // it only ticks on its own interval (see `@/app/useNow`), the same pattern
-  // `TodayPage`/`SuppliesPage` use for the same reason.
+  // returns a fresh millisecond-precision Date on every render. Holding the
+  // value in state instead means it only ticks on its own interval (see
+  // `@/app/useNow`), so a burst of unrelated renders can't churn it.
+  //
+  // That still isn't enough on its own: `useNow()` re-emits a fresh Date
+  // every 30s, and if that instant flowed straight into the event-log query
+  // keys below, the key would change every 30s too — never sitting still
+  // long enough for a fetch to land before the next tick discarded it for a
+  // newer one, dropping the screen to `pending` (and 0/0/0) on a loop. So
+  // `to` is derived from `today` — a "YYYY-MM-DD" day key, via
+  // `localDayKey` — rather than from `nowDate.toISOString()` directly: the
+  // query key then changes only at local midnight, exactly when a
+  // day-granular value is supposed to change, and exactly why
+  // `TodayPage`/`SuppliesPage` key their own queries on `localDayKey(now)`
+  // rather than an instant. Incidentally, `to` now means "the end of today"
+  // rather than "the instant this component mounted", so an event logged
+  // after mount is no longer excluded from the visible range by a `to`
+  // frozen at mount time.
   const nowDate = useNow();
   const today = localDayKey(nowDate);
   // Backwards-only pagination: widen a single range rather than appending
@@ -106,7 +118,9 @@ export function HistoryView({ petId }: { petId: string }) {
   // twice and rendered twice.
   const windowStartDay = addLocalDays(today, -(DAYS_PER_PAGE * pages - 1));
   const from = startOfLocalDay(parseLocalDay(windowStartDay)).toISOString();
-  const to = nowDate.toISOString();
+  // Inclusive end of `today` (repos filter `loggedAt <= to`/`at <= to`), not
+  // `nowDate.toISOString()` — see the `useNow()` comment above.
+  const to = new Date(parseLocalDay(addLocalDays(today, 1)).getTime() - 1).toISOString();
 
   const pet = usePet(petId);
   // Every status, not just active/paused — a stopped or finished course's
@@ -117,9 +131,24 @@ export function HistoryView({ petId }: { petId: string }) {
   // Passing the course ids straight through means the filter yields nothing
   // until `courses.data` resolves, rather than firing an unfiltered query.
   const courseIds = courses.data?.map((c) => c.id) ?? [];
+  // Gate the event-log queries on `courses` having resolved: firing them
+  // early with `courseIds: []` would resolve to zero rows and paint a false
+  // "no history" before the correctly-filtered fetch replaces it.
+  const coursesReady = courses.data !== undefined;
 
-  const doseEvents = useDoseEventLog({ courseIds, from, to });
-  const courseEvents = useCourseEventLog({ courseIds, from, to });
+  const doseEvents = useDoseEventLog({ courseIds, from, to }, { enabled: coursesReady });
+  const courseEvents = useCourseEventLog({ courseIds, from, to }, { enabled: coursesReady });
+
+  // Busy vs genuinely-empty (SPEC §10 — state is never colour-only, and
+  // `aria-busy` is the mechanism for a state with no dedicated copy): while
+  // any of these five have not yet produced data, the summary strip must not
+  // paint 0/0/0 as if it were the answer.
+  const isBusy =
+    !coursesReady ||
+    medications.data === undefined ||
+    users.data === undefined ||
+    doseEvents.data === undefined ||
+    courseEvents.data === undefined;
 
   if (!pet.data) return null;
   const petData = pet.data;
@@ -155,10 +184,14 @@ export function HistoryView({ petId }: { petId: string }) {
     downloadText(`${petData.name}-history-${today}.${ext}`, content, mime);
   }
 
-  function stat(n: number, label: string, color: string) {
+  // `n === null` (busy) renders no digit at all rather than a misleading "0"
+  // — see `isBusy` above.
+  function stat(n: number | null, label: string, color: string) {
     return (
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 19, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{n}</div>
+        <div style={{ fontSize: 19, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
+          {n === null ? null : n}
+        </div>
         <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>{label}</div>
       </div>
     );
@@ -287,19 +320,20 @@ export function HistoryView({ petId }: { petId: string }) {
         </Chip>
       </div>
 
-      <div style={{ padding: "0 22px 14px" }}>
+      <div style={{ padding: "0 22px 14px" }} aria-busy={isBusy}>
         <Card tone="quiet" pad={14}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, textAlign: "center" }}>
-            {stat(stats.given, t("history.stat.given"), "var(--ok)")}
+            {stat(isBusy ? null : stats.given, t("history.stat.given"), "var(--ok)")}
             <div style={{ width: 1, background: "var(--line)" }}></div>
-            {stat(stats.skipped, t("history.stat.skipped"), "var(--ink-2)")}
+            {stat(isBusy ? null : stats.skipped, t("history.stat.skipped"), "var(--ink-2)")}
             <div style={{ width: 1, background: "var(--line)" }}></div>
-            {stat(stats.missed, t("history.stat.missed"), "var(--alert)")}
+            {stat(isBusy ? null : stats.missed, t("history.stat.missed"), "var(--alert)")}
           </div>
         </Card>
       </div>
 
       <div
+        aria-busy={isBusy}
         style={{
           flex: 1,
           overflowY: "auto",
@@ -318,11 +352,22 @@ export function HistoryView({ petId }: { petId: string }) {
               {group.entries.map((entry, i) => {
                 const d = PM_DOT[entry.status] ?? PM_DOT.given;
                 return (
+                  // SPEC §10a: "nothing is truncated to fit". At narrow widths
+                  // (measured broken at 360px, Ukrainian) the trailing
+                  // attribution's own text can be longer than the space left
+                  // beside the title once the time/dot column is accounted
+                  // for, and it cannot shrink below its content width (its
+                  // flex-basis is auto). Rather than let it crush the
+                  // `flex: 1, minWidth: 0` title/detail column down to a
+                  // near-single-word sliver, `flexWrap: "wrap"` lets the
+                  // attribution drop to its own full-width line — no overlap,
+                  // no truncation, at any width from 360px up.
                   <div
                     key={entry.id}
                     style={{
                       display: "flex",
                       alignItems: "flex-start",
+                      flexWrap: "wrap",
                       gap: 12,
                       padding: "13px 16px",
                       borderTop: i > 0 ? "1px solid var(--line-quiet)" : "none",
@@ -352,7 +397,7 @@ export function HistoryView({ petId }: { petId: string }) {
                       }}
                     ></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: d.titleColor }}>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: d.titleColor, overflowWrap: "anywhere" }}>
                         {renderLogTitle(entry.title, tr)}
                       </div>
                       <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
@@ -364,7 +409,9 @@ export function HistoryView({ petId }: { petId: string }) {
                         fontSize: 12,
                         fontWeight: 600,
                         color: "var(--ink-3)",
-                        whiteSpace: "nowrap",
+                        marginLeft: "auto",
+                        overflowWrap: "anywhere",
+                        textAlign: "right",
                         paddingTop: 2,
                       }}
                     >

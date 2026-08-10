@@ -11,19 +11,35 @@ import { getRepo } from "@/data";
 /** Query options for every repo-backed query, per CONTRACT.md §3. */
 const QUERY_OPTS = { staleTime: 0, retry: false, refetchOnWindowFocus: true } as const;
 
-export function useDoseEventLog(filter: EventFilter): UseQueryResult<DoseEvent[], Error> {
+/**
+ * `options.enabled` defaults to `true` so the existing `PetDetailPage.tsx`
+ * call site (which passes none) is unaffected. `HistoryView` passes
+ * `enabled: courses.data !== undefined` so the log queries never fire with a
+ * placeholder `courseIds: []` before the real course ids are known — firing
+ * early would resolve to zero rows and paint a false "no history" before the
+ * correctly-filtered fetch replaces it.
+ */
+export function useDoseEventLog(
+  filter: EventFilter,
+  options?: { enabled?: boolean },
+): UseQueryResult<DoseEvent[], Error> {
   return useQuery({
     queryKey: qk.events(filter),
     queryFn: () => getRepo().listDoseEvents(filter),
     ...QUERY_OPTS,
+    enabled: options?.enabled ?? true,
   });
 }
 
-export function useCourseEventLog(filter: EventFilter): UseQueryResult<CourseEvent[], Error> {
+export function useCourseEventLog(
+  filter: EventFilter,
+  options?: { enabled?: boolean },
+): UseQueryResult<CourseEvent[], Error> {
   return useQuery({
     queryKey: qk.courseEvents(filter),
     queryFn: () => getRepo().listCourseEvents(filter),
     ...QUERY_OPTS,
+    enabled: options?.enabled ?? true,
   });
 }
 

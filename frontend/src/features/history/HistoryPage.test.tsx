@@ -14,8 +14,8 @@
 // `scheduledFor`/`givenAt` a caller passes. So every write below runs through
 // `withClock`, which sets the fixed clock immediately before the call, to
 // land each row in the day its scenario intends.
-import { describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { act, screen, waitFor } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Repo } from "@/data/repo.types";
@@ -147,8 +147,9 @@ describe("HistoryView", () => {
 
     const rowCount = () => screen.getAllByText(/^by /).length;
     // 4 dose entries (2 given, 1 skipped, 1 missed) + 2 course entries
-    // (started, paused) = 6.
-    expect(rowCount()).toBe(6);
+    // (started, paused) = 6. `findAllByText` (not `getAllByText`), because
+    // the event-log queries only fire once `courses` has resolved.
+    expect(await screen.findAllByText(/^by /)).toHaveLength(6);
 
     await user.click(screen.getByRole("button", { name: "Doses" }));
     expect(rowCount()).toBe(4);
@@ -189,7 +190,9 @@ describe("HistoryView", () => {
     // Shape only — the exact weekday/date text is derived from FIXTURE_NOW
     // by `dayLabel`, already unit-tested in logModel.test.ts; asserting the
     // literal string here would just re-hardcode a fixture-dependent value.
-    expect(screen.getByText(/^Today · [A-Za-z]{3} \d{1,2} [A-Za-z]{3}$/)).toBeInTheDocument();
+    // `findByText` for the first one: the day groups depend on the
+    // event-log queries, which only fire once `courses` has resolved.
+    expect(await screen.findByText(/^Today · [A-Za-z]{3} \d{1,2} [A-Za-z]{3}$/)).toBeInTheDocument();
     expect(screen.getByText(/^Yesterday · [A-Za-z]{3} \d{1,2} [A-Za-z]{3}$/)).toBeInTheDocument();
     expect(screen.getByText(/^[A-Za-z]{3} \d{1,2} [A-Za-z]{3}$/)).toBeInTheDocument();
   });
@@ -204,7 +207,9 @@ describe("HistoryView", () => {
       return screen.getByText(label).previousElementSibling?.textContent ?? "";
     }
 
-    expect(summaryCount("Given")).toBe("2");
+    // The count starts blank (busy) until the event-log queries — gated on
+    // `courses` resolving — land; `waitFor` for the first one only.
+    await waitFor(() => expect(summaryCount("Given")).toBe("2"));
     expect(summaryCount("Skipped")).toBe("1");
     expect(summaryCount("Missed")).toBe("1");
 
@@ -219,6 +224,25 @@ describe("HistoryView", () => {
     expect(summaryCount("Missed")).toBe("1");
   });
 
+  // WHAT THIS TEST DOES COVER: the original bug where `now()` was called
+  // directly in the render body, so a real ticking clock could never
+  // stabilise a query key long enough for a fetch to land.
+  //
+  // WHAT IT DOES NOT COVER, and never did: the surviving Cause-A bug this
+  // file's newer tests target, where the clock is held in state via
+  // `useNow()` (so the render-body problem above is fixed) but the 30s
+  // periodic re-emit still fed a millisecond-precision `to` into the query
+  // key. This test swaps in `tickingClock` AFTER `renderWithProviders` has
+  // already completed its synchronous initial mount, and `useNow` reads
+  // `now()` exactly once, in its `useState` initialiser, during that
+  // already-completed mount — every later render just returns the same
+  // already-computed state value, so the ticking clock is never read by
+  // `HistoryView` again and this test cannot see a periodic-tick regression.
+  // It also runs under real timers, so `useNow`'s 30s `setTimeout` never
+  // fires in a sub-second test run even if something did read the clock
+  // again. See "does not mint a new event-log query key..." below, which
+  // uses fake timers and an advanceable clock read from inside that timer's
+  // callback, for the test that actually exercises the periodic tick.
   it("still renders entries once the clock genuinely advances between renders, not just under a frozen test clock", async () => {
     // Regression for a `now()` call inlined directly in the render body: it
     // returns a fresh instant on every render, which fed straight into the
@@ -253,6 +277,119 @@ describe("HistoryView", () => {
     expect(await screen.findAllByText(/^by /)).toHaveLength(2);
   });
 
+  it("does not mint a new event-log query key when the clock genuinely ticks 30s (Cause A: `to` used to be a millisecond instant)", async () => {
+    // Fake timers so `useNow`'s 30s `setTimeout` actually fires inside this
+    // sub-second test; `shouldAdvanceTime` keeps `findBy*`/`waitFor`'s own
+    // internal timeout-based polling working normally alongside it.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const repo = createMemoryRepo();
+      const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+      const medication = await withClock(FIXTURE_NOW, () =>
+        repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+      );
+      const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+      const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+      await withClock(givenIso, () =>
+        repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+      );
+
+      const seen: string[] = [];
+      const originalListDoseEvents = repo.listDoseEvents.bind(repo);
+      repo.listDoseEvents = (filter) => {
+        seen.push(JSON.stringify(filter));
+        return originalListDoseEvents(filter);
+      };
+
+      // A clock whose `now()` reads a mutable `offset`, so a later mutation
+      // of `offset` is visible to any `now()` call still holding a
+      // reference to this same object — including one made from inside
+      // `useNow`'s `setTimeout` callback, well after this line runs.
+      let offset = 0;
+      const advanceableClock = { now: () => new Date(new Date(FIXTURE_NOW).getTime() + offset) };
+      setClock(advanceableClock);
+
+      renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+      // `renderWithProviders` installs its own frozen `fixedClock(FIXTURE_NOW)`
+      // immediately before it renders (see its own "install the clock BEFORE
+      // anything renders" comment) — which would otherwise clobber the
+      // advanceable clock installed above for the remainder of the test.
+      // Re-asserted here, straight after render, so it — not the harness's
+      // frozen one — is what's active when `useNow`'s effect (already
+      // scheduled during the mount above) later reads `now()`.
+      setClock(advanceableClock);
+
+      expect(await screen.findAllByText(/^by /)).toHaveLength(2);
+      const before = new Set(seen).size;
+
+      // Advance the clock by a full minute (never crosses midnight from
+      // 08:00 local) and let the 30s timer fire.
+      await act(async () => {
+        offset = 60_000;
+        vi.advanceTimersByTime(30_001);
+      });
+
+      // The tick minted no new query key...
+      expect(new Set(seen).size).toBe(before);
+      // ...and the rows never blanked out along the way.
+      expect(await screen.findAllByText(/^by /)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never shows 0 in the given/skipped/missed strip while data is still loading, when the pet has events today (Cause B/C)", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    // "after food" instructions keep the dose's detail line from reading
+    // bare "Given" — text the summary strip's own stat label also uses,
+    // which would otherwise make `getByText("Given")` ambiguous once the
+    // row renders (same idiom `seedMixedScenario` above uses).
+    const course = await withClock(FIXTURE_NOW, () =>
+      seedCourse(repo, pet.id, medication.id, TODAY, "after food"),
+    );
+    const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+    await withClock(givenIso, () =>
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+    );
+
+    // Holds `listCourses` open until the test releases it, so `courses.data`
+    // stays `undefined` (and, per the `enabled` gate, the event-log queries
+    // never even fire) for as long as the test wants — deterministically
+    // reproducing "the screen paints before the real data has arrived"
+    // without racing real async timing.
+    const originalListCourses = repo.listCourses.bind(repo);
+    let releaseCourses!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseCourses = resolve;
+    });
+    repo.listCourses = async (filter) => {
+      const result = await originalListCourses(filter);
+      await gate;
+      return result;
+    };
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    // The header, independent of `courses`, still renders straight away.
+    await screen.findByText("History");
+
+    const summaryCount = (label: string) => screen.getByText(label).previousElementSibling?.textContent ?? "";
+
+    // Busy: blank, never a misleading "0" — Clover in fact has a given dose
+    // today, so a "0" here would be actively wrong, not just uninformative.
+    expect(summaryCount("Given")).toBe("");
+    expect(summaryCount("Skipped")).toBe("");
+    expect(summaryCount("Missed")).toBe("");
+
+    releaseCourses();
+    await waitFor(() => expect(summaryCount("Given")).toBe("1"));
+    expect(summaryCount("Skipped")).toBe("0");
+    expect(summaryCount("Missed")).toBe("0");
+  });
+
   it("renders each row with a trailing 'by <name>'", async () => {
     const repo = createMemoryRepo();
     const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
@@ -269,7 +406,35 @@ describe("HistoryView", () => {
     await screen.findByText("History");
 
     const self = await repo.getCurrentUser();
-    expect(screen.getAllByText(`by ${self.displayName}`).length).toBeGreaterThan(0);
+    expect(await screen.findAllByText(`by ${self.displayName}`)).not.toHaveLength(0);
+  });
+
+  // Regression for the row squeezing its title/detail column down to a
+  // near-single-word sliver at 360px when a long (e.g. Ukrainian) attribution
+  // couldn't shrink below its `white-space: nowrap` content width. SPEC
+  // §10a: nothing is truncated to fit — the row wraps the attribution onto
+  // its own line instead.
+  it("lets the row wrap rather than truncating the attribution", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    const medication = await withClock(FIXTURE_NOW, () =>
+      repo.createMedication({ name: "Metacam", form: "liquid", unit: "ml" }),
+    );
+    const course = await withClock(FIXTURE_NOW, () => seedCourse(repo, pet.id, medication.id, TODAY));
+    const givenIso = atLocalTime(TODAY, "06:00").toISOString();
+    await withClock(givenIso, () =>
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: givenIso, givenAt: givenIso, amount: 0.4 }),
+    );
+
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    await screen.findByText("History");
+
+    const attribution = (await screen.findAllByText(/^by /))[0];
+    expect(attribution.style.whiteSpace).not.toBe("nowrap");
+
+    const row = attribution.parentElement;
+    expect(row).not.toBeNull();
+    expect(row?.style.flexWrap).toBe("wrap");
   });
 
   it("renders 'by Someone' for an event whose actorId matches no household member", async () => {
@@ -305,7 +470,7 @@ describe("HistoryView", () => {
     renderWithProviders(<HistoryView petId={pet.id} />, { repo });
     await screen.findByText("History");
 
-    expect(screen.getAllByText(/^by Someone$/).length).toBeGreaterThan(0);
+    expect(await screen.findAllByText(/^by Someone$/)).not.toHaveLength(0);
     expect(screen.getAllByText(/^by Roman$/).length).toBeGreaterThan(0);
   });
 
@@ -382,7 +547,7 @@ describe("HistoryView", () => {
 
     // The course's own "started" entry plus the one dose above = 2 rows;
     // neither the stock purchase nor Marta's join adds a third.
-    expect(screen.getAllByText(/^by /)).toHaveLength(2);
+    expect(await screen.findAllByText(/^by /)).toHaveLength(2);
     expect(screen.queryByText(/New bottle/)).not.toBeInTheDocument();
     expect(screen.queryByText("Marta")).not.toBeInTheDocument();
   });
@@ -428,7 +593,7 @@ describe("HistoryView", () => {
     const user = userEvent.setup();
     await screen.findByText("History");
 
-    expect(screen.getAllByText(/boundary-marker/)).toHaveLength(1);
+    expect(await screen.findAllByText(/boundary-marker/)).toHaveLength(1);
     expect(screen.queryByText(/older-marker/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Load earlier" }));
@@ -670,8 +835,10 @@ describe("HistoryView", () => {
     expect(screen.getByRole("button", { name: "Назад" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Завантажити раніші" })).toBeInTheDocument();
     // A day heading, a detail line and an attribution, all localized — and a
-    // clock time still 24-hour and unlocalized (SPEC §10a).
-    expect(screen.getByText(/^Сьогодні · /)).toBeInTheDocument();
+    // clock time still 24-hour and unlocalized (SPEC §10a). `findByText` for
+    // the first one: the day groups depend on the event-log queries, which
+    // only fire once `courses` has resolved.
+    expect(await screen.findByText(/^Сьогодні · /)).toBeInTheDocument();
     expect(screen.getAllByText(/^виконано: /).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Курс призупинено$/).length).toBe(1);
     expect(screen.getAllByText(/^\d{2}:\d{2}$/).length).toBeGreaterThan(0);
