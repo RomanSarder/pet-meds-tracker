@@ -8,6 +8,7 @@
 // behaviour itself is deliberately implemented once per side and tested twice).
 import type { JoinCodeRejection, JoinCodeVerdict } from "@pet-tracker/shared";
 import type { JoinCode } from "@/domain";
+import type { Translator } from "@/i18n";
 
 export type { JoinCodeRejection, JoinCodeVerdict };
 
@@ -33,25 +34,32 @@ export function evaluateJoinCode(code: JoinCode | null, at: Date): JoinCodeVerdi
 }
 
 /** One factual line per refusal. No exclamation marks, no blame. */
-export function joinCodeRejectionMessage(reason: JoinCodeRejection): string {
+export function joinCodeRejectionMessage(reason: JoinCodeRejection, tr: Translator): string {
   switch (reason) {
     case "not_found":
-      return "That code does not match any household.";
+      return tr.t("household.joinCode.notFound");
     case "already_used":
-      return "That code has already been used. Ask for a new one.";
+      return tr.t("household.joinCode.alreadyUsed");
     case "expired":
-      return "That code has expired. Codes last 24 hours — ask for a new one.";
+      return tr.t("household.joinCode.expired");
     case "revoked":
-      return "That code was replaced by a newer one. Ask for the current code.";
+      return tr.t("household.joinCode.revoked");
     case "already_in_household":
-      return "You are already a member of this household.";
+      return tr.t("household.joinCode.alreadyInHousehold");
   }
 }
 
-/** Thrown by the redeem mutation so the screen can render the reason. */
+/**
+ * Thrown by the redeem mutation so the screen can render the reason. The
+ * `Error.message` here is a diagnostic string only — never rendered to a
+ * user; the screen renders `.reason` through the live translator instead
+ * (`joinCodeRejectionMessage` in `JoinHouseholdPage.tsx`), so this stays a
+ * plain, un-catalogued label rather than pulling in a translator for text
+ * nobody sees.
+ */
 export class JoinCodeRejectedError extends Error {
   constructor(public readonly reason: JoinCodeRejection) {
-    super(joinCodeRejectionMessage(reason));
+    super(`Join code rejected: ${reason}`);
     this.name = "JoinCodeRejectedError";
   }
 }

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Course, DoseEvent, Medication, Pet, StockAdjustment } from "@/domain";
 import { FIXTURE_NOW, fixtures } from "@/domain";
+import { createTranslator } from "@/i18n";
 import { weeksOfCoverLabel } from "./labels";
 import { buildSupplyItems, sortSupplyItems } from "./model";
 
 const NOW = new Date(FIXTURE_NOW); // 2026-08-08T07:00:00.000Z
+const EN = createTranslator("en");
 
 const MED_ID = "z0000000-0000-4000-8000-000000000001";
 const PET_ID = "p0000000-0000-4000-8000-000000000001";
@@ -96,6 +98,7 @@ describe("SPEC §12: two pets sharing one medication", () => {
       pets: fixtures.pets,
       adjustments: fixtures.stockAdjustments,
       now: NOW,
+      tr: EN,
     });
     const ivermectin = items.find((i) => i.medicationId === IVERMECTIN_ID);
     expect(ivermectin).toBeDefined();
@@ -119,6 +122,7 @@ describe("SPEC §12: a medication with only weekly courses reports weeks, not da
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
     const item = items.find((i) => i.medicationId === "m-weekly")!;
     // stockUnits 100 against dailyUse 1/7 -> daysOfCover 700, well outside
@@ -137,7 +141,7 @@ describe("SPEC §12: logging doses leaves stock unchanged", () => {
     const pts = [pet()];
     const adj = [adjustment()];
 
-    const before = buildSupplyItems({ medications: meds, courses: cs, pets: pts, adjustments: adj, now: NOW });
+    const before = buildSupplyItems({ medications: meds, courses: cs, pets: pts, adjustments: adj, now: NOW, tr: EN });
     const beforeItem = before.find((i) => i.medicationId === MED_ID)!;
 
     // Structural guarantee: buildSupplyItems's input type has no `doseEvents`
@@ -166,6 +170,7 @@ describe("SPEC §12: logging doses leaves stock unchanged", () => {
       pets: pts,
       adjustments: adj,
       now: NOW,
+      tr: EN,
       doseEvents: manyGivenDoseEvents,
     };
     const after = buildSupplyItems(
@@ -187,6 +192,7 @@ describe("stockUnits === null", () => {
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
     const item = items[0];
     // "Stock not set" is still shown to the user, but through the neutral
@@ -208,6 +214,7 @@ describe("note precedence", () => {
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
     const note = items[0].note!;
     expect(note.startsWith("Still have Metacam? Update stock.")).toBe(true);
@@ -221,6 +228,7 @@ describe("note precedence", () => {
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
     expect(items[0].note).toMatch(/^Runs out \w{3} \d{1,2} \w{3} · need /);
   });
@@ -232,8 +240,9 @@ describe("note precedence", () => {
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
-    expect(items[0].note).toBe(weeksOfCoverLabel(1000));
+    expect(items[0].note).toBe(weeksOfCoverLabel(1000, EN));
   });
 
   it("(d) an item with dailyUse === 0 has note undefined", () => {
@@ -243,6 +252,7 @@ describe("note precedence", () => {
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
     expect(items[0].note).toBeUndefined();
   });
@@ -256,6 +266,7 @@ describe("needed rounds up to whole packs", () => {
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
     expect(items[0].note).toContain("need 1 more pack");
   });
@@ -278,6 +289,7 @@ describe("sortSupplyItems", () => {
       pets: [pet()],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
 
     const buyNowBefore = new Map(items.map((i) => [i.medicationId, i.buyNow]));
@@ -302,6 +314,7 @@ describe("sortSupplyItems", () => {
       pets: [pet({ id: "pet-b", name: "Biscuit" }), pet({ id: "pet-a", name: "Alpha-Pet" })],
       adjustments: [],
       now: NOW,
+      tr: EN,
     });
 
     const buyNowBefore = new Map(items.map((i) => [i.medicationId, i.buyNow]));
@@ -321,7 +334,7 @@ describe("immutability", () => {
     const pts = deepFreeze([pet()]);
     const adj = deepFreeze([adjustment()]);
     expect(() =>
-      buildSupplyItems({ medications: meds, courses: cs, pets: pts, adjustments: adj, now: NOW }),
+      buildSupplyItems({ medications: meds, courses: cs, pets: pts, adjustments: adj, now: NOW, tr: EN }),
     ).not.toThrow();
   });
 });

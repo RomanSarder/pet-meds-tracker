@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNotificationWorker, showNotification, onNotificationAction } from "./bridge";
 import { MSG_ACTION } from "./protocol";
 import type { DoseRef } from "./types";
+import { setCurrentLocale } from "@/i18n/current";
 
 const DOSE: DoseRef = {
   occurrenceKey: "course-1|2026-08-08T07:00:00.000Z",
@@ -18,6 +19,10 @@ let originalServiceWorker: ServiceWorkerContainer | undefined;
 let consoleSpies: Array<ReturnType<typeof vi.spyOn>>;
 
 beforeEach(() => {
+  // `showNotification`'s action titles now read `currentTranslator()`
+  // (I18N-DESIGN.md §2.5) instead of hard-coded English, and nothing here
+  // renders through `renderWithProviders` to pin a locale.
+  setCurrentLocale("en");
   originalServiceWorker = (navigator as unknown as { serviceWorker?: ServiceWorkerContainer })
     .serviceWorker;
   consoleSpies = [
@@ -95,6 +100,24 @@ describe("showNotification", () => {
         { action: "snooze", title: "Snooze 30 min" },
       ],
     });
+    assertSilent();
+  });
+
+  it("localizes the two action titles when the locale is Ukrainian", async () => {
+    setCurrentLocale("uk");
+    const showNotificationFn = vi.fn().mockResolvedValue(undefined);
+    setServiceWorker({ ready: Promise.resolve({ showNotification: showNotificationFn }) });
+
+    await expect(showNotification(spec)).resolves.toBe(true);
+    expect(showNotificationFn).toHaveBeenCalledWith(
+      spec.title,
+      expect.objectContaining({
+        actions: [
+          { action: "give", title: "Дати" },
+          { action: "snooze", title: "Відкласти на 30 хв" },
+        ],
+      }),
+    );
     assertSilent();
   });
 

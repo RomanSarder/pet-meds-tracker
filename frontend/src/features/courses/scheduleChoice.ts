@@ -4,6 +4,7 @@
 // label is ever parsed inline in CourseFormPage.tsx.
 import type { IsoWeekday, LocalDate, Schedule } from "@/domain";
 import { addLocalDays } from "@/domain";
+import type { Translator } from "@/i18n";
 
 /** The kit's five interval chips, in the kit's order. SPEC §3b's set is 4|6|8|12|24. */
 export const INTERVAL_CHOICES = ["Every 4h", "Every 6h", "Every 8h", "Every 12h", "Every 24h"] as const;
@@ -55,6 +56,71 @@ export function scheduleForFrequencyChoice(c: FrequencyChoice): Schedule {
       // anchorTime and no everyNDays: the form offers neither, and adding an
       // absent optional field would change what the persisted object equals.
       return { kind: "fixedTimes", times: ["08:00"], daysOfWeek: [WEEKLY_ISO_DAY] };
+  }
+}
+
+/**
+ * The chip's rendered label — the persisted/compared VALUE stays the fixed
+ * English token above (state equality and the `Schedule` mapping both key
+ * off it); only the text shown to the user goes through the catalogue. See
+ * `i18n/catalogue/pets.ts`'s `courses.interval.*` block.
+ */
+export function intervalChoiceLabel(c: IntervalChoice, tr: Translator): string {
+  switch (c) {
+    case "Every 4h":
+      return tr.t("courses.interval.every4h");
+    case "Every 6h":
+      return tr.t("courses.interval.every6h");
+    case "Every 8h":
+      return tr.t("courses.interval.every8h");
+    case "Every 12h":
+      return tr.t("courses.interval.every12h");
+    case "Every 24h":
+      return tr.t("courses.interval.every24h");
+  }
+}
+
+/** The hours an interval choice implies — used to compose the Reminders
+ * paragraph without re-parsing the chip's own label text. */
+export function intervalChoiceHours(c: IntervalChoice): number {
+  return INTERVAL_HOURS[c];
+}
+
+/** Same rule as `intervalChoiceLabel`, for the frequency chip row. */
+export function frequencyChoiceLabel(c: FrequencyChoice, tr: Translator): string {
+  switch (c) {
+    case "Once daily":
+      return tr.t("courses.frequency.onceDaily");
+    case "2× daily":
+      return tr.t("courses.frequency.twiceDaily");
+    case "3× daily":
+      return tr.t("courses.frequency.thriceDaily");
+    case "Weekly":
+      return tr.t("courses.frequency.weekly");
+  }
+}
+
+/** Same rule, for the duration `SegmentedControl`. */
+export function durationChoiceLabel(c: DurationChoice, tr: Translator): string {
+  switch (c) {
+    case "7 days":
+      return tr.t("courses.duration.sevenDays");
+    case "14 days":
+      return tr.t("courses.duration.fourteenDays");
+    case "Ongoing":
+      return tr.t("courses.duration.ongoing");
+    case "Custom":
+      return tr.t("courses.duration.custom");
+  }
+}
+
+/** Same rule, for the mode `SegmentedControl`. */
+export function modeChoiceLabel(c: ModeChoice, tr: Translator): string {
+  switch (c) {
+    case "From last dose":
+      return tr.t("courses.mode.fromLastDose");
+    case "At set times":
+      return tr.t("courses.mode.atSetTimes");
   }
 }
 

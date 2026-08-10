@@ -209,7 +209,7 @@ describe("SuppliesPage", () => {
     expect(buyNowSiblings()[0]?.textContent).not.toContain("Vitamin C");
   });
 
-  it("'Add to list' toggles the bottom bar count with no pluralisation", async () => {
+  it("'Add to list' toggles the bottom bar count through a real plural rule", async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText("Buy now");
@@ -218,7 +218,9 @@ describe("SuppliesPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Add Metacam to list" }));
 
-    expect(screen.getByRole("button", { name: /Shopping list · 1 items/ })).toBeInTheDocument();
+    // Was the pre-existing English plural bug "Shopping list · 1 items" —
+    // fixed by routing the count through `tr.fmt.plural` (WAVE3-COMMON.md).
+    expect(screen.getByRole("button", { name: /Shopping list · 1 item$/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Shopping list · 0 items/ })).not.toBeInTheDocument();
   });
 
@@ -228,7 +230,7 @@ describe("SuppliesPage", () => {
     await screen.findByText("Buy now");
 
     await user.click(screen.getByRole("button", { name: "Add Metacam to list" }));
-    await user.click(screen.getByRole("button", { name: /Shopping list · 1 items/ }));
+    await user.click(screen.getByRole("button", { name: /Shopping list · 1 item$/ }));
 
     expect(await screen.findByText("Shopping list")).toBeInTheDocument();
     // "Metacam · 1 more pack · Clover, Nugget" — name, quantity, pets (SPEC §6.6).

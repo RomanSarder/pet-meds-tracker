@@ -1,5 +1,13 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { apiClient, ApiError, NetworkError } from "./api";
+import { setCurrentLocale } from "@/i18n/current";
+
+// `apiClient`'s NetworkError message now comes from `currentTranslator()`
+// (I18N-DESIGN.md §2.5), and nothing here renders through
+// `renderWithProviders` to pin a locale, so pin it explicitly.
+beforeEach(() => {
+  setCurrentLocale("en");
+});
 
 function makeResponse(init: { ok: boolean; status?: number; body?: string }): Response {
   return {
@@ -29,6 +37,20 @@ describe("apiClient", () => {
     await expect(apiClient("/today")).rejects.toMatchObject({
       message: "Could not reach the server.",
       cause,
+    });
+  });
+
+  it("rejects with the Ukrainian NetworkError message when the locale is Ukrainian", async () => {
+    setCurrentLocale("uk");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+
+    await expect(apiClient("/today")).rejects.toMatchObject({
+      message: "Не вдалося з'єднатися із сервером.",
     });
   });
 

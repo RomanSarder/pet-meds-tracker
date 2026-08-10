@@ -1,7 +1,7 @@
 {
   "name": "Pet Meds",
   "short_name": "Pet Meds",
-  "description": "Track pet medication doses and never miss one.",
+  "description": "Стежте за прийомом ліків для тварин і ніколи не пропускайте дозу.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

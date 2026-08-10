@@ -1,3 +1,5 @@
+import { currentTranslator } from "@/i18n/current";
+
 export class ApiError extends Error {
   constructor(public status: number, message: string, public data: Record<string, unknown> = {}) {
     super(message);
@@ -29,7 +31,13 @@ export async function apiClient<T = unknown>(path: string, options?: RequestInit
       },
     });
   } catch (err) {
-    throw new NetworkError("Could not reach the server.", err);
+    // Surfaces to the user through toasts/alerts at call sites, so this is
+    // user-facing copy, not a debug string — hence `currentTranslator()`
+    // rather than a hard-coded English message. `apiClient` is called from
+    // everywhere in the app (outside this wave's scope, in most cases), so
+    // the non-React accessor is used rather than adding a `Translator`
+    // parameter to this signature.
+    throw new NetworkError(currentTranslator().t("api.networkError"), err);
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

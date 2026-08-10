@@ -12,15 +12,13 @@ import { useCourses, useDoseEvents, useMedications } from "@/features/courses/ho
 import { buildLogEntries } from "@/features/history/logModel";
 import { useCourseEventLog, useUsers } from "@/features/history/hooks";
 import { renderCourseProgress, renderSchedule } from "@/i18n/schedule";
-import { renderDetail } from "@/i18n/history";
-import { createTranslator } from "@/i18n";
+import { renderDetail, renderLogTitle } from "@/i18n/history";
+import { useTranslator } from "@/i18n";
 import { ageLabel } from "./age";
 import { doseRowPropsFor } from "./doseRow";
 import { courseLabel, eventWhenLabel, joinMeta, speciesLabel, weightLabel } from "./format";
 import { usePet, useSetPetArchived } from "./hooks";
 import { ScheduleRow } from "./ScheduleRow";
-
-const enTr = createTranslator("en");
 
 // Same accent-ghost look the hand-rolled `<Button variant="ghost" block>`
 // menu items had, ported to a real `Menu.Item` — see the "Escape doesn't
@@ -46,6 +44,7 @@ export function PetDetailPage() {
 /** All the behaviour. This is what the tests render. */
 export function PetDetailView({ petId }: { petId: string }) {
   const navigate = useNavigate();
+  const tr = useTranslator();
   const [menuOpen, setMenuOpen] = useState(false);
 
   const nowDate = now();
@@ -116,7 +115,7 @@ export function PetDetailView({ petId }: { petId: string }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 22px 12px" }}>
           <button
             onClick={() => navigate({ to: "/pets" })}
-            aria-label="Back"
+            aria-label={tr.t("pets.back")}
             style={{
               background: "none",
               border: "none",
@@ -143,13 +142,15 @@ export function PetDetailView({ petId }: { petId: string }) {
           >
             ‹
           </button>
-          <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)" }}>Pets</span>
+          <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)" }}>
+            {tr.t("pets.pageTitle")}
+          </span>
           <Menu.Trigger
             render={
               <IconButton
                 icon="ellipsis"
                 variant="plain"
-                label="More actions"
+                label={tr.t("pets.moreActions")}
                 size={44}
                 style={{ marginLeft: "auto" }}
               />
@@ -173,10 +174,10 @@ export function PetDetailView({ petId }: { petId: string }) {
                 style={MENU_ITEM_STYLE}
                 onClick={() => navigate({ to: "/pets/$petId/edit", params: { petId } })}
               >
-                Edit pet
+                {tr.t("pets.editPet")}
               </Menu.Item>
               <Menu.Item style={MENU_ITEM_STYLE} onClick={handleArchive}>
-                Archive pet
+                {tr.t("pets.archivePet")}
               </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>
@@ -191,9 +192,9 @@ export function PetDetailView({ petId }: { petId: string }) {
           </div>
           <div style={{ fontSize: 14, color: "var(--ink-3)", marginTop: 2 }}>
             {joinMeta([
-              speciesLabel(pet.data.species),
-              ageLabel(pet.data.birthdate, today),
-              weightLabel(pet.data.weightGrams),
+              speciesLabel(pet.data.species, tr),
+              ageLabel(pet.data.birthdate, today, tr),
+              weightLabel(pet.data.weightGrams, tr),
             ])}
           </div>
         </div>
@@ -209,7 +210,9 @@ export function PetDetailView({ petId }: { petId: string }) {
           gap: 14,
         }}
       >
-        <SectionLabel trailing={`${occurrences.length} today`}>Schedule</SectionLabel>
+        <SectionLabel trailing={tr.t("pets.schedule.countToday", { count: occurrences.length })}>
+          {tr.t("pets.schedule")}
+        </SectionLabel>
         <Card>
           {occurrences.map((o, i) => {
             const course = activeCourses.find((c) => c.id === o.courseId);
@@ -219,7 +222,8 @@ export function PetDetailView({ petId }: { petId: string }) {
               state,
               medicationName: medicationName(o.medicationId),
               instructions: o.instructions,
-              progress: course ? renderCourseProgress(courseProgress(course, today), enTr) : "",
+              progress: course ? renderCourseProgress(courseProgress(course, today), tr) : "",
+              tr,
             });
             // Read-only (SPEC §5.3): no `onGive`, and never the DS `DoseRow`
             // itself — it hard-codes a "Give" `Button` for every non-`given`
@@ -242,15 +246,15 @@ export function PetDetailView({ petId }: { petId: string }) {
           })}
         </Card>
 
-        <SectionLabel>Courses</SectionLabel>
+        <SectionLabel>{tr.t("pets.courses")}</SectionLabel>
         {activeCourses.map((c) => {
-          const label = courseLabel(medicationName(c.medicationId), c.doseAmount, c.doseUnit);
+          const label = courseLabel(medicationName(c.medicationId), c.doseAmount, c.doseUnit, tr);
           return (
             <Card
               key={c.id}
               role="button"
               tabIndex={0}
-              aria-label={`Open ${label}`}
+              aria-label={tr.t("pets.openCourse", { label })}
               style={{
                 display: "flex",
                 justifyContent: "space-between",
@@ -269,12 +273,16 @@ export function PetDetailView({ petId }: { petId: string }) {
               <div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--ink-1)" }}>{label}</div>
                 <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
-                  {renderSchedule(describeSchedule(c.schedule), enTr)}
+                  {renderSchedule(describeSchedule(c.schedule), tr)}
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {c.status === "paused" ? <Badge tone="neutral">Paused</Badge> : null}
-                <Badge tone={c.endDate ? "accent" : "neutral"}>{renderCourseProgress(courseProgress(c, today), enTr)}</Badge>
+                {c.status === "paused" ? (
+                  <Badge tone="neutral">{tr.t("pets.courseStatus.paused")}</Badge>
+                ) : null}
+                <Badge tone={c.endDate ? "accent" : "neutral"}>
+                  {renderCourseProgress(courseProgress(c, today), tr)}
+                </Badge>
               </div>
             </Card>
           );
@@ -294,21 +302,24 @@ export function PetDetailView({ petId }: { petId: string }) {
                 fontWeight: 600,
               }}
             >
-              See all history
+              {tr.t("pets.seeAllHistory")}
             </button>
           }
         >
-          Recent
+          {tr.t("pets.recent")}
         </SectionLabel>
         <Card tone="quiet" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {recentLog.map((entry) => {
+            // "Skipped"/"Missed" are reused verbatim from the History
+            // catalogue (`history.detail.*`) rather than duplicated here —
+            // same word, same concept, in both languages.
             const suffix =
               entry.status === "skipped"
-                ? " · Skipped"
+                ? ` · ${tr.t("history.detail.skipped")}`
                 : entry.status === "missed"
-                  ? " · Missed"
+                  ? ` · ${tr.t("history.detail.missed")}`
                   : entry.status === "course"
-                    ? ` · ${renderDetail(entry.detail, enTr)}`
+                    ? ` · ${renderDetail(entry.detail, tr)}`
                     : "";
             return (
               <div
@@ -316,11 +327,14 @@ export function PetDetailView({ petId }: { petId: string }) {
                 style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: "var(--ink-2)" }}
               >
                 <span>
-                  {entry.title}
+                  {renderLogTitle(entry.title, tr)}
                   {suffix}
                 </span>
                 <span style={{ color: "var(--ink-3)", fontSize: 13 }}>
-                  {eventWhenLabel(new Date(entry.at), today)} · by {nameFor(entry.actorId)}
+                  {tr.t("pets.recent.attribution", {
+                    when: eventWhenLabel(new Date(entry.at), today, tr),
+                    actor: nameFor(entry.actorId),
+                  })}
                 </span>
               </div>
             );
@@ -334,7 +348,7 @@ export function PetDetailView({ petId }: { petId: string }) {
           icon="plus"
           onClick={() => navigate({ to: "/courses/new", search: { petId } })}
         >
-          Add medication
+          {tr.t("pets.addMedication")}
         </Button>
       </div>
     </div>

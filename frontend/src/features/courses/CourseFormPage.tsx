@@ -12,6 +12,8 @@ import { usePets } from "@/features/pets/hooks";
 import { amountLabel } from "@/features/pets/format";
 import type { CourseStatus, LocalDate } from "@/domain";
 import { differenceInLocalDays, localDayKey, now } from "@/domain";
+import { useTranslator } from "@/i18n";
+import type { Translator } from "@/i18n";
 import { useCourse, useMedications, useSaveCourse, useSetCourseStatus, useUpdateCourse } from "./hooks";
 import {
   DURATION_CHOICES,
@@ -19,7 +21,12 @@ import {
   INTERVAL_CHOICES,
   MODE_CHOICES,
   choicesForSchedule,
+  durationChoiceLabel,
   endDateForDurationChoice,
+  frequencyChoiceLabel,
+  intervalChoiceHours,
+  intervalChoiceLabel,
+  modeChoiceLabel,
   scheduleForFrequencyChoice,
   scheduleForIntervalChoice,
   timesForFrequencyChoice,
@@ -29,12 +36,21 @@ import {
   type ModeChoice,
 } from "./scheduleChoice";
 
-const STATUS_WORDS: Record<CourseStatus, string> = {
-  active: "Active",
-  paused: "Paused",
-  finished: "Finished",
-  stopped: "Stopped",
-};
+/** `CourseStatus` word, shown on the course-lifecycle card. Not exported —
+ * the four `pets.courseStatus.*` catalogue entries are shared with Pet
+ * detail's "Paused" badge (see `i18n/catalogue/pets.ts`). */
+function courseStatusLabel(status: CourseStatus, tr: Translator): string {
+  switch (status) {
+    case "active":
+      return tr.t("pets.courseStatus.active");
+    case "paused":
+      return tr.t("pets.courseStatus.paused");
+    case "finished":
+      return tr.t("pets.courseStatus.finished");
+    case "stopped":
+      return tr.t("pets.courseStatus.stopped");
+  }
+}
 
 interface FormErrors {
   pet?: string;
@@ -59,6 +75,7 @@ export function CourseFormView({
   initialPetId?: string;
 }) {
   const navigate = useNavigate();
+  const tr = useTranslator();
   const isEdit = !!courseId;
   const medicationListId = useId();
 
@@ -128,14 +145,14 @@ export function CourseFormView({
 
   function validate(): boolean {
     const next: FormErrors = {};
-    if (!petId) next.pet = "Choose a pet";
-    if (!medicationName.trim()) next.medication = "Enter a medication name";
+    if (!petId) next.pet = tr.t("courses.petError");
+    if (!medicationName.trim()) next.medication = tr.t("courses.medicationError");
     const amountNum = Number(doseAmount);
     if (!doseAmount.trim() || !Number.isFinite(amountNum) || amountNum <= 0) {
-      next.dose = "Enter a dose amount";
+      next.dose = tr.t("courses.doseError");
     }
     if (duration === "Custom" && !customEndDate) {
-      next.endDate = "Pick an end date";
+      next.endDate = tr.t("courses.endDateError");
     }
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -216,10 +233,12 @@ export function CourseFormView({
           padding: "14px 22px 16px",
         }}
       >
-        <span style={{ fontSize: 22, fontWeight: 800, color: "var(--ink-1)" }}>New medication</span>
+        <span style={{ fontSize: 22, fontWeight: 800, color: "var(--ink-1)" }}>
+          {tr.t("courses.newMedicationTitle")}
+        </span>
         <button
           onClick={handleClose}
-          aria-label="Close"
+          aria-label={tr.t("pets.close")}
           style={{
             background: "none",
             border: "none",
@@ -258,7 +277,7 @@ export function CourseFormView({
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <SectionLabel rule={false}>For</SectionLabel>
+          <SectionLabel rule={false}>{tr.t("courses.for")}</SectionLabel>
           {petsQuery.isPending ? (
             <div role="status" aria-busy="true" style={{ display: "flex", gap: 10, overflowX: "auto" }}>
               <span
@@ -274,7 +293,7 @@ export function CourseFormView({
                   border: 0,
                 }}
               >
-                Loading pets
+                {tr.t("courses.loadingPets")}
               </span>
               {[0, 1, 2].map((i) => (
                 <div
@@ -353,8 +372,8 @@ export function CourseFormView({
         </div>
 
         <Field
-          label="Medication"
-          placeholder="e.g. Metacam"
+          label={tr.t("courses.medicationLabel")}
+          placeholder={tr.t("courses.medicationPlaceholder")}
           list={medicationListId}
           value={medicationName}
           onChange={(e) => setMedicationName(e.target.value)}
@@ -367,15 +386,13 @@ export function CourseFormView({
           ))}
         </datalist>
         {isEdit ? (
-          <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
-            Pet and medication can&apos;t be changed after a course is created.
-          </div>
+          <div style={{ fontSize: 13, color: "var(--ink-3)" }}>{tr.t("courses.lockedNote")}</div>
         ) : null}
 
         <div style={{ display: "flex", gap: 10 }}>
           <Field
-            label="Dose amount"
-            placeholder="e.g. 0.4"
+            label={tr.t("courses.doseAmountLabel")}
+            placeholder={tr.t("courses.doseAmountPlaceholder")}
             inputMode="decimal"
             style={{ flex: 1 }}
             value={doseAmount}
@@ -383,24 +400,26 @@ export function CourseFormView({
             error={errors.dose}
           />
           <Field
-            label="Unit"
-            placeholder="e.g. ml"
+            label={tr.t("courses.unitLabel")}
+            placeholder={tr.t("courses.unitPlaceholder")}
             style={{ width: 110 }}
             value={doseUnit}
             onChange={(e) => setDoseUnit(e.target.value)}
           />
         </div>
         <Field
-          label="Instructions"
-          placeholder="e.g. after food"
+          label={tr.t("courses.instructionsLabel")}
+          placeholder={tr.t("courses.instructionsPlaceholder")}
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
         />
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>How it is scheduled</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
+            {tr.t("courses.howScheduled")}
+          </span>
           <SegmentedControl
-            options={[...MODE_CHOICES]}
+            options={MODE_CHOICES.map((c) => ({ value: c, label: modeChoiceLabel(c, tr) }))}
             value={mode}
             onChange={(v) => setMode(v as ModeChoice)}
           />
@@ -408,11 +427,15 @@ export function CourseFormView({
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
-            {mode === "From last dose" ? "Interval" : "How often"}
+            {mode === "From last dose" ? tr.t("courses.intervalLabel") : tr.t("courses.howOften")}
           </span>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {intervalOrFrequencyChoices.map((o) => {
               const selected = mode === "From last dose" ? intervalChoice === o : frequency === o;
+              const label =
+                mode === "From last dose"
+                  ? intervalChoiceLabel(o as IntervalChoice, tr)
+                  : frequencyChoiceLabel(o as FrequencyChoice, tr);
               return (
                 <Chip
                   key={o}
@@ -426,7 +449,7 @@ export function CourseFormView({
                     }
                   }}
                 >
-                  {o}
+                  {label}
                 </Chip>
               );
             })}
@@ -434,15 +457,17 @@ export function CourseFormView({
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>For how long</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
+            {tr.t("courses.forHowLong")}
+          </span>
           <SegmentedControl
-            options={[...DURATION_CHOICES]}
+            options={DURATION_CHOICES.map((c) => ({ value: c, label: durationChoiceLabel(c, tr) }))}
             value={duration}
             onChange={(v) => setDuration(v as DurationChoice)}
           />
           {duration === "Custom" ? (
             <Field
-              label="End date"
+              label={tr.t("courses.endDateLabel")}
               type="date"
               value={customEndDate}
               onChange={(e) => setCustomEndDate(e.target.value)}
@@ -452,11 +477,12 @@ export function CourseFormView({
         </div>
 
         <Card tone="quiet" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>Reminders</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
+            {tr.t("courses.reminders")}
+          </span>
           {mode === "From last dose" ? (
             <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.5 }}>
-              The next dose is counted from the moment you log one — {intervalChoice.toLowerCase()}.
-              Nothing is due until the first dose is logged.
+              {tr.t("courses.reminders.fromLastDose", { hours: intervalChoiceHours(intervalChoice) })}
             </div>
           ) : (
             timesForFrequencyChoice(frequency).map((t) => (
@@ -477,10 +503,10 @@ export function CourseFormView({
 
         {isEdit && existingCourse ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <SectionLabel>Course</SectionLabel>
+            <SectionLabel>{tr.t("courses.courseSection")}</SectionLabel>
             <Card style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)" }}>
-                {STATUS_WORDS[existingCourse.status]}
+                {courseStatusLabel(existingCourse.status, tr)}
               </span>
               {existingCourse.status === "active" ? (
                 <>
@@ -488,14 +514,14 @@ export function CourseFormView({
                     size="md"
                     onClick={() => setCourseStatus.mutate({ id: existingCourse.id, status: "paused" })}
                   >
-                    Pause
+                    {tr.t("courses.pause")}
                   </Button>
                   <Button
                     size="md"
                     variant="secondary"
                     onClick={() => setCourseStatus.mutate({ id: existingCourse.id, status: "stopped" })}
                   >
-                    Stop
+                    {tr.t("courses.stop")}
                   </Button>
                 </>
               ) : null}
@@ -505,14 +531,14 @@ export function CourseFormView({
                     size="md"
                     onClick={() => setCourseStatus.mutate({ id: existingCourse.id, status: "active" })}
                   >
-                    Resume
+                    {tr.t("courses.resume")}
                   </Button>
                   <Button
                     size="md"
                     variant="secondary"
                     onClick={() => setCourseStatus.mutate({ id: existingCourse.id, status: "stopped" })}
                   >
-                    Stop
+                    {tr.t("courses.stop")}
                   </Button>
                 </>
               ) : null}
@@ -522,7 +548,7 @@ export function CourseFormView({
       </div>
       <div style={{ padding: "12px 22px 22px", borderTop: "1px solid var(--line)", background: "var(--surface)" }}>
         <Button variant="ink" size="lg" block disabled={saving} onClick={() => void handleSave()}>
-          Save medication
+          {tr.t("courses.saveMedication")}
         </Button>
       </div>
     </div>

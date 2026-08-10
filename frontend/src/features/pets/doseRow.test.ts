@@ -3,7 +3,10 @@
 // "upcoming"). Every `DoseState` is passed in directly instead.
 import { describe, expect, it } from "vitest";
 import type { DoseState, Occurrence } from "@/engine";
+import { createTranslator } from "@/i18n";
 import { doseRowPropsFor } from "./doseRow";
+
+const enTr = createTranslator("en");
 
 /** A minimal, valid `Occurrence` literal — built by hand from `engine.types.ts`. */
 function baseOccurrence(overrides: Partial<Occurrence> = {}): Occurrence {
@@ -40,6 +43,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 3 of 7",
+      tr: enTr,
     });
     expect(props.state).toBe(rowState);
     expect(props.time).toBe(time);
@@ -52,6 +56,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 3 of 7",
+      tr: enTr,
     });
     expect(props).toMatchObject({ state: "given", time: "Skipped" });
   });
@@ -63,6 +68,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metoclopramide",
       instructions: null,
       progress: "Ongoing — from last dose",
+      tr: enTr,
     });
     expect(props).toMatchObject({ state: "later", time: "Not started" });
   });
@@ -74,6 +80,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: "after food",
       progress: "Day 3 of 7",
+      tr: enTr,
     });
     expect(props.detail).toBe("08:00 · after food · Day 3 of 7");
   });
@@ -85,6 +92,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 3 of 7",
+      tr: enTr,
     });
     expect(props.detail).toBe("08:00 · Day 3 of 7");
     expect(props.detail).not.toContain("· ·");
@@ -97,6 +105,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Ivermectin",
       instructions: null,
       progress: "Day 1",
+      tr: enTr,
     });
     expect(props.medication).toBe("Ivermectin 2 drops");
   });

@@ -5,6 +5,7 @@ import { createMemoryRepo } from "@/data/memoryRepo";
 import type { DoseEvent, Household, JoinCode, User } from "@/domain";
 import { DEFAULT_SELF_DISPLAY_NAME } from "@/domain";
 import { apiClient } from "@/shared/api";
+import { createTranslator } from "@/i18n";
 import { HouseholdPage } from "./HouseholdPage";
 
 // Same pattern as YourNamePanel.test.tsx: the reassurance line is the only
@@ -128,6 +129,14 @@ describe("HouseholdPage", () => {
 
     expect(screen.getByText("Ilya")).toBeInTheDocument();
     expect(screen.getByText("Joined 1 Jul")).toBeInTheDocument();
+  });
+
+  it("household.peopleCount: real Ukrainian one/few/many plural forms at n = 1, 2, 5, 21", () => {
+    const uk = createTranslator("uk");
+    expect(uk.t("household.peopleCount", { count: 1 })).toBe("1 особа");
+    expect(uk.t("household.peopleCount", { count: 2 })).toBe("2 особи");
+    expect(uk.t("household.peopleCount", { count: 5 })).toBe("5 осіб");
+    expect(uk.t("household.peopleCount", { count: 21 })).toBe("21 особа");
   });
 
   it("subtitle counts people and singularises at one person", async () => {

@@ -3,40 +3,43 @@
 // CONTRACT-supplies.md "features/supplies/labels.ts — exact contract".
 import type { Schedule } from "@/domain";
 import { doseLabel, joinMeta } from "@/features/pets/format";
-import { createTranslator } from "@/i18n";
+import type { Translator } from "@/i18n";
 
-// TODO(wave3): replace enTr with a real translator when the supplies feature
-// is localized.
-const enTr = createTranslator("en");
+// Every function below REQUIRES a real `Translator` from the caller — there
+// is no default. A default would let a call site silently render English
+// inside a Ukrainian screen with no compile error and no test failure;
+// requiring the argument makes the compiler find every call site.
 
 /**
  * "2× daily" | "daily" | "weekly" | "every 2 days" | "every 5h". Kit's own
  * vocabulary — a once-daily course is "daily", never "once daily".
  */
-export function frequencyLabel(schedule: Schedule): string {
+export function frequencyLabel(schedule: Schedule, tr: Translator): string {
   if (schedule.kind === "fromLastDose") {
     const n = 24 / schedule.intervalHours;
     if (Number.isInteger(n)) {
-      return n === 1 ? "daily" : `${n}× daily`;
+      return n === 1 ? tr.t("supplies.frequency.daily") : tr.t("supplies.frequency.timesDaily", { n });
     }
-    return `every ${schedule.intervalHours}h`;
+    return tr.t("supplies.frequency.everyHours", { hours: schedule.intervalHours });
   }
 
   if (schedule.everyNDays && schedule.everyNDays > 1) {
-    return `every ${schedule.everyNDays} days`;
+    return tr.t("supplies.frequency.everyDays", { days: schedule.everyNDays });
   }
   if (schedule.daysOfWeek?.length === 1) {
-    return "weekly";
+    return tr.t("supplies.frequency.weekly");
   }
-  return schedule.times.length === 1 ? "daily" : `${schedule.times.length}× daily`;
+  return schedule.times.length === 1
+    ? tr.t("supplies.frequency.daily")
+    : tr.t("supplies.frequency.timesDaily", { n: schedule.times.length });
 }
 
 /** "Nugget, Biscuit · weekly" — pet names in the given order, then the distinct frequency labels. */
-export function forWhomLabel(petNames: string[], schedules: Schedule[]): string {
+export function forWhomLabel(petNames: string[], schedules: Schedule[], tr: Translator): string {
   const seen = new Set<string>();
   const distinctFrequencies: string[] = [];
   for (const schedule of schedules) {
-    const label = frequencyLabel(schedule);
+    const label = frequencyLabel(schedule, tr);
     if (!seen.has(label)) {
       seen.add(label);
       distinctFrequencies.push(label);
@@ -46,41 +49,30 @@ export function forWhomLabel(petNames: string[], schedules: Schedule[]): string 
 }
 
 /** "54 tabs" | "3.3 ml" | "Stock not set". */
-export function stockLabel(stockUnits: number | null, unit: string): string {
-  return stockUnits === null ? "Stock not set" : doseLabel(stockUnits, unit, enTr);
+export function stockLabel(stockUnits: number | null, unit: string, tr: Translator): string {
+  return stockUnits === null ? tr.t("supplies.stock.notSet") : doseLabel(stockUnits, unit, tr);
 }
 
-const SHORT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const SHORT_MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-/** "Wed 12 Aug", from local `Date` getters. */
-export function runOutLabel(d: Date): string {
-  return `${SHORT_WEEKDAYS[d.getDay()]} ${d.getDate()} ${SHORT_MONTHS[d.getMonth()]}`;
+/** "Wed 12 Aug" — a DATE, so it localizes via `tr.fmt.weekdayDayMonth`. */
+export function runOutLabel(d: Date, tr: Translator): string {
+  return tr.fmt.weekdayDayMonth(d);
 }
 
 /** "1 more pack" | "2 more packs" | "3 ml" when packSize is null. */
-export function neededLabel(neededPacks: number | null, needed: number, unit: string): string {
+export function neededLabel(
+  neededPacks: number | null,
+  needed: number,
+  unit: string,
+  tr: Translator,
+): string {
   if (neededPacks !== null) {
-    return `${neededPacks} more pack${neededPacks === 1 ? "" : "s"}`;
+    return tr.t("supplies.needed.morePacks", { n: neededPacks });
   }
-  return doseLabel(needed, unit, enTr);
+  return doseLabel(needed, unit, tr);
 }
 
 /** "~7 weeks of cover", "~1 week of cover" — never "~0 weeks". */
-export function weeksOfCoverLabel(daysOfCover: number): string {
+export function weeksOfCoverLabel(daysOfCover: number, tr: Translator): string {
   const weeks = Math.max(1, Math.round(daysOfCover / 7));
-  return `~${weeks} week${weeks === 1 ? "" : "s"} of cover`;
+  return tr.t("supplies.weeksOfCover", { weeks });
 }

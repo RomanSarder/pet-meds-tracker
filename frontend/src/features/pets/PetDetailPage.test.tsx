@@ -43,9 +43,9 @@ describe("PetDetailView", () => {
 
     expect(await screen.findByText(pet.name)).toBeInTheDocument();
     const expectedMeta = joinMeta([
-      speciesLabel(pet.species),
-      ageLabel(pet.birthdate, TODAY),
-      weightLabel(pet.weightGrams),
+      speciesLabel(pet.species, enTr),
+      ageLabel(pet.birthdate, TODAY, enTr),
+      weightLabel(pet.weightGrams, enTr),
     ]);
     expect(screen.getByText(expectedMeta)).toBeInTheDocument();
   });
@@ -59,7 +59,7 @@ describe("PetDetailView", () => {
     renderWithProviders(<PetDetailView petId={pet.id} />, { repo });
 
     expect(await screen.findByText(pet.name)).toBeInTheDocument();
-    const expectedMeta = joinMeta([speciesLabel(pet.species), null, weightLabel(pet.weightGrams)]);
+    const expectedMeta = joinMeta([speciesLabel(pet.species, enTr), null, weightLabel(pet.weightGrams, enTr)]);
     const metaEl = screen.getByText(expectedMeta);
     expect(metaEl.textContent).not.toMatch(/·\s*·/);
     expect(metaEl.textContent?.trim().startsWith("·")).toBe(false);
@@ -254,6 +254,7 @@ describe("PetDetailView", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 2 of 7",
+      tr: enTr,
     });
 
     const { container } = render(<DoseRow {...props} />);
@@ -273,7 +274,7 @@ describe("PetDetailView", () => {
     expect(cloverCourses.length).toBeGreaterThan(0);
     for (const course of cloverCourses) {
       const medication = fixtures.medications.find((m) => m.id === course.medicationId)!;
-      const label = courseLabel(medication.name, course.doseAmount, course.doseUnit);
+      const label = courseLabel(medication.name, course.doseAmount, course.doseUnit, enTr);
       // The medication label also appears in the Schedule section's rows
       // above, so scope the rest of the assertion to this course's own
       // card — found via the `aria-label` the page gives it for navigation.

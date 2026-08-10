@@ -8,6 +8,7 @@ import { clearSessionEstablished, setStoreOwner } from "@/shared/session";
 import { getRepo } from "@/data";
 import { downloadBackup } from "@/data/backupFile";
 import { Button, Card, ScreenHeader } from "@/components/ds";
+import { useT } from "@/i18n";
 
 // WA-DESIGN §D5. Reached ONLY from the router guard's blocking branch
 // (router.ts, owned by the concurrent builder this wave): a different
@@ -27,6 +28,7 @@ type SessionState =
   | { status: "unavailable" };
 
 export function AccountSwitchPage() {
+  const t = useT();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -83,7 +85,7 @@ export function AccountSwitchPage() {
     } catch (err) {
       setDownloading(false);
       setBackupError(
-        err instanceof Error ? err.message : "Could not download a backup.",
+        err instanceof Error ? err.message : t("account.switch.backupError"),
       );
       return;
     }
@@ -99,7 +101,7 @@ export function AccountSwitchPage() {
 
   return (
     <div>
-      <ScreenHeader title="Another account's data is on this device" />
+      <ScreenHeader title={t("account.switch.title")} />
       <div
         style={{
           padding: "0 22px 24px",
@@ -115,9 +117,7 @@ export function AccountSwitchPage() {
             color: "var(--ink-2)",
           }}
         >
-          This device still holds pet records that have not been backed up to
-          the server, and they belong to the account that used it last.
-          Signing in here would replace them.
+          {t("account.switch.description")}
         </Card>
 
         {backupError ? (
@@ -134,7 +134,7 @@ export function AccountSwitchPage() {
             disabled={signingOut}
             onClick={handleSignOut}
           >
-            Sign out and leave it alone
+            {t("account.switch.signOut")}
           </Button>
           <Button
             type="button"
@@ -143,12 +143,11 @@ export function AccountSwitchPage() {
             disabled={secondaryDisabled}
             onClick={handleBackupThenContinue}
           >
-            Download a backup, then continue
+            {t("account.switch.backupThenContinue")}
           </Button>
           {session.status === "unavailable" ? (
             <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
-              We could not confirm which account is signing in, so only
-              signing out is available here.
+              {t("account.switch.sessionUnavailable")}
             </div>
           ) : null}
         </div>

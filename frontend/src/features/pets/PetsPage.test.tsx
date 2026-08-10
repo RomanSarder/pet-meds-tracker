@@ -8,8 +8,11 @@ import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Pet } from "@/domain";
 import { cloneFixtures, fixtures } from "@/domain";
+import { createTranslator } from "@/i18n";
 import { ageLabel } from "./age";
 import { PetsPage } from "./PetsPage";
+
+const enTr = createTranslator("en");
 
 // The harness's router is a catch-all and does not hand the test its router
 // instance, so the current path is read back out of the tree instead — the
@@ -102,7 +105,7 @@ describe("PetsPage", () => {
     }
 
     const clover = fixtures.pets.find((p) => p.name === "Clover")!;
-    const expectedAge = ageLabel(clover.birthdate, TODAY);
+    const expectedAge = ageLabel(clover.birthdate, TODAY, enTr);
     expect(await screen.findByText(`Rabbit · ${expectedAge}`)).toBeInTheDocument();
   });
 

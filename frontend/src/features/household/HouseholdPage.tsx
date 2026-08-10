@@ -9,6 +9,8 @@ import { Button, Card, IconButton, PetAvatar, ScreenHeader, SectionLabel } from 
 import { displayNameFor, now, type JoinCode, type User } from "@/domain";
 import { useToast } from "@/app/Toast";
 import { useDoseEvents } from "@/features/courses/hooks";
+import { joinMeta } from "@/features/pets/format";
+import { useTranslator, type Translator } from "@/i18n";
 import {
   leaveDeletesHousehold,
   needsDisplayName,
@@ -69,10 +71,12 @@ const DIALOG_DESCRIPTION_STYLE: CSSProperties = { fontSize: 13, color: "var(--in
 const DIALOG_ACTIONS_STYLE: CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 };
 
 /** "Expires in 23 h · single use" / "Expires in under an hour · single use". SPEC §5. */
-function expiryLabel(code: JoinCode, at: Date): string {
+function expiryLabel(code: JoinCode, at: Date, tr: Translator): string {
   const msLeft = new Date(code.expiresAt).getTime() - at.getTime();
   const hours = Math.floor(msLeft / (60 * 60 * 1000));
-  return hours >= 1 ? `Expires in ${hours} h · single use` : "Expires in under an hour · single use";
+  return hours >= 1
+    ? tr.t("household.expiry.hours", { hours })
+    : tr.t("household.expiry.underHour");
 }
 
 interface MemberRowProps {
@@ -83,6 +87,7 @@ interface MemberRowProps {
   divider: boolean;
   onEdit: () => void;
   onRequestRemove: () => void;
+  tr: Translator;
 }
 
 function MemberRow({
@@ -93,7 +98,9 @@ function MemberRow({
   divider,
   onEdit,
   onRequestRemove,
+  tr,
 }: MemberRowProps): ReactElement {
+  const { t } = tr;
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -117,7 +124,7 @@ function MemberRow({
         <button
           type="button"
           onClick={onEdit}
-          aria-label="Edit your name"
+          aria-label={t("household.editYourName")}
           style={{
             background: "none",
             border: "none",
@@ -132,7 +139,7 @@ function MemberRow({
             fontFamily: "inherit",
           }}
         >
-          Edit
+          {t("household.edit")}
         </button>
       ) : (
         <Menu.Root open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
@@ -143,7 +150,7 @@ function MemberRow({
                 variant="plain"
                 size={40}
                 style={{ minWidth: 44, minHeight: 44, flexShrink: 0 }}
-                label={`More options for ${name}`}
+                label={t("household.moreOptionsFor", { name })}
               />
             }
           />
@@ -157,7 +164,7 @@ function MemberRow({
                     onRequestRemove();
                   }}
                 >
-                  Remove from household
+                  {t("household.removeFromHousehold")}
                 </Menu.Item>
               </Menu.Popup>
             </Menu.Positioner>
@@ -171,6 +178,8 @@ function MemberRow({
 export function HouseholdPage(): ReactElement {
   const navigate = useNavigate();
   const toast = useToast();
+  const tr = useTranslator();
+  const { t } = tr;
 
   const membersQuery = useMembers();
   const selfQuery = useSelf();
@@ -192,7 +201,10 @@ export function HouseholdPage(): ReactElement {
   const at = now();
 
   const peopleCount = members.length;
-  const subtitle = `${peopleCount} ${peopleCount === 1 ? "person" : "people"} · everyone can log and edit`;
+  const subtitle = joinMeta([
+    t("household.peopleCount", { count: peopleCount }),
+    t("household.subtitleSuffix"),
+  ]);
 
   const willDeleteHousehold = leaveDeletesHousehold(members);
   const removeTargetName = removeTarget ? displayNameFor(removeTarget.id, members) : "";
@@ -201,7 +213,7 @@ export function HouseholdPage(): ReactElement {
     if (!liveCode) return;
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(liveCode.code);
-      toast.show({ message: "Code copied" });
+      toast.show({ message: t("household.codeCopiedToast") });
     }
   }
 
@@ -216,7 +228,7 @@ export function HouseholdPage(): ReactElement {
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 22px 12px" }}>
         <button
           onClick={() => navigate({ to: "/pets" })}
-          aria-label="Back"
+          aria-label={t("household.back")}
           style={{
             background: "none",
             border: "none",
@@ -228,9 +240,11 @@ export function HouseholdPage(): ReactElement {
         >
           ‹
         </button>
-        <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)" }}>Pets</span>
+        <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)" }}>
+          {t("household.backToPets")}
+        </span>
       </div>
-      <ScreenHeader title="Household" subtitle={subtitle} />
+      <ScreenHeader title={t("household.title")} subtitle={subtitle} />
       <div
         style={{
           flex: 1,
@@ -241,16 +255,19 @@ export function HouseholdPage(): ReactElement {
           gap: 14,
         }}
       >
-        <SectionLabel>People</SectionLabel>
+        <SectionLabel>{t("household.section.people")}</SectionLabel>
         <Card pad={0}>
           {members.map((member, i) => {
             const isSelf = self ? member.id === self.id : member.isSelf;
             const name = displayNameFor(member.id, members);
-            const line = memberLine({
-              isSelf,
-              joinedAt: member.joinedAt,
-              dosesThisWeek: dosesLoggedThisWeek(events, member.id, at),
-            });
+            const line = memberLine(
+              {
+                isSelf,
+                joinedAt: member.joinedAt,
+                dosesThisWeek: dosesLoggedThisWeek(events, member.id, at),
+              },
+              tr,
+            );
             return (
               <MemberRow
                 key={member.id}
@@ -261,12 +278,13 @@ export function HouseholdPage(): ReactElement {
                 divider={i > 0}
                 onEdit={() => setNameOverlayOpen(true)}
                 onRequestRemove={() => setRemoveTarget(member)}
+                tr={tr}
               />
             );
           })}
         </Card>
 
-        <SectionLabel>Invite</SectionLabel>
+        <SectionLabel>{t("household.section.invite")}</SectionLabel>
         {needsDisplayName(self) ? (
           <Card>
             <div
@@ -279,10 +297,10 @@ export function HouseholdPage(): ReactElement {
               }}
             >
               <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.5, maxWidth: 280 }}>
-                Add your name before inviting anyone
+                {t("household.addNameBeforeInviting")}
               </div>
               <Button variant="primary" size="md" onClick={() => setNameOverlayOpen(true)}>
-                Set your name
+                {t("household.setYourName")}
               </Button>
             </div>
           </Card>
@@ -298,14 +316,13 @@ export function HouseholdPage(): ReactElement {
               }}
             >
               <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.5, maxWidth: 280 }}>
-                Give this code to someone in your home. They enter it once and see the same pets,
-                schedules and history.
+                {t("household.inviteBody")}
               </div>
               {liveCode ? (
                 <>
                   <div
                     role="group"
-                    aria-label={`Join code ${liveCode.code}`}
+                    aria-label={t("household.joinCodeAriaLabel", { code: liveCode.code })}
                     style={{ display: "flex", gap: 8, fontVariantNumeric: "tabular-nums" }}
                   >
                     {liveCode.code.split("").map((c, i) => (
@@ -329,7 +346,7 @@ export function HouseholdPage(): ReactElement {
                     ))}
                   </div>
                   <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
-                    {expiryLabel(liveCode, at)}
+                    {expiryLabel(liveCode, at, tr)}
                   </div>
                   <div style={{ display: "flex", gap: 10 }}>
                     <Button
@@ -338,7 +355,7 @@ export function HouseholdPage(): ReactElement {
                       style={{ minHeight: "var(--tap-min)" }}
                       onClick={handleCopyCode}
                     >
-                      Copy code
+                      {t("household.copyCode")}
                     </Button>
                     <Button
                       variant="secondary"
@@ -346,13 +363,13 @@ export function HouseholdPage(): ReactElement {
                       style={{ minHeight: "var(--tap-min)" }}
                       onClick={() => issueCode.mutate()}
                     >
-                      New code
+                      {t("household.newCode")}
                     </Button>
                   </div>
                 </>
               ) : (
                 <Button variant="primary" size="md" onClick={() => issueCode.mutate()}>
-                  Create a code
+                  {t("household.createCode")}
                 </Button>
               )}
             </div>
@@ -361,8 +378,7 @@ export function HouseholdPage(): ReactElement {
 
         <Card tone="dashed" pad={14}>
           <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.5 }}>
-            Everyone in a household has the same access. Anyone can add pets, edit courses and log
-            doses; every action is recorded with their name.
+            {t("household.everyoneSameAccess")}
           </div>
         </Card>
 
@@ -373,7 +389,7 @@ export function HouseholdPage(): ReactElement {
             block
             onClick={() => setLeaveConfirmOpen(true)}
           >
-            Leave household
+            {t("household.leaveHousehold")}
           </Button>
         </div>
       </div>
@@ -389,15 +405,17 @@ export function HouseholdPage(): ReactElement {
         <Dialog.Portal>
           <Dialog.Backdrop style={DIALOG_BACKDROP_STYLE} />
           <Dialog.Popup style={DIALOG_POPUP_STYLE}>
-            <Dialog.Title style={DIALOG_TITLE_STYLE}>Remove {removeTargetName}?</Dialog.Title>
+            <Dialog.Title style={DIALOG_TITLE_STYLE}>
+              {t("household.removeConfirm.title", { name: removeTargetName })}
+            </Dialog.Title>
             <Dialog.Description style={DIALOG_DESCRIPTION_STYLE}>
-              They will lose access to this household. Doses they already logged stay in history.
+              {t("household.removeConfirm.description")}
             </Dialog.Description>
             <div style={DIALOG_ACTIONS_STYLE}>
               <Dialog.Close
                 render={
                   <Button type="button" size="md" variant="secondary">
-                    Cancel
+                    {t("household.cancel")}
                   </Button>
                 }
               />
@@ -412,7 +430,7 @@ export function HouseholdPage(): ReactElement {
                   setRemoveTarget(null);
                 }}
               >
-                Remove
+                {t("household.remove")}
               </Button>
             </div>
           </Dialog.Popup>
@@ -423,22 +441,22 @@ export function HouseholdPage(): ReactElement {
         <Dialog.Portal>
           <Dialog.Backdrop style={DIALOG_BACKDROP_STYLE} />
           <Dialog.Popup style={DIALOG_POPUP_STYLE}>
-            <Dialog.Title style={DIALOG_TITLE_STYLE}>Leave household?</Dialog.Title>
+            <Dialog.Title style={DIALOG_TITLE_STYLE}>{t("household.leaveConfirm.title")}</Dialog.Title>
             <Dialog.Description style={DIALOG_DESCRIPTION_STYLE}>
               {willDeleteHousehold
-                ? "You are the last member. Leaving will delete this household and everything in it — pets, schedules and history — for good."
-                : "You will lose access to the pets, schedules and history in this household. You can rejoin later with a new invite code."}
+                ? t("household.leaveConfirm.deleteWarning")
+                : t("household.leaveConfirm.normalWarning")}
             </Dialog.Description>
             <div style={DIALOG_ACTIONS_STYLE}>
               <Dialog.Close
                 render={
                   <Button type="button" size="md" variant="secondary">
-                    Cancel
+                    {t("household.cancel")}
                   </Button>
                 }
               />
               <Button type="button" size="md" variant="danger" onClick={handleLeaveConfirm}>
-                {willDeleteHousehold ? "Delete household" : "Leave household"}
+                {willDeleteHousehold ? t("household.deleteHousehold") : t("household.leaveHousehold")}
               </Button>
             </div>
           </Dialog.Popup>

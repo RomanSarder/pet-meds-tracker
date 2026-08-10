@@ -8,10 +8,8 @@
 import type { DoseRowProps } from "@/components/ds";
 import type { DoseState, Occurrence } from "@/engine";
 import { formatHHMM } from "@/domain";
+import type { Translator } from "@/i18n";
 import { courseLabel, joinMeta } from "./format";
-
-const NOT_STARTED = "Not started";
-const SKIPPED = "Skipped";
 
 /** `DoseState` -> `DoseRowProps.state`. See the brief's §MAPPER table. */
 const ROW_STATE: Record<DoseState, NonNullable<DoseRowProps["state"]>> = {
@@ -31,17 +29,22 @@ export function doseRowPropsFor(args: {
   instructions: string | null;
   /** `courseProgress(course, day)`, passed in, never computed here. */
   progress: string;
+  tr: Translator;
 }): DoseRowProps {
-  const { occurrence, state, medicationName, instructions, progress } = args;
+  const { occurrence, state, medicationName, instructions, progress, tr } = args;
 
   // Clock time = `formatHHMM(dueAt)` when non-null, else "Not started" (a
   // `fromLastDose` course with no given event yet has `dueAt === null`).
-  // `skipped` overrides this with the literal "Skipped" regardless of `dueAt`.
-  const clockTime = occurrence.dueAt ? formatHHMM(occurrence.dueAt) : NOT_STARTED;
-  const time = state === "skipped" ? SKIPPED : clockTime;
+  // `skipped` overrides this with the literal "Skipped" regardless of
+  // `dueAt`. Both words are reused verbatim from catalogue entries another
+  // domain already owns (`today.notStarted`, `history.detail.skipped`) —
+  // same concept, same word, in both languages — rather than duplicating a
+  // near-identical key here.
+  const clockTime = occurrence.dueAt ? formatHHMM(occurrence.dueAt) : tr.t("today.notStarted");
+  const time = state === "skipped" ? tr.t("history.detail.skipped") : clockTime;
 
   return {
-    medication: courseLabel(medicationName, occurrence.doseAmount, occurrence.doseUnit),
+    medication: courseLabel(medicationName, occurrence.doseAmount, occurrence.doseUnit, tr),
     detail: joinMeta([time, instructions, progress]),
     time,
     state: ROW_STATE[state],

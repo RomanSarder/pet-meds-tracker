@@ -10,19 +10,17 @@ import { JOIN_CODE_ALPHABET, JOIN_CODE_LENGTH } from "@/domain";
 import { Field } from "@/features/forms/Field";
 import { speciesLabel } from "@/features/pets/format";
 import { suggestNameFromEmail } from "@/features/onboarding/nameSuggestion";
+import { useTranslator } from "@/i18n";
 import { needsDisplayName, useJoinPreview, useRedeemJoinCode, useSelf, useSessionEmail } from "./hooks";
 import { JoinCodeRejectedError, joinCodeRejectionMessage, type JoinCodeRejection } from "./joinCode";
-import { createTranslator } from "@/i18n";
-
-// TODO(wave3): replace enTr with a real translator when the household feature
-// is localized.
-const enTr = createTranslator("en");
 
 const NAME_INPUT_ID = "join-household-name";
 const EMPTY_CHARS: string[] = Array(JOIN_CODE_LENGTH).fill("");
 
 export function JoinHouseholdPage() {
   const navigate = useNavigate();
+  const tr = useTranslator();
+  const { t } = tr;
 
   const selfQuery = useSelf();
   const sessionEmail = useSessionEmail();
@@ -131,12 +129,12 @@ export function JoinHouseholdPage() {
         }}
       >
         <span style={{ fontSize: 22, fontWeight: 800, color: "var(--ink-1)" }}>
-          Join a household
+          {t("household.join.title")}
         </span>
         <button
           type="button"
           onClick={() => navigate({ to: "/household" })}
-          aria-label="Close"
+          aria-label={t("household.close")}
           style={{
             background: "none",
             border: "none",
@@ -160,15 +158,15 @@ export function JoinHouseholdPage() {
         }}
       >
         <div style={{ fontSize: 15, color: "var(--ink-2)", lineHeight: 1.5 }}>
-          Enter the six-character code from the person who set up the pets.
+          {t("household.join.instructions")}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <Field
             id={NAME_INPUT_ID}
-            label="Your name"
+            label={t("household.join.yourNameLabel")}
             maxLength={24}
-            placeholder="e.g. Roman"
+            placeholder={t("household.join.namePlaceholder")}
             value={name}
             onChange={(e) => {
               hasEditedName.current = true;
@@ -176,7 +174,7 @@ export function JoinHouseholdPage() {
             }}
           />
           <span style={{ fontSize: 13, color: "var(--ink-3)" }}>
-            Shown against every dose you log. You can change it later.
+            {t("household.join.nameCaption")}
           </span>
         </div>
 
@@ -187,7 +185,7 @@ export function JoinHouseholdPage() {
               ref={(el) => {
                 inputRefs.current[i] = el;
               }}
-              aria-label={`Code character ${i + 1}`}
+              aria-label={t("household.join.codeCharacterAriaLabel", { n: i + 1 })}
               value={char}
               maxLength={1}
               inputMode="text"
@@ -217,20 +215,20 @@ export function JoinHouseholdPage() {
         <Card tone="quiet">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
-              You will get access to
+              {t("household.join.youWillGetAccessTo")}
             </div>
             {preview && preview.length > 0 ? (
               preview.map((pet) => (
                 <div key={pet.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <PetAvatar name={pet.name} tint={pet.tint} size={34} />
                   <span style={{ fontSize: 15, color: "var(--ink-1)" }}>
-                    {pet.name} · {speciesLabel(pet.species, enTr)}
+                    {pet.name} · {speciesLabel(pet.species, tr)}
                   </span>
                 </div>
               ))
             ) : (
               <span style={{ fontSize: 13, color: "var(--ink-3)" }}>
-                Enter the code to see what you are joining
+                {t("household.join.enterCodePrompt")}
               </span>
             )}
           </div>
@@ -248,11 +246,11 @@ export function JoinHouseholdPage() {
       >
         {rejection ? (
           <div role="alert" style={{ fontSize: 13, color: "var(--alert)" }}>
-            {joinCodeRejectionMessage(rejection)}
+            {joinCodeRejectionMessage(rejection, tr)}
           </div>
         ) : joinFailed ? (
           <div role="alert" style={{ fontSize: 13, color: "var(--alert)" }}>
-            Something went wrong. Try again.
+            {t("household.join.genericFailure")}
           </div>
         ) : null}
         <Button
@@ -263,7 +261,7 @@ export function JoinHouseholdPage() {
           disabled={joinDisabled}
           onClick={handleJoin}
         >
-          Join household
+          {t("household.join.submit")}
         </Button>
       </div>
     </div>

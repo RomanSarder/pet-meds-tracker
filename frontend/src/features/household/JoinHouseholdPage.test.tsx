@@ -6,8 +6,11 @@ import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Household, JoinCode, Pet, User } from "@/domain";
 import { apiClient, ApiError } from "@/shared/api";
+import { createTranslator } from "@/i18n";
 import { joinCodeRejectionMessage } from "./joinCode";
 import { JoinHouseholdPage } from "./JoinHouseholdPage";
+
+const EN = createTranslator("en");
 
 // Same pattern as YourNamePanel.test.tsx / HouseholdPage.test.tsx: mock the
 // session lookup `useSessionEmail` makes so tests control what it resolves.
@@ -231,7 +234,7 @@ describe("JoinHouseholdPage", () => {
     await user2.click(await screen.findByRole("button", { name: "Join household" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      joinCodeRejectionMessage("already_used"),
+      joinCodeRejectionMessage("already_used", EN),
     );
     expect(screen.getByTestId("pathname")).toHaveTextContent("/");
     expect(screen.getByRole("textbox", { name: "Code character 1" })).toBeInTheDocument();
@@ -250,7 +253,7 @@ describe("JoinHouseholdPage", () => {
     await typeCode(user2, "ABCDEF");
     await user2.click(await screen.findByRole("button", { name: "Join household" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(joinCodeRejectionMessage("expired"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(joinCodeRejectionMessage("expired", EN));
     expect(screen.getByTestId("pathname")).toHaveTextContent("/");
     expect(screen.getByRole("textbox", { name: "Code character 1" })).toBeInTheDocument();
   });
@@ -267,7 +270,7 @@ describe("JoinHouseholdPage", () => {
     await typeCode(user2, "ABCDEF");
     await user2.click(await screen.findByRole("button", { name: "Join household" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(joinCodeRejectionMessage("revoked"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(joinCodeRejectionMessage("revoked", EN));
     expect(screen.getByTestId("pathname")).toHaveTextContent("/");
     expect(screen.getByRole("textbox", { name: "Code character 1" })).toBeInTheDocument();
   });

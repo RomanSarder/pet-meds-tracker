@@ -19,6 +19,7 @@
 // `today` only) but maps like `later` for safety.
 import type { CSSProperties } from "react";
 import type { DoseState } from "@/engine";
+import { useT } from "@/i18n";
 
 export interface ScheduleRowProps {
   state: DoseState;
@@ -33,13 +34,14 @@ export interface ScheduleRowProps {
 }
 
 export function ScheduleRow({ state, medication, detail, time, divider, style }: ScheduleRowProps) {
+  const t = useT();
   const dimmed = state === "given" || state === "skipped";
   const struckThrough = state === "given";
   const overdue = state === "overdue";
   // The due time is already part of `detail` (via `doseRowPropsFor`'s
   // `joinMeta`), so trading the trailing slot's due time for the literal
   // word here doesn't lose information — it adds the word SPEC §9 requires.
-  const trailing = overdue ? "Overdue" : time;
+  const trailing = overdue ? t("pets.schedule.overdue") : time;
 
   return (
     <div

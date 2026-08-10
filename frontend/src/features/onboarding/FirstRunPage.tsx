@@ -14,11 +14,13 @@ import { getRepo } from "@/data";
 import { apiClient } from "@/shared/api";
 import { Field } from "@/features/forms/Field";
 import { needsDisplayName, useSelf, useSessionEmail, useSetDisplayName } from "@/features/household/hooks";
+import { useT } from "@/i18n";
 import { suggestNameFromEmail } from "./nameSuggestion";
 
 const NAME_INPUT_ID = "first-run-name";
 
 export function FirstRunPage() {
+  const t = useT();
   const navigate = useNavigate();
 
   const selfQuery = useSelf();
@@ -108,20 +110,19 @@ export function FirstRunPage() {
               color: "var(--ink-1)",
             }}
           >
-            What should we call you?
+            {t("onboarding.title")}
           </h1>
           <p style={{ margin: "10px 0 0", fontSize: 15, color: "var(--ink-2)", lineHeight: 1.5 }}>
-            Shown against every dose you log, so the rest of the household can see who gave what.
-            You can change it later.
+            {t("onboarding.subtitle")}
           </p>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <Field
             id={NAME_INPUT_ID}
-            label="Your name"
+            label={t("onboarding.nameLabel")}
             maxLength={DISPLAY_NAME_MAX}
-            placeholder="e.g. Roman"
+            placeholder={t("onboarding.namePlaceholder")}
             value={name}
             onChange={(e) => {
               hasEditedName.current = true;
@@ -129,7 +130,7 @@ export function FirstRunPage() {
             }}
           />
           <span style={{ fontSize: 13, color: "var(--ink-3)" }}>
-            {trimmed.length} / {DISPLAY_NAME_MAX} · your email is never shown to anyone
+            {t("onboarding.nameCounter", { count: trimmed.length, max: DISPLAY_NAME_MAX })}
           </span>
         </div>
       </div>
@@ -152,7 +153,7 @@ export function FirstRunPage() {
           disabled={setDisplayName.isPending || provisionHousehold.isPending}
           onClick={handleStartHousehold}
         >
-          Start a household
+          {t("onboarding.startHousehold")}
         </Button>
         <Button
           type="button"
@@ -162,7 +163,7 @@ export function FirstRunPage() {
           disabled={setDisplayName.isPending}
           onClick={handleHaveCode}
         >
-          I have a join code
+          {t("onboarding.haveJoinCode")}
         </Button>
       </div>
     </div>

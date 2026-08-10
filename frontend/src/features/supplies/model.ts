@@ -2,6 +2,8 @@
 // renders. See CONTRACT-supplies.md "features/supplies/model.ts — exact
 // contract". Pure: no React, no repo access.
 import type { Course, Medication, Pet, Schedule, StockAdjustment } from "@/domain";
+import { joinMeta } from "@/features/pets/format";
+import type { Translator } from "@/i18n";
 import { forWhomLabel, neededLabel, runOutLabel, stockLabel, weeksOfCoverLabel } from "./labels";
 import type { MedicationProjection, SupplyTone } from "./projection";
 import { projectMedication } from "./projection";
@@ -37,8 +39,9 @@ export function buildSupplyItems(input: {
   pets: Pet[];
   adjustments: StockAdjustment[];
   now: Date;
+  tr: Translator;
 }): SupplyItem[] {
-  const { medications, courses, pets, adjustments, now } = input;
+  const { medications, courses, pets, adjustments, now, tr } = input;
 
   // Only non-archived pets and non-soft-deleted rows participate.
   const livePets = pets.filter((p) => !p.archived && p.deletedAt === null);
@@ -75,8 +78,8 @@ export function buildSupplyItems(input: {
       for (const c of petCourses) schedules.push(c.schedule);
     }
 
-    const forWhom = forWhomLabel(petNames, schedules);
-    const stockText = stockLabel(medication.stockUnits, medication.unit);
+    const forWhom = forWhomLabel(petNames, schedules, tr);
+    const stockText = stockLabel(medication.stockUnits, medication.unit, tr);
     // Stock-not-set case (Task 1): SupplyRow colours whatever is passed as
     // `stock` using out/low/good, and "good" (green) is the fallback for
     // anything that isn't out or low — so a plain string here would read as
@@ -95,21 +98,23 @@ export function buildSupplyItems(input: {
       // is not information once we are already asking "do you still have
       // this?" — so we replace the run-out clause rather than append to it,
       // keeping only the required quantity from §6.6 alongside it.
-      note = `Still have ${medication.name}? Update stock. · need ${neededLabel(
-        projection.neededPacks,
-        projection.needed,
-        medication.unit,
-      )}`;
+      note = joinMeta([
+        tr.t("supplies.note.stillHaveUpdateStock", { medicationName: medication.name }),
+        tr.t("supplies.note.need", {
+          quantity: neededLabel(projection.neededPacks, projection.needed, medication.unit, tr),
+        }),
+      ]);
     } else if (buyNow) {
       // Precedence 2: the kit's own note format.
-      note = `Runs out ${runOutLabel(projection.runOutDate as Date)} · need ${neededLabel(
-        projection.neededPacks,
-        projection.needed,
-        medication.unit,
-      )}`;
+      note = joinMeta([
+        tr.t("supplies.note.runsOut", { date: runOutLabel(projection.runOutDate as Date, tr) }),
+        tr.t("supplies.note.need", {
+          quantity: neededLabel(projection.neededPacks, projection.needed, medication.unit, tr),
+        }),
+      ]);
     } else if (projection.stockSet && projection.dailyUse > 0) {
       // Precedence 3: stocked, in-use medications report weeks of cover.
-      note = weeksOfCoverLabel(projection.daysOfCover as number);
+      note = weeksOfCoverLabel(projection.daysOfCover as number, tr);
     } else if (!projection.stockSet) {
       // Precedence 4: stock not set. Carries the same "Stock not set" text
       // that `stock` above deliberately omits, so it still reaches the

@@ -6,11 +6,11 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { Button, SegmentedControl } from "@/components/ds";
 import type { Species } from "@/domain";
 import { Field } from "@/features/forms/Field";
+import { useTranslator } from "@/i18n";
 import { speciesLabel } from "./format";
 import { useCreatePet, usePet, useUpdatePet } from "./hooks";
 
 const SPECIES_ORDER: Species[] = ["rabbit", "guinea_pig", "cat", "dog", "other"];
-const SPECIES_OPTIONS = SPECIES_ORDER.map((s) => ({ value: s, label: speciesLabel(s) }));
 
 interface FormState {
   name: string;
@@ -35,9 +35,11 @@ export function PetFormPage() {
 export function PetFormView({ petId }: { petId?: string }) {
   const isEdit = !!petId;
   const navigate = useNavigate();
+  const tr = useTranslator();
   const petQuery = usePet(petId);
   const createPet = useCreatePet();
   const updatePet = useUpdatePet();
+  const speciesOptions = SPECIES_ORDER.map((s) => ({ value: s, label: speciesLabel(s, tr) }));
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [nameError, setNameError] = useState<string | null>(null);
@@ -74,7 +76,7 @@ export function PetFormView({ petId }: { petId?: string }) {
   async function handleSubmit() {
     const trimmedName = form.name.trim();
     const nameInvalid = trimmedName.length === 0;
-    setNameError(nameInvalid ? "Enter a name" : null);
+    setNameError(nameInvalid ? tr.t("pets.form.nameError") : null);
 
     let weightGrams: number | null = null;
     let weightInvalid = false;
@@ -87,7 +89,7 @@ export function PetFormView({ petId }: { petId?: string }) {
         weightGrams = Math.round(kg * 1000);
       }
     }
-    setWeightError(weightInvalid ? "Enter a weight in kilograms" : null);
+    setWeightError(weightInvalid ? tr.t("pets.form.weightError") : null);
 
     if (nameInvalid || weightInvalid) {
       if (nameInvalid) document.getElementById(NAME_INPUT_ID)?.focus();
@@ -118,7 +120,7 @@ export function PetFormView({ petId }: { petId?: string }) {
     }
   }
 
-  const title = isEdit ? "Edit pet" : "Add a pet";
+  const title = isEdit ? tr.t("pets.editPet") : tr.t("pets.addPetTitle");
   // Render nothing but the header until the pet query resolves in edit mode.
   const showForm = !isEdit || petQuery.data != null;
 
@@ -136,7 +138,7 @@ export function PetFormView({ petId }: { petId?: string }) {
         <button
           type="button"
           onClick={goToCloseDestination}
-          aria-label="Close"
+          aria-label={tr.t("pets.close")}
           style={{
             background: "none",
             border: "none",
@@ -178,8 +180,8 @@ export function PetFormView({ petId }: { petId?: string }) {
           >
             <Field
               id={NAME_INPUT_ID}
-              label="Name"
-              placeholder="e.g. Clover"
+              label={tr.t("pets.form.nameLabel")}
+              placeholder={tr.t("pets.form.namePlaceholder")}
               value={form.name}
               onChange={(e) => {
                 setForm((f) => ({ ...f, name: e.target.value }));
@@ -188,26 +190,28 @@ export function PetFormView({ petId }: { petId?: string }) {
               error={nameError}
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>Species</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
+                {tr.t("pets.form.speciesLabel")}
+              </span>
               <div style={{ overflowX: "auto" }}>
                 <SegmentedControl
-                  options={SPECIES_OPTIONS}
+                  options={speciesOptions}
                   value={form.species}
                   onChange={(value) => setForm((f) => ({ ...f, species: value as Species }))}
                 />
               </div>
             </div>
             <Field
-              label="Birthdate"
+              label={tr.t("pets.form.birthdateLabel")}
               type="date"
               value={form.birthdate}
               onChange={(e) => setForm((f) => ({ ...f, birthdate: e.target.value }))}
             />
             <Field
-              label="Weight (kg)"
+              label={tr.t("pets.form.weightLabel")}
               type="number"
               inputMode="decimal"
-              placeholder="e.g. 1.9"
+              placeholder={tr.t("pets.form.weightPlaceholder")}
               value={form.weightKg}
               onChange={(e) => {
                 setForm((f) => ({ ...f, weightKg: e.target.value }));
@@ -224,7 +228,7 @@ export function PetFormView({ petId }: { petId?: string }) {
             }}
           >
             <Button type="button" variant="ink" size="lg" block onClick={handleSubmit}>
-              Save pet
+              {tr.t("pets.form.savePet")}
             </Button>
           </div>
         </div>

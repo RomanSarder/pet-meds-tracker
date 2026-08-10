@@ -16,6 +16,7 @@ import { Button, EmptyState, ScreenHeader, SectionLabel, SupplyRow } from "@/com
 import { SegmentedControl } from "@/components/ds/core/SegmentedControl";
 import type { Medication } from "@/domain";
 import { useNow } from "@/app/useNow";
+import { useTranslator } from "@/i18n";
 import { useSupplyData } from "./hooks";
 import { buildSupplyItems, sortSupplyItems, SUPPLY_SORTS, type SupplyItem, type SupplySort } from "./model";
 import { ShoppingListDialog } from "./ShoppingListDialog";
@@ -47,6 +48,8 @@ export function SuppliesPage(): ReactElement {
   // Never a bare `new Date()` — the whole projection is a pure function of an
   // explicit `now`, and this is the one place that reads the injected clock.
   const now = useNow();
+  const tr = useTranslator();
+  const { t } = tr;
   const { medications, courses, pets, adjustments, isLoading } = useSupplyData();
 
   // "By urgency" is the default (SPEC §6.6).
@@ -64,10 +67,10 @@ export function SuppliesPage(): ReactElement {
   const items = useMemo(
     () =>
       sortSupplyItems(
-        buildSupplyItems({ medications, courses, pets, adjustments, now }),
+        buildSupplyItems({ medications, courses, pets, adjustments, now, tr }),
         sort,
       ),
-    [medications, courses, pets, adjustments, now, sort],
+    [medications, courses, pets, adjustments, now, sort, tr],
   );
 
   // Sorting never moves an item between groups (model.ts); the split happens
@@ -102,20 +105,20 @@ export function SuppliesPage(): ReactElement {
           <Button
             variant="ghost"
             size="sm"
-            aria-label={`Add ${item.name} to list`}
+            aria-label={t("supplies.action.addToListLabel", { name: item.name })}
             aria-pressed={listed.has(item.medicationId)}
             onClick={() => toggleListed(item.medicationId)}
           >
-            Add to list
+            {t("supplies.action.addToList")}
           </Button>
         ) : null}
         <Button
           variant="ghost"
           size="sm"
-          aria-label={`Update ${item.name} stock`}
+          aria-label={t("supplies.action.updateStockLabel", { name: item.name })}
           onClick={() => openUpdateStock(item.medicationId)}
         >
-          Update stock
+          {t("supplies.action.updateStock")}
         </Button>
       </div>
     );
@@ -126,17 +129,22 @@ export function SuppliesPage(): ReactElement {
   if (isLoading) {
     return (
       <div style={SCREEN_STYLE}>
-        <ScreenHeader title="Supplies" subtitle="Stock on hand vs. next 30 days" />
+        <ScreenHeader title={t("supplies.title")} subtitle={t("supplies.subtitle")} />
       </div>
     );
   }
 
+  const sortOptions = SUPPLY_SORTS.map((s) => ({
+    value: s,
+    label: s === "By urgency" ? t("supplies.sort.byUrgency") : t("supplies.sort.byPet"),
+  }));
+
   return (
     <div style={SCREEN_STYLE}>
-      <ScreenHeader title="Supplies" subtitle="Stock on hand vs. next 30 days" />
+      <ScreenHeader title={t("supplies.title")} subtitle={t("supplies.subtitle")} />
       <div style={SORT_ROW_STYLE}>
         <SegmentedControl
-          options={SUPPLY_SORTS}
+          options={sortOptions}
           value={sort}
           onChange={(value) => setSort(value as SupplySort)}
         />
@@ -146,7 +154,7 @@ export function SuppliesPage(): ReactElement {
           // Departure 5: the DS EmptyState in place of the kit's fixture-only
           // groups, when there is nothing to show at all — the stub's
           // existing copy.
-          <EmptyState icon="package" title="Supplies" />
+          <EmptyState icon="package" title={t("supplies.title")} />
         ) : (
           <>
             {/*
@@ -156,7 +164,7 @@ export function SuppliesPage(): ReactElement {
               is the layout authority and this screen is a transcription of it.
               The nothing-to-show-at-all case is handled above by EmptyState.
             */}
-            <SectionLabel tone="alert">Buy now</SectionLabel>
+            <SectionLabel tone="alert">{t("supplies.section.buyNow")}</SectionLabel>
             {buy.map((item) => (
               <SupplyRow
                 key={item.medicationId}
@@ -169,7 +177,7 @@ export function SuppliesPage(): ReactElement {
                 action={actionsFor(item)}
               />
             ))}
-            <SectionLabel>Stocked</SectionLabel>
+            <SectionLabel>{t("supplies.section.stocked")}</SectionLabel>
             {ok.map((item) => (
               <SupplyRow
                 key={item.medicationId}
@@ -197,7 +205,7 @@ export function SuppliesPage(): ReactElement {
           icon="shopping-cart"
           onClick={() => setShoppingOpen(true)}
         >
-          Shopping list · {listed.size} items
+          {t("supplies.shoppingList.countLabel", { count: listed.size })}
         </Button>
       </div>
 

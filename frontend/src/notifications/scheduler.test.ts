@@ -8,10 +8,20 @@ import { FIXTURE_NOW, GRACE_FIXED_MIN, MISSED_AFTER_HOURS, occurrenceKeyFor } fr
 import { setRepo, type Repo } from "@/data";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { DoseState } from "@/engine";
+import { setCurrentLocale } from "@/i18n/current";
 import { performGive, performSnooze, type ActionDeps } from "./actions";
 import { AlertLedger, type LedgerStorage } from "./ledger";
 import { createNotificationScheduler, decideAlert, POLL_INTERVAL_MS } from "./scheduler";
 import type { AlertRecord, NotificationSpec } from "./types";
+
+// The scheduler builds its notification titles via `notifications/copy.ts`'s
+// `buildTitle`, which now reads `currentTranslator()` (I18N-DESIGN.md §2.5)
+// instead of a hard-coded English translator. Nothing in this file renders
+// through `renderWithProviders` to pin a locale, so pin it file-wide here —
+// applies to every nested `describe`/`it` below.
+beforeEach(() => {
+  setCurrentLocale("en");
+});
 
 // --- shared test helpers ---------------------------------------------------
 

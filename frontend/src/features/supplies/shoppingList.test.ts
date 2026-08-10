@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createTranslator } from "@/i18n";
 import type { SupplyItem } from "./model";
 import type { MedicationProjection } from "./projection";
 import { shoppingListText } from "./shoppingList";
 
+const EN = createTranslator("en");
 const MED_ID = "z0000000-0000-4000-8000-000000000001";
 
 function projection(overrides: Partial<MedicationProjection> = {}): MedicationProjection {
@@ -55,7 +57,7 @@ describe("shoppingListText", () => {
         projection: projection({ neededPacks: 2, needed: 20 }),
       }),
     ];
-    expect(shoppingListText(items)).toBe(
+    expect(shoppingListText(items, EN)).toBe(
       "Metacam · 1 more pack · Clover, Nugget\nBaytril · 2 more packs · Clover",
     );
   });
@@ -64,11 +66,11 @@ describe("shoppingListText", () => {
     const items = [
       supplyItem({ name: "Metacam", petNames: [], projection: projection({ neededPacks: 1, needed: 15 }) }),
     ];
-    expect(shoppingListText(items)).toBe("Metacam · 1 more pack");
+    expect(shoppingListText(items, EN)).toBe("Metacam · 1 more pack");
   });
 
   it("empty input -> ''", () => {
-    expect(shoppingListText([])).toBe("");
+    expect(shoppingListText([], EN)).toBe("");
   });
 
   it("an item whose medication has no packSize renders its quantity with the unit", () => {
@@ -80,6 +82,6 @@ describe("shoppingListText", () => {
         projection: projection({ neededPacks: null, needed: 3 }),
       }),
     ];
-    expect(shoppingListText(items)).toBe("Metacam · 3 ml · Clover");
+    expect(shoppingListText(items, EN)).toBe("Metacam · 3 ml · Clover");
   });
 });

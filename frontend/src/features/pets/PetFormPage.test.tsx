@@ -4,7 +4,10 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 // imports the concrete module directly.
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { fixtures } from "@/domain";
+import { createTranslator } from "@/i18n";
 import { ageLabel } from "./age";
+
+const enTr = createTranslator("en");
 import { PetFormView } from "./PetFormPage";
 // Rendering PetsPage is required by test 1 (brief §6 item 1). PetsPage is
 // owned by a concurrent builder — imported here, never modified.
@@ -39,7 +42,7 @@ describe("PetFormView", () => {
     // age string is present within the same pet card rather than as an
     // isolated text node.
     const petCard = await screen.findByRole("button", { name: "Open Willow" });
-    expect(petCard).toHaveTextContent(ageLabel("2022-03-10", "2026-08-08")!);
+    expect(petCard).toHaveTextContent(ageLabel("2022-03-10", "2026-08-08", enTr)!);
   });
 
   it("stores an entered weight in grams, converted from kilograms", async () => {

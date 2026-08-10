@@ -4,10 +4,12 @@ import { CheckCircle2, Loader2, PawPrint, XCircle } from "lucide-react";
 import { apiClient, ApiError } from "@/shared/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useT } from "@/i18n";
 
 type VerifyState = "verifying" | "success" | "error";
 
 export function VerifyPage() {
+  const t = useT();
   const [state, setState] = useState<VerifyState>("verifying");
   const [errorMessage, setErrorMessage] = useState("");
   const navigate = useNavigate();
@@ -21,7 +23,7 @@ export function VerifyPage() {
 
     if (!token) {
       setState("error");
-      setErrorMessage("This link has expired or has already been used.");
+      setErrorMessage(t("auth.verify.linkExpired"));
       return;
     }
 
@@ -35,11 +37,16 @@ export function VerifyPage() {
       .catch((err) => {
         setState("error");
         if (err instanceof ApiError && err.status === 401) {
-          setErrorMessage("This link has expired or has already been used.");
+          setErrorMessage(t("auth.verify.linkExpired"));
         } else {
-          setErrorMessage("Something went wrong. Please try again.");
+          setErrorMessage(t("auth.genericError"));
         }
       });
+    // `t` is stable for the lifetime of a locale (see `useT`/`useTranslator`),
+    // and this effect is intentionally guarded by `hasRun` to fire once —
+    // adding `t` to the deps would not change that, so it is omitted rather
+    // than re-running the verification call on a language switch mid-flight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigate]);
 
   return (
@@ -48,7 +55,7 @@ export function VerifyPage() {
         <div className="flex items-center justify-center gap-2 text-muted-foreground">
           <PawPrint className="h-4 w-4" aria-hidden="true" />
           <span className="text-xs font-semibold tracking-wide uppercase">
-            Pet Tracker
+            {t("auth.brand")}
           </span>
         </div>
 
@@ -58,9 +65,9 @@ export function VerifyPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
-                  Signing you in…
+                  {t("auth.verify.signingIn")}
                 </CardTitle>
-                <CardDescription>Verifying your link.</CardDescription>
+                <CardDescription>{t("auth.verify.verifyingLink")}</CardDescription>
               </CardHeader>
             </>
           )}
@@ -69,9 +76,9 @@ export function VerifyPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
-                You&apos;re signed in
+                {t("auth.verify.success")}
               </CardTitle>
-              <CardDescription>Redirecting you now…</CardDescription>
+              <CardDescription>{t("auth.verify.redirecting")}</CardDescription>
             </CardHeader>
           )}
 
@@ -80,13 +87,13 @@ export function VerifyPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <XCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
-                  Link not valid
+                  {t("auth.verify.linkNotValid")}
                 </CardTitle>
                 <CardDescription role="alert">{errorMessage}</CardDescription>
               </CardHeader>
               <CardContent>
                 <Button className="w-full" onClick={() => navigate({ to: "/sign-in" })}>
-                  Back to sign in
+                  {t("auth.verify.backToSignIn")}
                 </Button>
               </CardContent>
             </>

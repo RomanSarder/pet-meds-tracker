@@ -17,8 +17,15 @@ import {
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@/components/ds";
 import type { Medication } from "@/domain";
+import { useTranslator } from "@/i18n";
 import { useAddPack, useSetStockOnHand } from "./hooks";
-import { allowsCoarseFigure, coarseUnits, COARSE_LEVELS, type CoarseLevel } from "./stockOptions";
+import {
+  allowsCoarseFigure,
+  coarseLevelLabel,
+  coarseUnits,
+  COARSE_LEVELS,
+  type CoarseLevel,
+} from "./stockOptions";
 
 /**
  * Keeps the dialog's interactions inside the dialog. See
@@ -45,6 +52,8 @@ export function UpdateStockDialog({
 }: UpdateStockDialogProps): ReactElement {
   const [value, setValue] = useState(() => String(medication.stockUnits ?? ""));
   const inputId = useId();
+  const tr = useTranslator();
+  const { t } = tr;
   const setStockOnHand = useSetStockOnHand();
   const addPack = useAddPack();
 
@@ -112,7 +121,7 @@ export function UpdateStockDialog({
           <Dialog.Title
             style={{ fontSize: 17, fontWeight: 600, color: "var(--ink-1)" }}
           >
-            Update stock
+            {t("supplies.updateStock.title")}
           </Dialog.Title>
           <Dialog.Description
             style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}
@@ -125,7 +134,7 @@ export function UpdateStockDialog({
               htmlFor={inputId}
               style={{ fontSize: 13, color: "var(--ink-2)" }}
             >
-              Units on hand
+              {t("supplies.updateStock.unitsOnHand")}
             </label>
             <input
               id={inputId}
@@ -152,7 +161,7 @@ export function UpdateStockDialog({
               variant="secondary"
               onClick={addPurchasedPack}
             >
-              Add a purchased pack
+              {t("supplies.updateStock.addPack")}
             </Button>
           ) : null}
 
@@ -166,7 +175,7 @@ export function UpdateStockDialog({
                   size="sm"
                   onClick={() => setCoarse(level)}
                 >
-                  {level}
+                  {coarseLevelLabel(level, tr)}
                 </Button>
               ))}
             </div>
@@ -183,7 +192,7 @@ export function UpdateStockDialog({
             <Dialog.Close
               render={
                 <Button type="button" size="md" variant="secondary">
-                  Cancel
+                  {t("supplies.updateStock.cancel")}
                 </Button>
               }
             />
@@ -194,7 +203,7 @@ export function UpdateStockDialog({
               disabled={saveDisabled}
               onClick={save}
             >
-              Save
+              {t("supplies.updateStock.save")}
             </Button>
           </div>
         </Dialog.Popup>

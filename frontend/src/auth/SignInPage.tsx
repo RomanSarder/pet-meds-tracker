@@ -11,12 +11,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { useT } from "@/i18n";
 
 type FlowState = "idle" | "loading" | "sent" | "error";
 
 const COOLDOWN_SECONDS = 60;
 
 export function SignInPage() {
+  const t = useT();
   const [email, setEmail] = useState("");
   const [flowState, setFlowState] = useState<FlowState>("idle");
   const [error, setError] = useState("");
@@ -62,7 +64,7 @@ export function SignInPage() {
       setError(
         err instanceof ApiError && err.message
           ? err.message
-          : "Something went wrong. Please try again."
+          : t("auth.genericError")
       );
     }
   };
@@ -96,21 +98,25 @@ export function SignInPage() {
         <div className="flex items-center justify-center gap-2 text-muted-foreground">
           <PawPrint className="h-4 w-4" aria-hidden="true" />
           <span className="text-xs font-semibold tracking-wide uppercase">
-            Pet Tracker
+            {t("auth.brand")}
           </span>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>{isSent ? "Check your inbox" : "Sign in"}</CardTitle>
+            <CardTitle>{isSent ? t("auth.signIn.checkInbox") : t("auth.signIn.title")}</CardTitle>
             <CardDescription>
               {isSent ? (
+                // SPEC §12 flag: `sentTo` is the email address just
+                // submitted, echoed back verbatim — see the wave return.
+                // Pre-existing behaviour, translated (not fixed) per this
+                // wave's scope.
                 <>
-                  We sent a sign-in link to{" "}
+                  {t("auth.signIn.sentToPrefix")}{" "}
                   <span className="font-medium text-foreground">{sentTo}</span>.
                 </>
               ) : (
-                "Enter your email to receive a sign-in link."
+                t("auth.signIn.description")
               )}
             </CardDescription>
           </CardHeader>
@@ -118,7 +124,7 @@ export function SignInPage() {
             {!isSent ? (
               <form onSubmit={handleSubmit} className="space-y-4" noValidate>
                 <div className="space-y-1.5">
-                  <Label htmlFor="email">Email address</Label>
+                  <Label htmlFor="email">{t("auth.signIn.emailLabel")}</Label>
                   <Input
                     id="email"
                     type="email"
@@ -129,7 +135,7 @@ export function SignInPage() {
                     aria-invalid={isError}
                     aria-describedby={isError ? "email-error" : undefined}
                     disabled={isLoading}
-                    placeholder="you@example.com"
+                    placeholder={t("auth.signIn.emailPlaceholder")}
                     onChange={(e) => {
                       setEmail(e.target.value);
                       if (isError) {
@@ -149,11 +155,11 @@ export function SignInPage() {
                   {isLoading ? (
                     <>
                       <Loader2 className="animate-spin" aria-hidden="true" />
-                      Sending…
+                      {t("auth.signIn.sending")}
                     </>
                   ) : (
                     <>
-                      Send link
+                      {t("auth.signIn.sendLink")}
                       <ArrowRight aria-hidden="true" />
                     </>
                   )}
@@ -164,7 +170,7 @@ export function SignInPage() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
                   <MailCheck className="h-5 w-5 text-primary" aria-hidden="true" />
                 </div>
-                <p className="text-xs text-muted-foreground">Links expire after 15 minutes.</p>
+                <p className="text-xs text-muted-foreground">{t("auth.signIn.linksExpire")}</p>
                 <div className="flex items-center gap-3">
                   <Button
                     type="button"
@@ -174,10 +180,12 @@ export function SignInPage() {
                     disabled={cooldown > 0}
                   >
                     <RefreshCw aria-hidden="true" />
-                    {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend link"}
+                    {cooldown > 0
+                      ? t("auth.signIn.resendIn", { seconds: cooldown })
+                      : t("auth.signIn.resendLink")}
                   </Button>
                   <Button type="button" variant="ghost" size="sm" onClick={reset}>
-                    Use a different email
+                    {t("auth.signIn.useDifferentEmail")}
                   </Button>
                 </div>
               </div>

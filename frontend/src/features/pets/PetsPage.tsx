@@ -6,7 +6,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Badge, Button, Card, EmptyState, Icon, PetAvatar, ScreenHeader } from "@/components/ds";
 import { describeSchedule } from "@/engine";
 import { renderSchedule } from "@/i18n/schedule";
-import { createTranslator } from "@/i18n";
+import { useTranslator } from "@/i18n";
 import type { Course, Medication } from "@/domain";
 import { localDayKey, now } from "@/domain";
 import { ageLabel } from "./age";
@@ -15,10 +15,9 @@ import { usePets } from "./hooks";
 import { useCourses, useMedications } from "../courses/hooks";
 import { useMembers } from "../household/hooks";
 
-const enTr = createTranslator("en");
-
 export function PetsPage() {
   const navigate = useNavigate();
+  const tr = useTranslator();
   const today = localDayKey(now());
 
   const petsQuery = usePets();
@@ -30,7 +29,7 @@ export function PetsPage() {
   const courses = coursesQuery.data ?? [];
   const medications = medicationsQuery.data ?? [];
   const memberCount = membersQuery.data?.length ?? 0;
-  const memberCountLabel = memberCount === 1 ? "1 person" : `${memberCount} people`;
+  const memberCountLabel = tr.t("pets.household.people", { count: memberCount });
 
   const medicationsById = useMemo(() => {
     const map = new Map<string, Medication>();
@@ -68,7 +67,7 @@ export function PetsPage() {
       onClick={openHousehold}
       role="button"
       tabIndex={0}
-      aria-label={`Household, ${memberCountLabel}`}
+      aria-label={tr.t("pets.household.ariaLabel", { peopleLabel: memberCountLabel })}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           openHousehold();
@@ -87,7 +86,7 @@ export function PetsPage() {
       }}
     >
       <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink-1)" }}>
-        {`Household · ${memberCountLabel}`}
+        {tr.t("pets.household.row", { peopleLabel: memberCountLabel })}
       </span>
       <span style={{ fontSize: 20, color: "var(--ink-3)" }}>›</span>
     </Card>
@@ -96,10 +95,10 @@ export function PetsPage() {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <ScreenHeader
-        title="Pets"
-        subtitle={`${pets.length} ${pets.length === 1 ? "animal" : "animals"} · ${courses.length} active ${courses.length === 1 ? "course" : "courses"}`}
+        title={tr.t("pets.pageTitle")}
+        subtitle={`${tr.t("pets.subtitle.animals", { count: pets.length })} · ${tr.t("pets.subtitle.activeCourses", { count: courses.length })}`}
         action="plus"
-        actionLabel="Add a course"
+        actionLabel={tr.t("pets.addCourseAction")}
         onAction={() => navigate({ to: "/courses/new" })}
       />
       {petsQuery.isLoading ? null : pets.length === 0 ? (
@@ -113,10 +112,10 @@ export function PetsPage() {
         >
           <EmptyState
             icon="paw-print"
-            title="No pets yet"
+            title={tr.t("pets.noPetsYet")}
             action={
               <Button variant="ink" size="lg" onClick={() => navigate({ to: "/pets/new" })}>
-                Add a pet
+                {tr.t("pets.addPetTitle")}
               </Button>
             }
           />
@@ -141,7 +140,7 @@ export function PetsPage() {
                 onClick={() => openPet(pet.id)}
                 role="button"
                 tabIndex={0}
-                aria-label={`Open ${pet.name}`}
+                aria-label={tr.t("pets.openPet", { name: pet.name })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     openPet(pet.id);
@@ -164,7 +163,7 @@ export function PetsPage() {
                       {pet.name}
                     </div>
                     <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
-                      {joinMeta([speciesLabel(pet.species), ageLabel(pet.birthdate, today)])}
+                      {joinMeta([speciesLabel(pet.species, tr), ageLabel(pet.birthdate, today, tr)])}
                     </div>
                   </div>
                   <span style={{ fontSize: 20, color: "var(--ink-3)" }}>›</span>
@@ -175,12 +174,14 @@ export function PetsPage() {
                       const med = medicationsById.get(c.medicationId);
                       return (
                         <Badge key={c.id} tone={c.endDate ? "accent" : "neutral"}>
-                          {`${courseLabel(med?.name ?? "", c.doseAmount, c.doseUnit)} · ${renderSchedule(describeSchedule(c.schedule), enTr)}`}
+                          {`${courseLabel(med?.name ?? "", c.doseAmount, c.doseUnit, tr)} · ${renderSchedule(describeSchedule(c.schedule), tr)}`}
                         </Badge>
                       );
                     })
                   ) : (
-                    <span style={{ fontSize: 13, color: "var(--ink-3)" }}>No active medication</span>
+                    <span style={{ fontSize: 13, color: "var(--ink-3)" }}>
+                      {tr.t("pets.noActiveMedication")}
+                    </span>
                   )}
                 </div>
               </Card>
@@ -191,7 +192,7 @@ export function PetsPage() {
             onClick={addPet}
             role="button"
             tabIndex={0}
-            aria-label="Add a pet"
+            aria-label={tr.t("pets.addPetTitle")}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 addPet();
@@ -212,8 +213,8 @@ export function PetsPage() {
               fontWeight: 600,
             }}
           >
-            <Icon name="plus" size={18} />
-            <span>Add a pet</span>
+            <Icon name="plus" size={18} aria-hidden />
+            <span>{tr.t("pets.addPetTitle")}</span>
           </Card>
           {householdRow}
         </div>

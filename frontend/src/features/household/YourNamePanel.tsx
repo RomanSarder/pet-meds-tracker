@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Button, Card, PetAvatar } from "@/components/ds";
 import { DISPLAY_NAME_MAX, displayNameFor } from "@/domain";
 import type { User } from "@/domain";
+import { useTranslator } from "@/i18n";
 import { useMembers, useSelf, useSessionEmail, useSetDisplayName } from "./hooks";
 import { formatJoinedDate, otherMemberNamesLabel } from "./memberLine";
 
@@ -34,6 +35,8 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
   const membersQuery = useMembers();
   const email = useSessionEmail();
   const setDisplayName = useSetDisplayName();
+  const tr = useTranslator();
+  const { t } = tr;
 
   const members = membersQuery.data ?? [];
 
@@ -41,12 +44,12 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
 
   const trimmed = name.trim();
   const canSave = trimmed.length > 0 && trimmed.length <= DISPLAY_NAME_MAX;
-  const previewName = trimmed || "Someone";
+  const previewName = trimmed || t("household.yourName.namePlaceholderFallback");
 
   const otherNames = members
     .filter((m) => m.id !== self.id)
     .map((m) => displayNameFor(m.id, members));
-  const othersLabel = otherMemberNamesLabel(otherNames);
+  const othersLabel = otherMemberNamesLabel(otherNames, tr);
 
   async function handleSave() {
     if (!canSave) return;
@@ -58,7 +61,7 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Your name"
+      aria-label={t("household.yourName.title")}
       style={{
         position: "fixed",
         inset: 0,
@@ -77,11 +80,13 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
           padding: "14px 22px 16px",
         }}
       >
-        <span style={{ fontSize: 22, fontWeight: 800, color: "var(--ink-1)" }}>Your name</span>
+        <span style={{ fontSize: 22, fontWeight: 800, color: "var(--ink-1)" }}>
+          {t("household.yourName.title")}
+        </span>
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close"
+          aria-label={t("household.close")}
           style={{
             background: "none",
             border: "none",
@@ -113,13 +118,13 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
               {previewName}
             </div>
             <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
-              {`In this household since ${formatJoinedDate(self.joinedAt)}`}
+              {t("household.yourName.inHouseholdSince", { date: formatJoinedDate(self.joinedAt, tr) })}
             </div>
           </div>
         </div>
         <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
-            Display name
+            {t("household.yourName.displayNameLabel")}
           </span>
           <div
             style={{
@@ -138,7 +143,7 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
               value={name}
               maxLength={DISPLAY_NAME_MAX}
               onChange={(e) => setName(e.target.value)}
-              aria-label="Display name"
+              aria-label={t("household.yourName.displayNameLabel")}
               style={{
                 flex: 1,
                 minWidth: 0,
@@ -157,14 +162,13 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
             </span>
           </div>
           <span style={{ fontSize: 13, color: "var(--ink-3)", lineHeight: 1.5 }}>
-            Shown against every dose you log. {othersLabel} will see the new name everywhere,
-            including on doses you logged before.
+            {t("household.yourName.usageCaption", { others: othersLabel })}
           </span>
         </div>
         <Card tone="quiet">
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
-              How it will look
+              {t("household.yourName.howItWillLook")}
             </span>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
               <div
@@ -192,10 +196,10 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
               />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-1)" }}>
-                  Metacam 0.4 ml
+                  {t("household.yourName.previewMedication")}
                 </div>
                 <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
-                  Given · after food
+                  {t("household.yourName.previewStatus")}
                 </div>
               </div>
               <div
@@ -207,14 +211,14 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
                   paddingTop: 2,
                 }}
               >
-                by {previewName}
+                {t("household.yourName.byName", { name: previewName })}
               </div>
             </div>
           </div>
         </Card>
         <div style={{ flexShrink: 0, fontSize: 13, color: "var(--ink-3)", lineHeight: 1.5 }}>
-          {email ? `Signed in as ${email}. ` : ""}
-          Your email is never shown to anyone in the household.
+          {email ? t("household.yourName.signedInAs", { email }) : ""}
+          {t("household.yourName.emailNeverShown")}
         </div>
       </div>
       <div
@@ -232,7 +236,7 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
           disabled={!canSave || setDisplayName.isPending}
           onClick={handleSave}
         >
-          Save name
+          {t("household.yourName.save")}
         </Button>
       </div>
     </div>

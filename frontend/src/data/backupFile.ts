@@ -3,6 +3,7 @@
 // back into a validated `HouseholdBackup`. Deliberately pure/DOM-only — no
 // repo calls here, so it stays trivially testable under jsdom.
 import type { HouseholdBackup, IsoDateTime } from "@/domain";
+import { currentTranslator } from "@/i18n/current";
 
 const BACKUP_ARRAY_KEYS = [
   "pets",
@@ -66,7 +67,8 @@ function readFileAsText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read the file."));
+    reader.onerror = () =>
+      reject(reader.error ?? new Error(currentTranslator().t("backup.readError")));
     reader.readAsText(file);
   });
 }
@@ -76,6 +78,13 @@ function readFileAsText(file: File): Promise<string> {
  * Throws a plain `Error` with a short, user-facing message on anything
  * malformed — invalid JSON, or JSON missing the required backup shape — so a
  * bad file never reaches `importHousehold`.
+ *
+ * `SettingsPage.tsx` (outside this wave's scope) echoes `err.message`
+ * straight into an alert, so these are user-facing copy, not debug text —
+ * hence `currentTranslator()` rather than a hard-coded English `Error`. This
+ * module is plain and non-React (no hooks available), and its signature is
+ * shared with a call site outside this wave's scope, so the non-React
+ * accessor is used rather than adding a `Translator` parameter.
  */
 export async function readBackupFile(file: File): Promise<HouseholdBackup> {
   const text = await readFileAsText(file);
@@ -83,10 +92,10 @@ export async function readBackupFile(file: File): Promise<HouseholdBackup> {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error("That file isn't valid JSON.");
+    throw new Error(currentTranslator().t("backup.invalidJson"));
   }
   if (!isHouseholdBackup(parsed)) {
-    throw new Error("That file doesn't look like a Pet Meds backup.");
+    throw new Error(currentTranslator().t("backup.notABackup"));
   }
   return parsed;
 }

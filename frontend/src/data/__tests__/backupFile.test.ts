@@ -1,11 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { HouseholdBackup } from "@/domain";
+import { setCurrentLocale } from "@/i18n/current";
 import {
   backupFileName,
   isHouseholdBackup,
   readBackupFile,
   serializeBackup,
 } from "@/data/backupFile";
+
+// `readBackupFile` now throws catalogue-sourced messages via
+// `currentTranslator()` (I18N-DESIGN.md §2.5) rather than hard-coded English.
+// Nothing here renders through `renderWithProviders`, so nothing else pins
+// the locale — pin it explicitly to keep these assertions meaning English.
+beforeEach(() => {
+  setCurrentLocale("en");
+});
 
 function emptyBackup(): HouseholdBackup {
   return {
@@ -118,5 +127,11 @@ describe("readBackupFile validation", () => {
     const malformed = { schemaVersion: 1, exportedAt: "2026-08-08T07:00:00.000Z" };
     const file = new File([JSON.stringify(malformed)], "backup.json");
     await expect(readBackupFile(file)).rejects.toThrow(/backup/i);
+  });
+
+  it("rejects invalid JSON with the Ukrainian message when the locale is Ukrainian", async () => {
+    setCurrentLocale("uk");
+    const file = new File(["{ not json"], "backup.json");
+    await expect(readBackupFile(file)).rejects.toThrow("Цей файл не є коректним JSON.");
   });
 });

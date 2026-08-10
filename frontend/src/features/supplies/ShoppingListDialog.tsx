@@ -9,6 +9,7 @@
 import { type ReactElement, type SyntheticEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button, EmptyState } from "@/components/ds";
+import { useTranslator } from "@/i18n";
 import { shoppingListText } from "./shoppingList";
 import type { SupplyItem } from "./model";
 
@@ -35,7 +36,9 @@ export function ShoppingListDialog({
   onOpenChange,
   items,
 }: ShoppingListDialogProps): ReactElement {
-  const text = shoppingListText(items);
+  const tr = useTranslator();
+  const { t } = tr;
+  const text = shoppingListText(items, tr);
 
   function copy() {
     // jsdom has no clipboard by default, and a real browser can still refuse
@@ -78,11 +81,14 @@ export function ShoppingListDialog({
           }}
         >
           <Dialog.Title style={{ fontSize: 17, fontWeight: 600, color: "var(--ink-1)" }}>
-            Shopping list
+            {t("supplies.shoppingList.dialogTitle")}
           </Dialog.Title>
 
           {items.length === 0 ? (
-            <EmptyState icon="shopping-cart" title="Shopping list · 0 items" />
+            <EmptyState
+              icon="shopping-cart"
+              title={t("supplies.shoppingList.countLabel", { count: 0 })}
+            />
           ) : (
             <>
               <pre
@@ -97,7 +103,7 @@ export function ShoppingListDialog({
                 {text}
               </pre>
               <Button type="button" variant="primary" onClick={copy}>
-                Copy
+                {t("supplies.shoppingList.copy")}
               </Button>
             </>
           )}

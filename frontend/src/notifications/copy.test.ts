@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setCurrentLocale } from "@/i18n/current";
 import { buildTitle } from "./copy";
+
+// `buildTitle` now reads `currentTranslator()` (I18N-DESIGN.md §2.5) instead
+// of a module-level English translator, and nothing here renders through
+// `renderWithProviders` to pin a locale — pin it explicitly so the existing
+// assertions keep meaning English.
+beforeEach(() => {
+  setCurrentLocale("en");
+});
 
 describe("buildTitle", () => {
   it("produces the exact SPEC §7 fixture for a due dose", () => {
@@ -48,5 +57,28 @@ describe("buildTitle", () => {
       state: "due",
     });
     expect(title).toBe("Nugget · Ivermectin 2 drops due now");
+  });
+
+  it("Ukrainian: state word localizes, dose amount and unit never do (SPEC §7 / §10a)", () => {
+    setCurrentLocale("uk");
+    const due = buildTitle({
+      petName: "Clover",
+      medicationName: "Metacam",
+      amount: 0.4,
+      unit: "ml",
+      state: "due",
+    });
+    // The decimal separator is never localized — "0.4", never "0,4" — and
+    // the unit ("ml") is user-entered data, never translated.
+    expect(due).toBe("Clover · Metacam 0.4 ml час приймати");
+
+    const overdue = buildTitle({
+      petName: "Clover",
+      medicationName: "Metacam",
+      amount: 0.4,
+      unit: "ml",
+      state: "overdue",
+    });
+    expect(overdue).toBe("Clover · Metacam 0.4 ml прострочено");
   });
 });

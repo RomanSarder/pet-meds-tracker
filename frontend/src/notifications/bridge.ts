@@ -9,6 +9,7 @@
 import { silently, silentlyAsync } from "./support";
 import { isActionMessage, type ActionMessage } from "./protocol";
 import type { NotificationSpec } from "./types";
+import { currentTranslator } from "@/i18n/current";
 
 /**
  * TS's bundled `lib.dom.d.ts` does not type `NotificationOptions.actions` (or
@@ -34,13 +35,17 @@ export async function showNotification(spec: NotificationSpec): Promise<boolean>
     if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return false;
     const registration = await navigator.serviceWorker.ready;
     if (!registration || typeof registration.showNotification !== "function") return false;
+    // Spoken by the OS, so fully user-facing (COMMON brief). Built outside
+    // React, hence `currentTranslator()` rather than a `Translator` param —
+    // same rule as `notifications/copy.ts`.
+    const tr = currentTranslator();
     const options: NotificationOptionsWithActions = {
       tag: spec.tag,
       data: spec.dose,
       requireInteraction: false,
       actions: [
-        { action: "give", title: "Give" },
-        { action: "snooze", title: "Snooze 30 min" },
+        { action: "give", title: tr.t("notifications.action.give") },
+        { action: "snooze", title: tr.t("notifications.action.snooze") },
       ],
     };
     await registration.showNotification(spec.title, options);
