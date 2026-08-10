@@ -4,7 +4,8 @@ import { useNavigate } from "@tanstack/react-router";
 import type { SessionUser } from "@pet-tracker/shared";
 import { displayNameFor, qk } from "@/domain";
 import { needsDisplayName, useMembers, useSelf } from "@/features/household/hooks";
-import { apiClient } from "@/shared/api";
+import { apiClient, NetworkError } from "@/shared/api";
+import { clearSessionEstablished } from "@/shared/session";
 import { getRepo } from "@/data";
 import { downloadBackup, readBackupFile } from "@/data/backupFile";
 import { Button, Card, ScreenHeader, SectionLabel } from "@/components/ds";
@@ -22,10 +23,14 @@ export function SettingsPage() {
   // The identity shown here is the display name, resolved through the same
   // `displayNameFor` helper every other attribution surface uses (SPEC §5), so
   // there is exactly one way a person's name reaches the screen.
-  const { isPending, isError } = useQuery({
+  const { isPending, isError, error } = useQuery({
     queryKey: qk.session(),
     queryFn: () => apiClient<SessionUser>("/auth/me"),
   });
+  // Offline is normal (SPEC §9), not an error state on a screen that must
+  // work offline — a NetworkError here is a false alarm and must not alert.
+  // Every other error (a real 401/5xx from the server) still does.
+  const showSessionError = isError && !(error instanceof NetworkError);
 
   const selfQuery = useSelf();
   const membersQuery = useMembers();
@@ -34,7 +39,18 @@ export function SettingsPage() {
     self && !needsDisplayName(self) ? displayNameFor(self.id, membersQuery.data ?? [self]) : null;
 
   const handleSignOut = async () => {
-    await apiClient("/auth/sign-out", { method: "POST" });
+    // The sign-out POST can fail offline; wrap it so the local sign-out
+    // still completes. Sign-out is not "erase this device" — it must not
+    // clear `storeOwner` and must not touch local data. Wiping an unsynced
+    // household without consent is the exact failure mode this whole change
+    // exists to prevent (see AccountSwitchPage for the guarded path that
+    // does reset a store).
+    try {
+      await apiClient("/auth/sign-out", { method: "POST" });
+    } catch {
+      // Offline or the server is unreachable — sign out locally anyway.
+    }
+    clearSessionEstablished();
     queryClient.clear();
     navigate({ to: "/sign-in" });
   };
@@ -111,7 +127,7 @@ export function SettingsPage() {
             <div style={{ fontSize: 14, color: "var(--ink-3)" }}>
               Loading your session…
             </div>
-          ) : isError ? (
+          ) : showSessionError ? (
             <div role="alert" style={{ fontSize: 14, color: "var(--alert)" }}>
               Could not load your session.
             </div>

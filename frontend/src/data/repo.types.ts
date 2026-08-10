@@ -168,6 +168,20 @@ export interface Repo {
   importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport>;
 
   /**
+   * Discards every local domain row and provisions a fresh, empty household with
+   * NEW `householdId` and `selfUserId`, and a cleared sync watermark
+   * (`syncCursor` and `lastPushedAt` back to null).
+   *
+   * The new ids are the point, not a side effect: reusing the previous account's
+   * `householdId` is what made a second account on the same device collide on
+   * `households_pkey` when sync provisioned it server-side.
+   *
+   * Callers MUST establish that the data is recoverable before calling this —
+   * see `localStoreIsDisposable()`. Nothing in this method asks.
+   */
+  resetLocalHousehold(): Promise<void>;
+
+  /**
    * W9 sync (design §D2/§D4/§D8): the single reconciliation rule for both
    * sync and merge-mode import. Mutable entities (`pets`, `medications`,
    * `courses`): last-write-wins on `updatedAt`, tie-break greater `id`.

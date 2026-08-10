@@ -983,6 +983,40 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     return { applied, ignored };
   }
 
+  /**
+   * Discards every local domain row and provisions a fresh, empty household with
+   * NEW `householdId` and `selfUserId`, and a cleared sync watermark
+   * (`syncCursor` and `lastPushedAt` back to null).
+   *
+   * The new ids are the point, not a side effect: reusing the previous account's
+   * `householdId` is what made a second account on the same device collide on
+   * `households_pkey` when sync provisioned it server-side.
+   *
+   * Callers MUST establish that the data is recoverable before calling this —
+   * see `localStoreIsDisposable()`. Nothing in this method asks.
+   */
+  async function resetLocalHousehold(): Promise<void> {
+    pets = [];
+    medications = [];
+    courses = [];
+    doseEvents = [];
+    stockAdjustments = [];
+    courseEvents = [];
+    joinCodes = [];
+
+    household = mintHousehold();
+    const user = mintSelfUser(household.id);
+    users = [user];
+
+    meta.tintCursor = 0;
+    meta.lastSweepDay = null;
+    meta.courseEventSeq = 0;
+    meta.syncCursor = null;
+    meta.lastPushedAt = null;
+    meta.householdId = household.id;
+    meta.selfUserId = user.id;
+  }
+
   async function importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport> {
     // Backfill targets are read BEFORE any household/user replacement, so a
     // v1-shaped backup (no `households`/`users` keys) backfills against the
@@ -1116,6 +1150,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     setStockOnHand,
     exportHousehold,
     importHousehold,
+    resetLocalHousehold,
     applyRemoteChanges,
     getMeta,
     setMeta,

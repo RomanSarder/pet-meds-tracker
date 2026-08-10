@@ -1019,6 +1019,82 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     return { applied, ignored };
   }
 
+  /**
+   * Discards every local domain row and provisions a fresh, empty household with
+   * NEW `householdId` and `selfUserId`, and a cleared sync watermark
+   * (`syncCursor` and `lastPushedAt` back to null).
+   *
+   * The new ids are the point, not a side effect: reusing the previous account's
+   * `householdId` is what made a second account on the same device collide on
+   * `households_pkey` when sync provisioned it server-side.
+   *
+   * Callers MUST establish that the data is recoverable before calling this —
+   * see `localStoreIsDisposable()`. Nothing in this method asks.
+   */
+  async function resetLocalHousehold(): Promise<void> {
+    const conn = await db();
+    const tx = conn.transaction(
+      [
+        "pets",
+        "medications",
+        "courses",
+        "doseEvents",
+        "stockAdjustments",
+        "courseEvents",
+        "households",
+        "users",
+        "joinCodes",
+        "meta",
+      ],
+      "readwrite",
+    );
+
+    await Promise.all([
+      tx.objectStore("pets").clear(),
+      tx.objectStore("medications").clear(),
+      tx.objectStore("courses").clear(),
+      tx.objectStore("doseEvents").clear(),
+      tx.objectStore("stockAdjustments").clear(),
+      tx.objectStore("courseEvents").clear(),
+      tx.objectStore("households").clear(),
+      tx.objectStore("users").clear(),
+      tx.objectStore("joinCodes").clear(),
+    ]);
+
+    const ts = now().toISOString();
+    const household: Household = { id: newId(), name: null, createdAt: ts, updatedAt: ts, deletedAt: null };
+    const user: User = {
+      id: newId(),
+      householdId: household.id,
+      email: null,
+      displayName: DEFAULT_SELF_DISPLAY_NAME,
+      tint: 1,
+      isSelf: true,
+      joinedAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+      deletedAt: null,
+    };
+    await tx.objectStore("households").add(household);
+    await tx.objectStore("users").add(user);
+
+    const metaStore = tx.objectStore("meta");
+    await metaStore.put({ key: "tintCursor", value: 0 });
+    await metaStore.put({ key: "lastSweepDay", value: null });
+    await metaStore.put({ key: "courseEventSeq", value: 0 });
+    await metaStore.put({ key: "syncCursor", value: null });
+    await metaStore.put({ key: "lastPushedAt", value: null });
+    await metaStore.put({ key: "householdId", value: household.id });
+    await metaStore.put({ key: "selfUserId", value: user.id });
+    await tx.done;
+
+    // The closure cache must track the identity this reset just installed —
+    // a stale cache would stamp every subsequent write with an id that no
+    // longer resolves to a row in this database.
+    cachedHouseholdId = household.id;
+    cachedSelfUserId = user.id;
+  }
+
   async function importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport> {
     // Backfill targets are resolved BEFORE any household/user replacement, so
     // a v1-shaped backup (no `households`/`users` keys, rows lacking
@@ -1382,6 +1458,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     setStockOnHand,
     exportHousehold,
     importHousehold,
+    resetLocalHousehold,
     applyRemoteChanges,
     getMeta,
     setMeta,

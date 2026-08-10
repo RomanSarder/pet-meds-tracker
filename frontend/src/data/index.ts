@@ -11,6 +11,7 @@ export { createMemoryRepo } from "./memoryRepo";
 export { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
 export { createIdbRepo } from "./idbRepo";
 export { liveDoseEvent, liveDoseEvents } from "./doseEvents";
+export { localStoreIsDisposable } from "./localStore";
 
 let repo: Repo | null = null;
 
