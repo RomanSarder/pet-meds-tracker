@@ -57,7 +57,10 @@ export function VerifyPage() {
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-4">
-        <div className="flex items-center justify-center gap-2 text-muted-foreground">
+        {/* text-muted-foreground (~4.27:1) fails WCAG AA (4.5:1, normal text) against
+            the warm-paper #F6F3EC page background, even though it passes on white.
+            #6E6961 (the DS's own secondary-ink value) measures ~4.91:1 here. */}
+        <div className="flex items-center justify-center gap-2 text-[#6E6961]">
           <PawPrint className="h-4 w-4" aria-hidden="true" />
           <span className="text-xs font-semibold tracking-wide uppercase">
             {t("auth.brand")}
