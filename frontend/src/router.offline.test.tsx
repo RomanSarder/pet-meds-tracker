@@ -329,5 +329,76 @@ describe("router", () => {
       expect(getStoreOwner()).toBe("u-previous");
       expect(await repo.listPets()).toHaveLength(1);
     });
+
+    // The two cases below pin the FAIL-CLOSED rule on the owner-mismatch
+    // branch's error paths, which the two tests above do not reach.
+    //
+    // Why this needs its own coverage: the outer guard deliberately fails
+    // OPEN on a repo/network failure (`if (isSessionEstablished()) return`),
+    // because there it does not know who the user is and an absence of
+    // information must not revoke a session. Inside the owner-mismatch
+    // branch that reasoning inverts. By the time it runs, `/auth/me` has
+    // already succeeded ONLINE and identified user B, and `getStoreOwner()`
+    // is already known to be a DIFFERENT user A — that is the only way the
+    // branch is reached. `isSessionEstablished()` being true there only
+    // means SOME session (A's) was once live on this device; it says nothing
+    // about B. Falling open would enter the app shell without resetting and
+    // without blocking, and AppShell/TodayPage/PetsPage read IndexedDB
+    // directly (SPEC §9) — so B would see A's rows.
+    //
+    // That is precisely the defect found in review of 4bfd9ce and fixed in
+    // 20b37ce. The source is correct today; these tests exist so a future
+    // refactor cannot quietly reintroduce it.
+
+    it("owner mismatch + the disposability check THROWS: fails closed to /account-switch, never enters the app", async () => {
+      setStoreOwner("u-previous");
+      const repo = unsyncedRepo();
+      // `localStoreIsDisposable` reads the store through `exportHousehold`
+      // (data/localStore.ts) and does not catch — so a storage failure there
+      // surfaces as a rejection out of the disposability check itself, which
+      // is the condition under test. Models a real IndexedDB failure: a
+      // QuotaExceededError, a version-change block, or a transient abort on
+      // the wide multi-store read it opens.
+      const exportSpy = vi
+        .spyOn(repo, "exportHousehold")
+        .mockRejectedValue(new Error("IndexedDB unavailable"));
+      const resetSpy = vi.spyOn(repo, "resetLocalHousehold");
+      setRepo(repo);
+      markSessionEstablished(); // the fail-open fallback's precondition — must NOT rescue this branch
+      mockAuthenticated(); // SESSION_USER.id = "user-1", different from "u-previous"
+
+      const { router } = renderApp("/today");
+
+      await screen.findByText("Another account's data is on this device");
+      expect(router.state.location.pathname).toBe("/account-switch");
+      expect(exportSpy).toHaveBeenCalled();
+      // Neither destroyed nor handed over: the store is untouched and still
+      // belongs to the previous account, and A's rows were never rendered.
+      expect(resetSpy).not.toHaveBeenCalled();
+      expect(getStoreOwner()).toBe("u-previous");
+      expect(screen.queryByText(TODAY_HEADING)).toBeNull();
+    });
+
+    it("owner mismatch + resetLocalHousehold THROWS after disposability said true: fails closed to /account-switch, never enters the app", async () => {
+      setStoreOwner("u-previous");
+      const repo = emptyDisposableRepo(); // disposability resolves true, so the reset is attempted
+      const resetSpy = vi
+        .spyOn(repo, "resetLocalHousehold")
+        .mockRejectedValue(new Error("IndexedDB transaction aborted"));
+      setRepo(repo);
+      markSessionEstablished(); // again: must NOT rescue this branch into the app
+      mockAuthenticated();
+
+      const { router } = renderApp("/today");
+
+      await screen.findByText("Another account's data is on this device");
+      expect(router.state.location.pathname).toBe("/account-switch");
+      // The reset was genuinely attempted and genuinely failed — so the store
+      // may be in a half-cleared state, which is exactly why entering the app
+      // here is unsafe and ownership must not transfer.
+      expect(resetSpy).toHaveBeenCalledTimes(1);
+      expect(getStoreOwner()).toBe("u-previous");
+      expect(screen.queryByText(TODAY_HEADING)).toBeNull();
+    });
   });
 });
