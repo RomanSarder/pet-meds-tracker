@@ -39,6 +39,9 @@ export const SEED = {
   /** `TodayDose.title` is `${medication.name} ${doseAmount} ${doseUnit}`. */
   fixedDoseTitle: "Zeroxin 0.4 ml",
   intervalDoseTitle: "Onvaxil 0.5 ml",
+  /** Bare medication names, e.g. for `today.moreOptions`'s "More options for <name>". */
+  fixedMedicationName: "Zeroxin",
+  intervalMedicationName: "Onvaxil",
   fixedTimes: ["08:00", "20:00"] as const,
   /** anchor `givenAt` 04:00Z + `intervalHours` 8 — the engine's elapsed-ms arithmetic. */
   intervalDueTime: "12:00",
