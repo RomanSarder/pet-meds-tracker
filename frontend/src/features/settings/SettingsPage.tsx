@@ -8,7 +8,12 @@ import { apiClient, NetworkError } from "@/shared/api";
 import { clearSessionEstablished } from "@/shared/session";
 import { getRepo } from "@/data";
 import { downloadBackup, readBackupFile } from "@/data/backupFile";
-import { Button, Card, ScreenHeader, SectionLabel } from "@/components/ds";
+import { Button, Card, ScreenHeader, SectionLabel, SegmentedControl } from "@/components/ds";
+import { useT, useLocale, type Locale } from "@/i18n";
+
+function isLocale(value: string): value is Locale {
+  return value === "uk" || value === "en";
+}
 
 // W0 owns this file — relocated from the former pages/HomePage.tsx, now a
 // DS screen reachable at /settings. Export/import (SPEC §8) are wired up
@@ -16,6 +21,8 @@ import { Button, Card, ScreenHeader, SectionLabel } from "@/components/ds";
 export function SettingsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const t = useT();
+  const { locale, setLocale } = useLocale();
 
   // The session query stays: signing out and the auth-gated states below depend
   // on it. What it must NOT do any more is render `user.email` — SPEC §12: "No
@@ -79,7 +86,7 @@ export function SettingsPage() {
     } catch (err) {
       setImportStatus({
         kind: "error",
-        message: err instanceof Error ? err.message : "Could not read that file.",
+        message: err instanceof Error ? err.message : t("settings.readErrorGeneric"),
       });
     }
   };
@@ -91,18 +98,18 @@ export function SettingsPage() {
     try {
       await getRepo().importHousehold(backup, mode);
       await queryClient.invalidateQueries();
-      setImportStatus({ kind: "success", message: "Import complete." });
+      setImportStatus({ kind: "success", message: t("settings.importSuccess") });
     } catch (err) {
       setImportStatus({
         kind: "error",
-        message: err instanceof Error ? err.message : "Import failed.",
+        message: err instanceof Error ? err.message : t("settings.importErrorGeneric"),
       });
     }
   };
 
   return (
     <div>
-      <ScreenHeader title="Settings" />
+      <ScreenHeader title={t("settings.title")} />
 
       <div
         style={{
@@ -121,15 +128,17 @@ export function SettingsPage() {
               marginBottom: 4,
             }}
           >
-            {signedInName ? `Signed in as ${signedInName}` : "Signed in"}
+            {signedInName
+              ? t("settings.signedInAs", { name: signedInName })
+              : t("settings.signedIn")}
           </div>
           {isPending ? (
             <div style={{ fontSize: 14, color: "var(--ink-3)" }}>
-              Loading your session…
+              {t("settings.loadingSession")}
             </div>
           ) : showSessionError ? (
             <div role="alert" style={{ fontSize: 14, color: "var(--alert)" }}>
-              Could not load your session.
+              {t("settings.sessionError")}
             </div>
           ) : null}
           <Button
@@ -139,12 +148,30 @@ export function SettingsPage() {
             onClick={handleSignOut}
             style={{ marginTop: 16 }}
           >
-            Sign out
+            {t("settings.signOut")}
           </Button>
         </Card>
 
         <div>
-          <SectionLabel>Backup</SectionLabel>
+          <SectionLabel>{t("settings.language")}</SectionLabel>
+          <Card style={{ marginTop: 12 }}>
+            <div role="group" aria-label={t("settings.language")}>
+              <SegmentedControl
+                options={[
+                  { value: "uk", label: t("settings.languageNameUk") },
+                  { value: "en", label: t("settings.languageNameEn") },
+                ]}
+                value={locale}
+                onChange={(v) => {
+                  if (isLocale(v)) setLocale(v);
+                }}
+              />
+            </div>
+          </Card>
+        </div>
+
+        <div>
+          <SectionLabel>{t("settings.backup")}</SectionLabel>
           <Card
             style={{
               marginTop: 12,
@@ -160,7 +187,7 @@ export function SettingsPage() {
                 style={{ flex: 1 }}
                 onClick={handleExport}
               >
-                Export JSON
+                {t("settings.exportJson")}
               </Button>
               <Button
                 type="button"
@@ -168,13 +195,13 @@ export function SettingsPage() {
                 style={{ flex: 1 }}
                 onClick={() => fileInputRef.current?.click()}
               >
-                Import JSON
+                {t("settings.importJson")}
               </Button>
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="application/json"
-                aria-label="Choose a backup file to import"
+                aria-label={t("settings.chooseBackupFile")}
                 onChange={handleFileChosen}
                 style={{ display: "none" }}
               />
@@ -192,8 +219,7 @@ export function SettingsPage() {
                 }}
               >
                 <div style={{ fontSize: 13, color: "var(--ink-2)" }}>
-                  Replace your whole household with this file, or merge it in and
-                  keep whichever copy of each item was edited most recently?
+                  {t("settings.replaceOrMergePrompt")}
                 </div>
                 <div style={{ display: "flex", gap: 12 }}>
                   <Button
@@ -203,7 +229,7 @@ export function SettingsPage() {
                     style={{ flex: 1 }}
                     onClick={() => handleImport("replace")}
                   >
-                    Replace everything
+                    {t("settings.replaceEverything")}
                   </Button>
                   <Button
                     type="button"
@@ -212,7 +238,7 @@ export function SettingsPage() {
                     style={{ flex: 1 }}
                     onClick={() => handleImport("merge")}
                   >
-                    Merge (keep newest)
+                    {t("settings.mergeKeepNewest")}
                   </Button>
                 </div>
               </div>
@@ -228,8 +254,7 @@ export function SettingsPage() {
               </div>
             ) : (
               <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
-                Export your whole household as a single JSON file, or import one
-                to restore or merge it back in.
+                {t("settings.exportImportHelp")}
               </div>
             )}
           </Card>

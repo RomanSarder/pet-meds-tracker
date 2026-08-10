@@ -24,6 +24,7 @@ import userEvent from "@testing-library/user-event";
 import type { SessionUser } from "@pet-tracker/shared";
 import { router as appRouter } from "./router";
 import { queryClient as appQueryClient } from "./queryClient";
+import { LocaleProvider } from "@/i18n";
 
 /**
  * How this file recognises that the Today screen is mounted.
@@ -117,6 +118,11 @@ function mockUnauthenticated() {
  * prior test's cached session (or error) can never leak into this one.
  * `testQueryClient` only stands in for a component that might call
  * `useQueryClient()`; nothing here currently does.
+ *
+ * `LocaleProvider` is included because `main.tsx` wraps the real
+ * `RouterProvider` in one — `AppShell` calls `useT()` and throws outside a
+ * provider, so this hand-built stack must mirror that wrapping to render the
+ * real tree at all. Defaults to English, same as `renderWithProviders`.
  */
 function renderApp(initialEntry: string) {
   appQueryClient.clear();
@@ -129,7 +135,9 @@ function renderApp(initialEntry: string) {
   });
   const result = render(
     <QueryClientProvider client={testQueryClient}>
-      <RouterProvider router={router} />
+      <LocaleProvider initialLocale="en">
+        <RouterProvider router={router} />
+      </LocaleProvider>
     </QueryClientProvider>,
   );
   return { ...result, router };

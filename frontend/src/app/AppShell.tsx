@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { Outlet, useLocation, useMatches, useNavigate } from "@tanstack/react-router";
-import { DsRoot, TabBar } from "@/components/ds";
+import { DsRoot, TabBar, type TabBarTab } from "@/components/ds";
+import { useT } from "@/i18n";
 import { ToastProvider } from "./Toast";
 
 const rootStyle: CSSProperties = {
@@ -30,11 +31,21 @@ export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const matches = useMatches();
+  const t = useT();
 
   const hideChrome = matches.some((m) => m.staticData?.chrome === "none");
   // TabBar's tab values (today/pets/supplies) are already identical to the
   // route path segments, so no mapping table is needed.
   const activeTab = location.pathname.split("/")[1] || "today";
+
+  // TabBar (frozen, in components/ds) falls back to its own hard-coded
+  // English DEFAULT_TABS when no `tabs` prop is passed. Build the localized
+  // array here instead, at the call site, using the same value/icon triples.
+  const tabs: TabBarTab[] = [
+    { value: "today", label: t("nav.today"), icon: "calendar-check" },
+    { value: "pets", label: t("nav.pets"), icon: "paw-print" },
+    { value: "supplies", label: t("nav.supplies"), icon: "package" },
+  ];
 
   return (
     <DsRoot style={rootStyle}>
@@ -44,6 +55,7 @@ export function AppShell() {
         </div>
         {hideChrome ? null : (
           <TabBar
+            tabs={tabs}
             value={activeTab}
             onChange={(v) => navigate({ to: `/${v}` })}
             style={tabBarStyle}

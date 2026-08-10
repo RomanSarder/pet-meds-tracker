@@ -28,6 +28,7 @@ import { FIXTURE_NOW, fixedClock, setClock } from "@/domain";
 import { setRepo } from "@/data";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Repo } from "@/data/repo.types";
+import { LocaleProvider, LOCALE_STORAGE_KEY, type Locale } from "@/i18n";
 
 export { userEvent };
 
@@ -68,13 +69,25 @@ function createTestRouter(ui: ReactElement, route: string) {
 
 export function renderWithProviders(
   ui: ReactElement,
-  opts?: { repo?: Repo; now?: string; route?: string },
+  opts?: { repo?: Repo; now?: string; route?: string; locale?: Locale },
 ): RenderResult & { repo: Repo; queryClient: QueryClient } {
   // Install the repo and clock BEFORE anything renders, so the very first
   // effect/render pass already sees them.
   const repo = opts?.repo ?? createMemoryRepo();
   setRepo(repo);
   setClock(fixedClock(opts?.now ?? FIXTURE_NOW));
+
+  // Reset locale state so no test leaks a language into the next one. Pinned
+  // to English by default — the 963 pre-i18n tests assert English copy and
+  // must keep meaning what they meant; pass `{ locale: "uk" }` to opt into
+  // Ukrainian coverage deliberately.
+  const locale = opts?.locale ?? "en";
+  try {
+    localStorage.removeItem(LOCALE_STORAGE_KEY);
+  } catch {
+    // private mode / storage disabled — nothing to reset.
+  }
+  document.documentElement.lang = locale;
 
   const queryClient = new QueryClient({
     // Silence query-error console noise: without this, a component under
@@ -91,11 +104,13 @@ export function renderWithProviders(
 
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <DsRoot>
-        <ToastProvider>
-          <RouterProvider router={router} />
-        </ToastProvider>
-      </DsRoot>
+      <LocaleProvider initialLocale={locale}>
+        <DsRoot>
+          <ToastProvider>
+            <RouterProvider router={router} />
+          </ToastProvider>
+        </DsRoot>
+      </LocaleProvider>
     </QueryClientProvider>,
   );
 

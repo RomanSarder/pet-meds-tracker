@@ -8,12 +8,15 @@ import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { startBackgroundSync } from "./sync";
 import { startNotifications } from "./notifications";
+import { LocaleProvider } from "./i18n";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <LocaleProvider>
+          <RouterProvider router={router} />
+        </LocaleProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   </StrictMode>
