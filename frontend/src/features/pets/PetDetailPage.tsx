@@ -70,6 +70,15 @@ export function PetDetailView({ petId }: { petId: string }) {
 
   if (!pet.data) return null;
 
+  // Fix 4a: `occurrences` below is derived from `courses.data` and
+  // `events.data` — while either is still loading, every occurrence
+  // resolves through `getDoseState` on data that hasn't arrived yet (an
+  // `event: null` that isn't really "no event", just "not fetched yet"),
+  // which is what let a dose given late render as transiently "Overdue".
+  // Recorded here, read at the Schedule block below, so it never renders a
+  // state derived from data that hasn't arrived.
+  const scheduleLoading = courses.isLoading || events.isLoading;
+
   const activeCourses = courses.data ?? [];
   const medicationList = medications.data ?? [];
   const recentEvents = events.data ?? [];
@@ -213,37 +222,48 @@ export function PetDetailView({ petId }: { petId: string }) {
         <SectionLabel trailing={tr.t("pets.schedule.countToday", { count: occurrences.length })}>
           {tr.t("pets.schedule")}
         </SectionLabel>
-        <Card>
-          {occurrences.map((o, i) => {
-            const course = activeCourses.find((c) => c.id === o.courseId);
-            const state = getDoseState(o, nowDate);
-            const rowProps = doseRowPropsFor({
-              occurrence: o,
-              state,
-              medicationName: medicationName(o.medicationId),
-              instructions: o.instructions,
-              progress: course ? renderCourseProgress(courseProgress(course, today), tr) : "",
-              tr,
-            });
-            // Read-only (SPEC §5.3): no `onGive`, and never the DS `DoseRow`
-            // itself — it hard-codes a "Give" `Button` for every non-`given`
-            // state regardless of whether a handler is passed, which reads as
-            // a false affordance here (SPEC §9). `ScheduleRow` is the
-            // locally-composed, always-inert replacement: same layout and
-            // tokens as `DoseRow`, but every state (including `notStarted`,
-            // whose SPEC §3b "Start course" action belongs to Today, which
-            // already owns it) renders as information only.
-            return (
-              <ScheduleRow
-                key={o.key}
-                state={state}
-                medication={rowProps.medication}
-                detail={rowProps.detail}
-                time={rowProps.time}
-                divider={i > 0}
-              />
-            );
-          })}
+        {/*
+          Fix 4a: while `courses` or `events` hasn't resolved yet, every
+          occurrence's `event` looks like "no event" rather than "not fetched
+          yet", so `getDoseState` falls into `overdue` for doses that are
+          really `given`. Render no rows (and no state) until both queries
+          have data — the label and card stay put so the screen doesn't
+          jump, and `aria-busy` marks the region as still settling.
+        */}
+        <Card aria-busy={scheduleLoading}>
+          {scheduleLoading
+            ? null
+            : occurrences.map((o, i) => {
+                const course = activeCourses.find((c) => c.id === o.courseId);
+                const state = getDoseState(o, nowDate);
+                const rowProps = doseRowPropsFor({
+                  occurrence: o,
+                  state,
+                  medicationName: medicationName(o.medicationId),
+                  instructions: o.instructions,
+                  progress: course ? renderCourseProgress(courseProgress(course, today), tr) : "",
+                  tr,
+                });
+                // Read-only (SPEC §5.3): no `onGive`, and never the DS
+                // `DoseRow` itself — it hard-codes a "Give" `Button` for
+                // every non-`given` state regardless of whether a handler is
+                // passed, which reads as a false affordance here (SPEC §9).
+                // `ScheduleRow` is the locally-composed, always-inert
+                // replacement: same layout and tokens as `DoseRow`, but
+                // every state (including `notStarted`, whose SPEC §3b
+                // "Start course" action belongs to Today, which already
+                // owns it) renders as information only.
+                return (
+                  <ScheduleRow
+                    key={o.key}
+                    state={state}
+                    medication={rowProps.medication}
+                    detail={rowProps.detail}
+                    time={rowProps.time}
+                    divider={i > 0}
+                  />
+                );
+              })}
         </Card>
 
         <SectionLabel>{tr.t("pets.courses")}</SectionLabel>
@@ -259,6 +279,7 @@ export function PetDetailView({ petId }: { petId: string }) {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
+                flexWrap: "wrap",
                 gap: 12,
                 cursor: "pointer",
               }}
@@ -270,17 +291,19 @@ export function PetDetailView({ petId }: { petId: string }) {
                 }
               }}
             >
-              <div>
+              <div style={{ minWidth: 0, overflowWrap: "anywhere" }}>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--ink-1)" }}>{label}</div>
                 <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
                   {renderSchedule(describeSchedule(c.schedule), tr)}
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                 {c.status === "paused" ? (
-                  <Badge tone="neutral">{tr.t("pets.courseStatus.paused")}</Badge>
+                  <Badge tone="neutral" style={{ whiteSpace: "nowrap" }}>
+                    {tr.t("pets.courseStatus.paused")}
+                  </Badge>
                 ) : null}
-                <Badge tone={c.endDate ? "accent" : "neutral"}>
+                <Badge tone={c.endDate ? "accent" : "neutral"} style={{ whiteSpace: "nowrap" }}>
                   {renderCourseProgress(courseProgress(c, today), tr)}
                 </Badge>
               </div>
@@ -324,13 +347,19 @@ export function PetDetailView({ petId }: { petId: string }) {
             return (
               <div
                 key={entry.id}
-                style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: "var(--ink-2)" }}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  fontSize: 14,
+                  color: "var(--ink-2)",
+                }}
               >
-                <span>
+                <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
                   {renderLogTitle(entry.title, tr)}
                   {suffix}
                 </span>
-                <span style={{ color: "var(--ink-3)", fontSize: 13 }}>
+                <span style={{ color: "var(--ink-3)", fontSize: 13, marginLeft: "auto" }}>
                   {tr.t("pets.recent.attribution", {
                     when: eventWhenLabel(new Date(entry.at), today, tr),
                     actor: nameFor(entry.actorId),
