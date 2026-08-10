@@ -435,6 +435,24 @@ describe("HistoryView", () => {
     const row = attribution.parentElement;
     expect(row).not.toBeNull();
     expect(row?.style.flexWrap).toBe("wrap");
+
+    // jsdom does no layout, so it cannot reproduce the 360px measurement
+    // directly, but it can assert the style contract that measurement
+    // showed to be load-bearing. Browser measurement on the broken build:
+    // title/detail column `width 41.5px, height 153.5px` (text broken into
+    // near-single-character lines) while the attribution sat beside it at
+    // `width 150.5px, height 20px` — flexWrap: "wrap" never fired. Root
+    // cause: the column carried the bare `flex: 1` shorthand, which expands
+    // to `flex: 1 1 0%` (flex-basis 0). Flex line-wrapping decides from each
+    // item's hypothetical main size — its flex-basis — not its rendered
+    // size, so a basis-0 title column never contributes to the row's total
+    // and the row (240.5px) never exceeds the ~284px content box. A bare
+    // `flex: 1` (or explicit `flex: 1 1 0%`) here silently disables the
+    // wrap and reintroduces the sliver, even with flexWrap: "wrap" present.
+    const titleColumn = attribution.previousElementSibling as HTMLElement | null;
+    expect(titleColumn).not.toBeNull();
+    expect(titleColumn?.style.flex).not.toBe("1");
+    expect(titleColumn?.style.flex).not.toBe("1 1 0%");
   });
 
   it("renders 'by Someone' for an event whose actorId matches no household member", async () => {

@@ -358,10 +358,27 @@ export function HistoryView({ petId }: { petId: string }) {
                   // beside the title once the time/dot column is accounted
                   // for, and it cannot shrink below its content width (its
                   // flex-basis is auto). Rather than let it crush the
-                  // `flex: 1, minWidth: 0` title/detail column down to a
-                  // near-single-word sliver, `flexWrap: "wrap"` lets the
-                  // attribution drop to its own full-width line — no overlap,
-                  // no truncation, at any width from 360px up.
+                  // title/detail column down to a near-single-word sliver,
+                  // `flexWrap: "wrap"` lets the attribution drop to its own
+                  // full-width line — no overlap, no truncation, at any width
+                  // from 360px up.
+                  //
+                  // The title/detail column below MUST use `flex: "1 1 auto"`,
+                  // not the bare `flex: 1` shorthand. `flex: 1` expands to
+                  // `flex: 1 1 0%` — flex-basis zero — and flex line-wrapping
+                  // is decided from each item's hypothetical main size (its
+                  // flex-basis), not its post-grow rendered size. With basis
+                  // 0 the title column contributes nothing to that
+                  // calculation, so the row (time 46 + dot 8 + title 0 +
+                  // attribution 150.5 + gaps 36 = 240.5px) never exceeds the
+                  // ~284px content box and `flexWrap: "wrap"` never fires —
+                  // free space just gets handed to the title via flex-grow,
+                  // squeezing it to a measured 41.5px-wide, 153.5px-tall
+                  // sliver of near-single-character lines while the
+                  // attribution stays on the same line. `flex: "1 1 auto"`
+                  // gives the column a content-derived basis so the row's
+                  // hypothetical size correctly exceeds 360px and the wrap
+                  // triggers. Do not "simplify" this back to `flex: 1`.
                   <div
                     key={entry.id}
                     style={{
@@ -396,7 +413,7 @@ export function HistoryView({ petId }: { petId: string }) {
                         background: d.dot,
                       }}
                     ></div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ flex: "1 1 auto", minWidth: 0 }}>
                       <div style={{ fontSize: 15, fontWeight: 600, color: d.titleColor, overflowWrap: "anywhere" }}>
                         {renderLogTitle(entry.title, tr)}
                       </div>
