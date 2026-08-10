@@ -2,7 +2,7 @@
 // (name, quantity needed, which pets), copyable as text."
 //
 // Structure, the `stopBubbling` guard and the popup/backdrop style objects
-// are copied verbatim from `features/today/LogAtTimeDialog.tsx`, the house
+// are copied verbatim from `features/today/LogAtTimeSheet.tsx`, the house
 // pattern for a dialog reached from this screen. The list text itself is
 // never assembled here — `shoppingListText` (pure, in `./shoppingList.ts`)
 // already owns the "name · quantity · pets" formatting.
@@ -15,7 +15,7 @@ import type { SupplyItem } from "./model";
 
 /**
  * Keeps the dialog's interactions inside the dialog. See
- * `features/today/LogAtTimeDialog.tsx`'s own `stopBubbling` for the reason:
+ * `features/today/LogAtTimeSheet.tsx`'s own `stopBubbling` for the reason:
  * React synthetic events propagate through the React tree, not the DOM tree,
  * so `Dialog.Portal` moving the markup to the end of `<body>` does not stop a
  * click or pointer-down inside the popup from bubbling to whatever clickable

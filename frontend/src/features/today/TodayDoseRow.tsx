@@ -20,15 +20,15 @@
 // WHAT THIS FILE MUST GUARD: EVERYTHING THAT IS NOT THE GIVE BUTTON.
 // `TodayPage` renders each card inside a clickable wrapper that opens Pet
 // detail. React synthetic events propagate through the REACT tree, not the DOM
-// tree, so a portal is not an escape hatch: `Menu.Portal` and the dialog's
-// `Dialog.Portal` below are React children of that wrapper, and a click on a
-// menu item or anywhere in the dialog reaches the card handler and navigates
-// away — breaking SPEC §5.1's rule that logging a dose never leaves the
-// dashboard. So the guard is on three surfaces, not one:
+// tree, so a portal is not an escape hatch: `Menu.Portal` and the sheet's own
+// portal are React children of that wrapper, and a click on a menu item or
+// anywhere in the sheet reaches the card handler and navigates away —
+// breaking SPEC §5.1's rule that logging a dose never leaves the dashboard. So
+// the guard is on three surfaces, not one:
 //   * `Menu.Trigger`,
 //   * the `Menu.Popup` subtree (click AND pointer-down: the card handler can be
 //     reached through either path independently),
-//   * the dialog's popup and backdrop, guarded inside `LogAtTimeDialog`.
+//   * the sheet's popup and backdrop, guarded inside `LogAtTimeSheet`.
 // The long-press has the same problem from a different direction — releasing
 // the hold makes the browser synthesise a click on the row text — so the timer
 // sets `suppressClickRef` and `onClickCapture` swallows exactly that one click.
@@ -43,11 +43,10 @@ import {
 } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { Button, DoseRow, IconButton } from "@/components/ds";
-import { formatHHMM, now } from "@/domain";
 import { useT } from "@/i18n";
 import type { T } from "@/i18n";
-import { LogAtTimeDialog } from "./LogAtTimeDialog";
-import type { TodayDose } from "./types";
+import { LogAtTimeSheet } from "./LogAtTimeSheet";
+import type { LogAtTimeContext, TodayDose } from "./types";
 
 /** SPEC §5.1's long-press, and the slop a real thumb needs before it counts as a drag. */
 const LONG_PRESS_MS = 500;
@@ -56,6 +55,8 @@ const MOVE_TOLERANCE_PX = 10;
 export interface TodayDoseRowProps {
   dose: TodayDose;
   divider?: boolean;
+  /** Everything §6.1a's sheet needs beyond `dose` itself — forwarded verbatim as its `context`. */
+  logAtTime: LogAtTimeContext;
   onGive: () => void;
   onSkip: () => void;
   /** `givenAt` is a local Date chosen by the user. */
@@ -119,6 +120,7 @@ const MENU_ITEM_STYLE = {
 export function TodayDoseRow({
   dose,
   divider,
+  logAtTime,
   onGive,
   onSkip,
   onLogAtTime,
@@ -127,11 +129,7 @@ export function TodayDoseRow({
 }: TodayDoseRowProps): ReactElement {
   const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  // Captured when the dialog opens, not read on every render: the field seeds
-  // itself from this, and a value that moved under the user mid-edit would be
-  // a bug rather than a refresh.
-  const [dialogTime, setDialogTime] = useState(dose.time ?? "");
+  const [sheetOpen, setSheetOpen] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
 
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -197,10 +195,7 @@ export function TodayDoseRow({
   }
 
   function openLogAtTime() {
-    // `now()` is the injected clock (SPEC §9), never `new Date()`, so a fixed
-    // clock in a test produces a deterministic default.
-    setDialogTime(dose.time ?? formatHHMM(now()));
-    setDialogOpen(true);
+    setSheetOpen(true);
   }
 
   const resolved = dose.state === "given" || dose.state === "skipped";
@@ -308,21 +303,28 @@ export function TodayDoseRow({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>{body}</div>
-        <Menu.Trigger
-          onClick={(e) => e.stopPropagation()}
-          render={
-            <IconButton
-              icon="ellipsis"
-              variant="plain"
-              size={40}
-              // SPEC §9: every tap target ≥ 44px.
-              style={{ minWidth: 44, minHeight: 44, flexShrink: 0 }}
-              label={t("today.moreOptions", {
-                medicationName: dose.medicationName,
-              })}
-            />
-          }
-        />
+        {/* SPEC §6.1: "The overflow is hidden once the dose is `given`." Literally
+            `given` only — a `skipped` row keeps it, because logging a dose
+            previously marked skipped is a legitimate recovery path. The
+            long-press machinery below is untouched by this: it still opens the
+            same menu on a `given` row, only the tap target for it is gone. */}
+        {dose.state !== "given" ? (
+          <Menu.Trigger
+            onClick={(e) => e.stopPropagation()}
+            render={
+              <IconButton
+                icon="ellipsis"
+                variant="plain"
+                size={40}
+                // SPEC §9: every tap target ≥ 44px.
+                style={{ minWidth: 44, minHeight: 44, flexShrink: 0 }}
+                label={t("today.moreOptions", {
+                  medicationName: dose.medicationName,
+                })}
+              />
+            }
+          />
+        ) : null}
       </div>
 
       <Menu.Portal>
@@ -358,13 +360,22 @@ export function TodayDoseRow({
         </Menu.Positioner>
       </Menu.Portal>
 
-      <LogAtTimeDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        day={dose.occurrence.day}
-        defaultTime={dialogTime}
-        medicationName={dose.medicationName}
-        onConfirm={onLogAtTime}
+      <LogAtTimeSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        dose={dose}
+        context={logAtTime}
+        // Closes before logging, mirroring `LogAtTimeDialog.tsx`'s own
+        // `confirm()` (`onConfirm(...); onOpenChange(false);`) and the
+        // sheet's own `handleSkip`: the write is async and can still fail
+        // (SPEC §5's duplicate guard), but the sheet itself is done the
+        // moment the user commits, and `useLogDose.onError` surfaces the
+        // rejection back on Today rather than behind a lingering sheet.
+        onConfirm={(givenAt) => {
+          setSheetOpen(false);
+          onLogAtTime(givenAt);
+        }}
+        onSkipInstead={onSkip}
       />
     </Menu.Root>
   );

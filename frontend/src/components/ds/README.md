@@ -36,6 +36,7 @@ Outside `DsRoot` the tokens do not resolve and components render unstyled.
 
 ## Deliberate differences from the source
 
+- **`--scrim` was added to `tokens/colors.css` to close a gap against upstream.** The token existed in the source design system but was missing from the port's initial landing.
 - **Tokens are scoped to `.ds-root`, not `:root`.** The app already declares `--font-sans`
   and `--radius-sm/md/lg` at `:root` for its shadcn primitives. Hoisting the design system's
   values would silently restyle every existing screen.

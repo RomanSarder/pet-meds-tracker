@@ -1,7 +1,13 @@
-// SPEC.md §11's test cases worth writing first, each named after the case it
-// covers. Case numbering follows the bullet order in SPEC §11 (1-indexed).
-// Cases 5-8 are outside the engine's surface (undo, stock, supply cover) and
-// are not this file's job.
+// SPEC.md §12's test cases worth writing first, named after the spec bullet
+// each covers (titles quote or closely paraphrase the bullet text, not its
+// index — the bullet list has already been renumbered once by an earlier
+// insertion, and index-based names are exactly what breaks when that
+// happens again).
+// Bullet 4 ("the corrected-time picker cannot produce a givenAt in the
+// future or before 00:00 today") is a picker property, not an engine one —
+// see frontend/src/features/today/logAtTimeModel.test.ts.
+// Bullets 7-10 are outside the engine's surface (undo, stock, supply cover)
+// and are not this file's job.
 import { describe, expect, it } from "vitest";
 import type { Course, DoseEvent } from "@/domain";
 import { FIXTURE_NOW, atLocalTime, fixtures, localDayKey, occurrenceKeyFor } from "@/domain";
@@ -83,7 +89,7 @@ function givenEvent(
   };
 }
 
-describe("SPEC §11 case 1 — a fromLastDose course logged 90 minutes late moves the next due time by 90 minutes", () => {
+describe("SPEC §12 — a fromLastDose course logged 90 minutes late moves the next due time by 90 minutes", () => {
   it("shifts nextDueAt by exactly 90 minutes when the anchoring dose was given 90 minutes later", () => {
     const onTimeCourse = fromLastDoseCourse("case1-on-time", 8, { startDate: "2026-08-01" });
     const lateCourse = fromLastDoseCourse("case1-late", 8, { startDate: "2026-08-01" });
@@ -111,7 +117,41 @@ describe("SPEC §11 case 1 — a fromLastDose course logged 90 minutes late move
   });
 });
 
-describe("SPEC §11 case 2 — a fixedTimes course logged late does not move the following dose", () => {
+describe('SPEC §12 — "at its scheduled time" writes givenAt equal to the occurrence\'s due time, so a fromLastDose chain stays on its planned grid', () => {
+  it("mirrors case 1 with zero delta: given exactly at the due instant, nextDueAt lands exactly on the next planned grid tick", () => {
+    const day = "2026-08-08";
+    const course = fromLastDoseCourse("case-on-time-course", 8, {
+      startDate: "2026-08-01",
+      anchorTime: "08:00",
+    });
+
+    // The planned grid instant, computed independently of the event: 08:00
+    // local on `day`, the same clock time the chain would land on if it had
+    // never drifted.
+    const plannedDueAt = atLocalTime(day, "08:00");
+
+    const event = givenEvent("case-on-time-ev", course.id, {
+      scheduledFor: null,
+      givenAt: plannedDueAt.toISOString(), // "at its scheduled time"
+    });
+
+    const after = new Date(2026, 6, 1, 0, 0); // well before the anchor
+    const next = nextDueAt(course, [event], after);
+
+    expect(next).not.toBeNull();
+    // Exactly the next grid tick — not "close to" it. Zero drift, unlike
+    // case 1's 90-minute shift.
+    expect(next!.getTime()).toBe(plannedDueAt.getTime() + 8 * 3_600_000);
+    // The event reads as on time: givenAt is exactly the due instant, no delta.
+    expect(event.givenAt).toBe(plannedDueAt.toISOString());
+  });
+});
+
+// SPEC §12 — "the corrected-time picker cannot produce a givenAt in the
+// future or before 00:00 today" is a picker property, not an engine one;
+// see frontend/src/features/today/logAtTimeModel.test.ts.
+
+describe("SPEC §12 — a fixedTimes course logged late does not move the following dose", () => {
   it("the 20:00 occurrence is identical whether the 08:00 dose was logged at 08:00 or at 11:30", () => {
     const day = "2026-08-08";
     const course = fixedTimesCourse("case2-course", ["08:00", "20:00"], { startDate: "2026-08-01" });
@@ -145,7 +185,7 @@ describe("SPEC §11 case 2 — a fixedTimes course logged late does not move the
   });
 });
 
-describe("SPEC §11 case 3 — a dose scheduled 23:00 and logged 00:20 the next morning counts against the previous day", () => {
+describe("SPEC §12 — a dose scheduled 23:00 and logged 00:20 counts against the previous day", () => {
   it("the given event resolves the earlier day's 23:00 occurrence (by scheduledFor), and the later day's occurrence stays un-given", () => {
     const day = "2026-08-08";
     const nextDay = "2026-08-09";
@@ -177,7 +217,7 @@ describe("SPEC §11 case 3 — a dose scheduled 23:00 and logged 00:20 the next 
   });
 });
 
-describe("SPEC §11 case 4 (engine half) — pausing a course removes it from Today, leaving its events untouched", () => {
+describe("SPEC §12 — pausing a course removes it from Today but leaves its history intact (engine half)", () => {
   it("generates no occurrences for a paused course while ctx.events is unchanged", () => {
     const course = fixedTimesCourse("case4-course", ["08:00"], {
       startDate: "2026-08-01",
@@ -197,7 +237,7 @@ describe("SPEC §11 case 4 (engine half) — pausing a course removes it from To
   });
 });
 
-describe("SPEC §11 case 9 — nothing is due for an interval course that has never been started", () => {
+describe("SPEC §12 — nothing is due for an interval course that has never been started", () => {
   it("reports dueAt === null and getDoseState notStarted for the fixture corpus's never-started fromLastDose course", () => {
     const day = localDayKey(new Date(FIXTURE_NOW));
     const ctx: EngineContext = { courses: fixtures.courses, events: fixtures.doseEvents };

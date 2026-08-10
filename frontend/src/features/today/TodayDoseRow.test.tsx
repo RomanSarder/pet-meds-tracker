@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
-import type { Course, LocalDate } from "@/domain";
+import type { Course, LocalDate, Pet } from "@/domain";
 import type { DoseState } from "@/engine";
 import { makeOccurrence, resetEngineStore } from "./testEngine";
 import { TodayDoseRow, type TodayDoseRowProps } from "./TodayDoseRow";
-import type { TodayDose } from "./types";
+import type { LogAtTimeContext, TodayDose } from "./types";
 
 vi.mock("@/engine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/engine")>();
@@ -67,8 +67,34 @@ function makeDose(state: DoseState, overrides: Partial<TodayDose> = {}): TodayDo
   };
 }
 
+const pet: Pet = {
+  id: "pet-1",
+  name: "Clover",
+  species: "rabbit",
+  birthdate: "2023-05-15",
+  weightGrams: 1900,
+  tint: 1,
+  archived: false,
+  householdId: "household-1",
+  createdAt: "2026-06-01T09:00:00.000Z",
+  updatedAt: "2026-06-01T09:00:00.000Z",
+  deletedAt: null,
+};
+
+/** Everything §6.1a's sheet needs beyond `dose` — the row forwards this verbatim as `context`. */
+function makeContext(overrides: Partial<LogAtTimeContext> = {}): LogAtTimeContext {
+  return {
+    pet,
+    course,
+    events: [],
+    scheduleSummary: "08:00 · after food",
+    ...overrides,
+  };
+}
+
 function handlers(): Omit<TodayDoseRowProps, "dose"> {
   return {
+    logAtTime: makeContext(),
     onGive: vi.fn(),
     onSkip: vi.fn(),
     onLogAtTime: vi.fn(),
@@ -226,30 +252,43 @@ describe("TodayDoseRow", () => {
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
-  it("logs at a typed local wall-clock time on the dose's own day", async () => {
+  // SPEC §6.1: "The overflow is hidden once the dose is `given`." Literally
+  // `given` only — a `skipped` row keeps it, since logging a dose previously
+  // marked skipped is a legitimate recovery path (a deliberate product
+  // decision, not an oversight).
+  const OVERFLOW_VISIBILITY: Array<{ state: DoseState; visible: boolean }> = [
+    { state: "overdue", visible: true },
+    { state: "due", visible: true },
+    { state: "later", visible: true },
+    { state: "notStarted", visible: true },
+    { state: "skipped", visible: true },
+    { state: "given", visible: false },
+  ];
+
+  for (const { state, visible } of OVERFLOW_VISIBILITY) {
+    it(`${visible ? "shows" : "hides"} the "⋯" overflow trigger when the dose is ${state}`, async () => {
+      renderWithProviders(<TodayDoseRow dose={makeDose(state)} {...handlers()} />);
+
+      // Every state renders the row's `role="group"` wrapper synchronously;
+      // waiting on it settles the render before asserting on the trigger.
+      await screen.findByRole("group");
+      const trigger = screen.queryByRole("button", { name: /more options/i });
+      expect(trigger === null).toBe(!visible);
+    });
+  }
+
+  it("confirms through the sheet at its default 30-minutes-ago offset, calling onLogAtTime exactly once with the chosen Date", async () => {
     const user = userEvent.setup();
     const props = handlers();
-    const onCardClick = vi.fn();
-    renderWithProviders(
-      <div onClick={onCardClick}>
-        <TodayDoseRow dose={makeDose("overdue")} {...props} />
-      </div>,
-    );
+    renderWithProviders(<TodayDoseRow dose={makeDose("overdue")} {...props} />);
 
     await user.click(await screen.findByRole("button", { name: /more options/i }));
     await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
+    await screen.findByRole("dialog");
 
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    const input = screen.getByLabelText("Time given");
-    expect(input).toHaveValue("08:00");
-
-    await user.clear(input);
-    await user.type(input, "09:15");
-    // Touching the field is not a tap on the card. The dialog is a portal but
-    // still a React child of the wrapper, so this has to be proven.
-    expect(onCardClick).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "Log" }));
+    // SPEC §6.1a: "the default is 30 minutes ago." The fixed clock reads
+    // 08:00 local, so the footer reads "Log at 07:30".
+    await user.click(await screen.findByRole("button", { name: "Log at 07:30" }));
 
     expect(props.onLogAtTime).toHaveBeenCalledTimes(1);
     const givenAt = (props.onLogAtTime as ReturnType<typeof vi.fn>).mock.calls[0][0] as Date;
@@ -257,41 +296,93 @@ describe("TodayDoseRow", () => {
     expect(givenAt.getFullYear()).toBe(2026);
     expect(givenAt.getMonth()).toBe(7);
     expect(givenAt.getDate()).toBe(8);
-    expect(givenAt.getHours()).toBe(9);
-    expect(givenAt.getMinutes()).toBe(15);
-    expect(onCardClick).not.toHaveBeenCalled();
+    expect(givenAt.getHours()).toBe(7);
+    expect(givenAt.getMinutes()).toBe(30);
   });
 
-  it("closes the dialog without logging when cancelled", async () => {
+  it("confirms through the sheet without letting any interaction — click or pointerdown — reach the card wrapper", async () => {
     const user = userEvent.setup();
     const props = handlers();
     const onCardClick = vi.fn();
+    const onCardPointerDown = vi.fn();
     renderWithProviders(
-      <div onClick={onCardClick}>
-        <TodayDoseRow dose={makeDose("due")} {...props} />
+      <div onClick={onCardClick} onPointerDown={onCardPointerDown}>
+        <TodayDoseRow dose={makeDose("overdue")} {...props} />
       </div>,
     );
 
     await user.click(await screen.findByRole("button", { name: /more options/i }));
+    // `Menu.Trigger`'s own `onClick` stops the click but not the pointerdown
+    // that precedes it (see "does not bubble a menu-item pointer-down..."
+    // above) — cleared here so the assertions below are about the SHEET's
+    // guards, not the trigger's known, pre-existing gap.
+    onCardPointerDown.mockClear();
     await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
-    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
 
-    expect(props.onLogAtTime).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Picking a chip is an interaction inside the sheet. The sheet is a
+    // portal in the DOM but still a React child of the wrapper, so this has
+    // to be proven the same way the old dialog's field-edit was.
+    await user.click(screen.getByRole("button", { name: "Just now" }));
     expect(onCardClick).not.toHaveBeenCalled();
+    expect(onCardPointerDown).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Log at 08:00" }));
+
+    expect(props.onLogAtTime).toHaveBeenCalledTimes(1);
+    const givenAt = (props.onLogAtTime as ReturnType<typeof vi.fn>).mock.calls[0][0] as Date;
+    expect(givenAt.getFullYear()).toBe(2026);
+    expect(givenAt.getMonth()).toBe(7);
+    expect(givenAt.getDate()).toBe(8);
+    expect(givenAt.getHours()).toBe(8);
+    expect(givenAt.getMinutes()).toBe(0);
+    expect(onCardClick).not.toHaveBeenCalled();
+    expect(onCardPointerDown).not.toHaveBeenCalled();
   });
 
-  it("dismisses the dialog from the backdrop without reaching the card wrapper", async () => {
+  it("closes the sheet without logging when dismissed via its close control, without reaching the card wrapper", async () => {
     const user = userEvent.setup();
     const props = handlers();
     const onCardClick = vi.fn();
-    const { container } = renderWithProviders(
-      <div onClick={onCardClick}>
+    const onCardPointerDown = vi.fn();
+    renderWithProviders(
+      <div onClick={onCardClick} onPointerDown={onCardPointerDown}>
         <TodayDoseRow dose={makeDose("due")} {...props} />
       </div>,
     );
 
     await user.click(await screen.findByRole("button", { name: /more options/i }));
+    // See the identical note in the previous test: the trigger's own
+    // pointerdown leak is orthogonal to what this test is proving.
+    onCardPointerDown.mockClear();
+    await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
+    await screen.findByRole("dialog");
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(props.onLogAtTime).not.toHaveBeenCalled();
+    expect(onCardClick).not.toHaveBeenCalled();
+    expect(onCardPointerDown).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the sheet from the backdrop without reaching the card wrapper", async () => {
+    const user = userEvent.setup();
+    const props = handlers();
+    const onCardClick = vi.fn();
+    const onCardPointerDown = vi.fn();
+    const { container } = renderWithProviders(
+      <div onClick={onCardClick} onPointerDown={onCardPointerDown}>
+        <TodayDoseRow dose={makeDose("due")} {...props} />
+      </div>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /more options/i }));
+    // See the identical note two tests up: the trigger's own pointerdown
+    // leak is orthogonal to what this test is proving.
+    onCardPointerDown.mockClear();
     await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
     await screen.findByRole("dialog");
 
@@ -312,6 +403,7 @@ describe("TodayDoseRow", () => {
     });
     expect(props.onLogAtTime).not.toHaveBeenCalled();
     expect(onCardClick).not.toHaveBeenCalled();
+    expect(onCardPointerDown).not.toHaveBeenCalled();
   });
 
   it("opens the menu on a 500 ms press of the text region", async () => {

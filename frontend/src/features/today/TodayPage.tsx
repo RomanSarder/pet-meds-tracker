@@ -23,11 +23,13 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { AlertBanner, Card, EmptyState, PetCard, ScreenHeader } from "@/components/ds";
 import { localDayKey } from "@/domain";
+import { describeSchedule } from "@/engine";
 import { useNow } from "@/app/useNow";
 import { useTranslator } from "@/i18n";
+import { renderSchedule } from "@/i18n/schedule";
 import { TodayDoseRow } from "./TodayDoseRow";
 import { buildTodayView, greetingFor, scheduledForOf } from "./todayModel";
-import type { TodayDose, TodayPetGroup } from "./types";
+import type { LogAtTimeContext, TodayDose, TodayPetGroup } from "./types";
 import { useDailySweep } from "./useDailySweep";
 import { useLogDose, type LogDoseVars } from "./useLogDose";
 import { useTodayQuery } from "./useTodayData";
@@ -102,6 +104,14 @@ export function TodayPage(): ReactElement {
   const view = useMemo(
     () => (snapshot ? buildTodayView(snapshot, now, tr, { keepResolved }) : null),
     [snapshot, now, tr, keepResolved],
+  );
+
+  // Looked up once per snapshot rather than scanned per row: §6.1a's sheet
+  // needs each dose's `Course` (for `scheduleSummary` and the consequence
+  // block), and `renderCard` walks every pending dose on every render.
+  const coursesById = useMemo(
+    () => new Map((snapshot?.courses ?? []).map((c) => [c.id, c])),
+    [snapshot],
   );
 
   const log = useCallback(
@@ -232,23 +242,40 @@ export function TodayPage(): ReactElement {
         >
           {collapsed
             ? null
-            : group.body.map((dose, i) => (
-                <TodayDoseRow
-                  key={dose.key}
-                  dose={dose}
-                  divider={i > 0}
-                  onGive={() => give(dose)}
-                  onSkip={() => skip(dose)}
-                  onLogAtTime={(givenAt) => logAtTime(dose, givenAt)}
-                  onOpenCourse={() => {
-                    void navigate({
-                      to: "/courses/$courseId",
-                      params: { courseId: dose.courseId },
-                    });
-                  }}
-                  onStartCourse={() => startCourse(dose)}
-                />
-              ))}
+            : group.body.map((dose, i) => {
+                // Every dose in `group.body` came from `buildTodayView`, which
+                // only emits a `TodayDose` when `coursesById.get(occ.courseId)`
+                // resolved (see `todayModel.ts`'s `toDose` loop) — `coursesById`
+                // above is built from that same `snapshot.courses`, so the
+                // lookup here can never miss.
+                const course = coursesById.get(dose.courseId)!;
+                const doseContext: LogAtTimeContext = {
+                  pet,
+                  course,
+                  events: snapshot?.events ?? [],
+                  // The SAME pairing `todayModel.detailFor` uses for an interval
+                  // course's clause, so the schedule is never worded twice.
+                  scheduleSummary: renderSchedule(describeSchedule(course.schedule), tr),
+                };
+                return (
+                  <TodayDoseRow
+                    key={dose.key}
+                    dose={dose}
+                    divider={i > 0}
+                    logAtTime={doseContext}
+                    onGive={() => give(dose)}
+                    onSkip={() => skip(dose)}
+                    onLogAtTime={(givenAt) => logAtTime(dose, givenAt)}
+                    onOpenCourse={() => {
+                      void navigate({
+                        to: "/courses/$courseId",
+                        params: { courseId: dose.courseId },
+                      });
+                    }}
+                    onStartCourse={() => startCourse(dose)}
+                  />
+                );
+              })}
         </PetCard>
       </div>
     );

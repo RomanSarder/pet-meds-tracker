@@ -589,7 +589,7 @@ describe("TodayPage", () => {
     });
   });
 
-  it("logs at a different time through the dialog without leaving the dashboard", async () => {
+  it("logs at the occurrence's scheduled time through the sheet without leaving the dashboard", async () => {
     const user = userEvent.setup();
     const { data, repo } = household();
     const course = courseOf(data, "Clover", "Metacam");
@@ -603,19 +603,22 @@ describe("TodayPage", () => {
     expect(pathname()).toBe("/today");
 
     await user.click(screen.getByRole("button", { name: /more options/i }));
+    expect(pathname()).toBe("/today");
     await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
 
-    // Every step of the dialog is a click inside a portal that is a React child
+    // Every step of the sheet is a click inside a portal that is a React child
     // of the card wrapper, so each one is checked, not just the last.
     await screen.findByRole("dialog");
     expect(pathname()).toBe("/today");
 
-    const input = screen.getByLabelText("Time given");
-    await user.clear(input);
-    await user.type(input, "09:15");
+    // The one-tap "At its scheduled time" row (SPEC §6.1a) — its value is the
+    // occurrence's own `dueAt`, so the assertion below can pin `givenAt`
+    // exactly rather than to an arbitrary chosen offset.
+    await user.click(await screen.findByRole("button", { name: /At its scheduled time/ }));
     expect(pathname()).toBe("/today");
 
-    await user.click(screen.getByRole("button", { name: "Log" }));
+    await user.click(screen.getByRole("button", { name: "Log at 08:00" }));
+    expect(pathname()).toBe("/today");
 
     await waitFor(async () => {
       expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
@@ -624,13 +627,12 @@ describe("TodayPage", () => {
     const created = newEvents(before, await repo.listDoseEvents({}));
     expect(created).toHaveLength(1);
     expect(created[0].status).toBe("given");
-    expect(new Date(created[0].givenAt).getHours()).toBe(9);
-    expect(new Date(created[0].givenAt).getMinutes()).toBe(15);
+    expect(created[0].givenAt).toBe(occurrence.dueAt?.toISOString());
 
     expect(pathname()).toBe("/today");
   });
 
-  it("cancels the dialog without logging and without leaving the dashboard", async () => {
+  it("closes the sheet without logging when dismissed via its close control, without leaving the dashboard", async () => {
     const user = userEvent.setup();
     const { data, repo } = household();
     const occurrence = makeOccurrence(courseOf(data, "Clover", "Metacam"), {
@@ -643,13 +645,94 @@ describe("TodayPage", () => {
     const before = await repo.listDoseEvents({});
     renderToday(repo);
     await cardFor("Clover");
+    expect(pathname()).toBe("/today");
 
     await user.click(screen.getByRole("button", { name: /more options/i }));
     await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
     await screen.findByRole("dialog");
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(pathname()).toBe("/today");
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(await repo.listDoseEvents({})).toEqual(before);
+    expect(pathname()).toBe("/today");
+  });
+
+  it("undoes a log made through the sheet, leaving listDoseEvents exactly as before", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const occurrence = makeOccurrence(courseOf(data, "Clover", "Metacam"), {
+      day: DAY,
+      scheduledFor: AT_0800,
+    });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
+    await screen.findByRole("dialog");
+    await user.click(await screen.findByRole("button", { name: /At its scheduled time/ }));
+    await user.click(screen.getByRole("button", { name: "Log at 08:00" }));
+
+    // The log really landed, so the undo below is undoing something.
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+
+    const toast = await screen.findByRole("status");
+    await user.click(within(toast).getByRole("button", { name: "Undo" }));
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length);
+    });
+    expect(await repo.listDoseEvents({})).toEqual(before);
+    expect(pathname()).toBe("/today");
+  });
+
+  // SPEC §5's dedup rule applies to §6.1a's sheet exactly as it does to Give:
+  // "do not add a guard in the UI for this" — the sheet closes on confirm
+  // (TodayDoseRow.tsx wraps `onConfirm` to close it before logging) and
+  // `useLogDose.onError` is what surfaces the rejection.
+  it("rejects a sheet confirmation landing inside another live event's grace window, leaving the ledger unchanged", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
+    await screen.findByRole("dialog");
+
+    // The sheet's default 30-minutes-ago offset (07:30 local) lands exactly on
+    // `CONFLICTING_GIVEN_AT` (06:30 UTC = 07:30 local) — well inside the
+    // 60-minute fixedTimes grace window, with no chip or stepper interaction
+    // needed to reach it.
+    await user.click(screen.getByRole("button", { name: "Log at 07:30" }));
+
+    expect(await screen.findByText("Already given by Marta at 07:30")).toBeInTheDocument();
+
     expect(await repo.listDoseEvents({})).toEqual(before);
     expect(pathname()).toBe("/today");
   });

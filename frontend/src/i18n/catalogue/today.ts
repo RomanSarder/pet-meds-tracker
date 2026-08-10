@@ -95,10 +95,64 @@ export interface TodayMessages {
   "today.menu.skip": () => string;
   "today.menu.openCourse": () => string;
 
-  // --- "log at a different time" dialog -----------------------------------
+  // --- "log at a different time" sheet (SPEC §6.1a) -----------------------
   "today.logAtTime.title": () => string;
-  "today.logAtTime.timeGiven": () => string;
-  "today.cancel": () => string;
+  /** Close control's accessible label. */
+  "today.logAtTime.close": () => string;
+  /** Header subline: "Clover · scheduled 08:00 · 2× daily · 08:00, 20:00". */
+  "today.logAtTime.subline": (p: { petName: string; time: string; schedule: string }) => string;
+  /**
+   * "N ago" — wraps an already-rendered `history.detail.lateDuration` value.
+   * Reused rather than restated: see `today.logAtTime.next.staysDetail`.
+   */
+  "today.logAtTime.ago": (p: { duration: string }) => string;
+  /** "today · <ago>" beside the headline; `ago` is the rendered `today.logAtTime.ago`. */
+  "today.logAtTime.todayAgo": (p: { ago: string }) => string;
+  /** First relative-offset chip. */
+  "today.logAtTime.justNow": () => string;
+  /** Relative-offset chip: "15 min" / "30 min" — invariant abbreviation, never plural. */
+  "today.logAtTime.offsetMinutes": (p: { minutes: number }) => string;
+  /** Relative-offset chip: "1 h" / "2 h" — invariant abbreviation, never plural. */
+  "today.logAtTime.offsetHours": (p: { hours: number }) => string;
+  "today.logAtTime.atScheduled": () => string;
+  "today.logAtTime.atScheduledHelper": () => string;
+  "today.logAtTime.exactLabel": () => string;
+  /** Stepper's "− 5 min" control. */
+  "today.logAtTime.earlier": (p: { minutes: number }) => string;
+  /** Stepper's "+ 5 min" control. */
+  "today.logAtTime.later": (p: { minutes: number }) => string;
+  /** Helper line when the stepper is capped at now. */
+  "today.logAtTime.helper.future": () => string;
+  /** Helper line more than 12 h before the scheduled time — is this today's dose? */
+  "today.logAtTime.helper.dayCheck": (p: { hours: number }) => string;
+  /** Default helper line: the entry range is midnight-today onward. */
+  "today.logAtTime.helper.range": () => string;
+  /** Just the chosen time — composed into `next.moves` / `next.stays`. */
+  "today.logAtTime.when.today": (p: { time: string }) => string;
+  "today.logAtTime.when.tomorrow": (p: { time: string }) => string;
+  /** `date` is already localized by `f.weekdayDayMonth`. */
+  "today.logAtTime.when.onDate": (p: { date: string; time: string }) => string;
+  /** `fromLastDose` consequence headline; `when` is a rendered `when.*` value. */
+  "today.logAtTime.next.moves": (p: { when: string }) => string;
+  /** `fromLastDose` chain explanation, entered time later than planned. */
+  "today.logAtTime.next.movesDetailLater": (p: { delta: string }) => string;
+  /** `fromLastDose` chain explanation, entered time earlier than planned. */
+  "today.logAtTime.next.movesDetailEarlier": (p: { delta: string }) => string;
+  /** `fixedTimes` consequence headline; `when` is a rendered `when.*` value. */
+  "today.logAtTime.next.stays": (p: { when: string }) => string;
+  /**
+   * `fixedTimes` consequence detail. `late` is `history.detail.givenLate`
+   * rendered verbatim — this promises what History will say, so it must
+   * reuse that exact string rather than restate it (a mismatch would be a
+   * copy bug shipped by construction).
+   */
+  "today.logAtTime.next.staysDetail": (p: { late: string }) => string;
+  /** No further doses in the course to reschedule. */
+  "today.logAtTime.next.none": () => string;
+  /** Footer confirm: "Log at 08:00". */
+  "today.logAtTime.confirm": (p: { time: string }) => string;
+  /** Footer's ghost hand-off to the skip flow. */
+  "today.logAtTime.skipInstead": () => string;
 
   // --- logging and undo ---------------------------------------------------
   "today.toast.logged": (p: { medicationName: string }) => string;
@@ -179,8 +233,36 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.menu.openCourse": () => "Open course",
 
   "today.logAtTime.title": () => "Log at a different time",
-  "today.logAtTime.timeGiven": () => "Time given",
-  "today.cancel": () => "Cancel",
+  "today.logAtTime.close": () => "Close",
+  "today.logAtTime.subline": (p) => `${p.petName} · scheduled ${p.time} · ${p.schedule}`,
+  "today.logAtTime.ago": (p) => `${p.duration} ago`,
+  "today.logAtTime.todayAgo": (p) => `today · ${p.ago}`,
+  "today.logAtTime.justNow": () => "Just now",
+  "today.logAtTime.offsetMinutes": (p) => `${p.minutes} min`,
+  "today.logAtTime.offsetHours": (p) => `${p.hours} h`,
+  "today.logAtTime.atScheduled": () => "At its scheduled time",
+  "today.logAtTime.atScheduledHelper": () => "Given on time, logged afterwards",
+  "today.logAtTime.exactLabel": () => "Or set it exactly",
+  "today.logAtTime.earlier": (p) => `− ${p.minutes} min`,
+  "today.logAtTime.later": (p) => `+ ${p.minutes} min`,
+  "today.logAtTime.helper.future": () => "A dose cannot be logged in the future.",
+  "today.logAtTime.helper.dayCheck": (p) =>
+    `That's more than ${p.hours} h before the scheduled time — is this today's dose?`,
+  "today.logAtTime.helper.range": () =>
+    "Anything from midnight today. Earlier doses are added from history.",
+  "today.logAtTime.when.today": (p) => p.time,
+  "today.logAtTime.when.tomorrow": (p) => `tomorrow at ${p.time}`,
+  "today.logAtTime.when.onDate": (p) => `${p.date} at ${p.time}`,
+  "today.logAtTime.next.moves": (p) => `Next dose moves to ${p.when}`,
+  "today.logAtTime.next.movesDetailLater": (p) =>
+    `This course counts from the last dose, so the whole chain follows the time you enter — ${p.delta} later than planned.`,
+  "today.logAtTime.next.movesDetailEarlier": (p) =>
+    `This course counts from the last dose, so the whole chain follows the time you enter — ${p.delta} earlier than planned.`,
+  "today.logAtTime.next.stays": (p) => `Next dose stays at ${p.when}`,
+  "today.logAtTime.next.staysDetail": (p) => `History will read "${p.late}".`,
+  "today.logAtTime.next.none": () => "No further doses scheduled.",
+  "today.logAtTime.confirm": (p) => `Log at ${p.time}`,
+  "today.logAtTime.skipInstead": () => "Skip this dose instead",
 
   "today.toast.logged": (p) => `${p.medicationName} logged`,
   "today.toast.skipped": (p) => `${p.medicationName} skipped`,
@@ -268,8 +350,45 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.menu.openCourse": () => "Відкрити курс",
 
   "today.logAtTime.title": () => "Записати в інший час",
-  "today.logAtTime.timeGiven": () => "Час прийому",
-  "today.cancel": () => "Скасувати",
+  "today.logAtTime.close": () => "Закрити",
+  "today.logAtTime.subline": (p) =>
+    `${p.petName} · заплановано на ${p.time} · ${p.schedule}`,
+  "today.logAtTime.ago": (p) => `${p.duration} тому`,
+  "today.logAtTime.todayAgo": (p) => `сьогодні · ${p.ago}`,
+  "today.logAtTime.justNow": () => "Щойно",
+  // "хв" is the standard invariant abbreviation — never pluralized, same
+  // convention as `history.detail.lateDuration`.
+  "today.logAtTime.offsetMinutes": (p) => `${p.minutes} хв`,
+  // "год" is likewise invariant — never pluralized.
+  "today.logAtTime.offsetHours": (p) => `${p.hours} год`,
+  "today.logAtTime.atScheduled": () => "У запланований час",
+  "today.logAtTime.atScheduledHelper": () => "Дано вчасно, записано пізніше",
+  "today.logAtTime.exactLabel": () => "Або вкажіть точний час",
+  "today.logAtTime.earlier": (p) => `− ${p.minutes} хв`,
+  "today.logAtTime.later": (p) => `+ ${p.minutes} хв`,
+  "today.logAtTime.helper.future": () => "Дозу не можна записати на майбутній час.",
+  "today.logAtTime.helper.dayCheck": (p) =>
+    `Це більш ніж за ${p.hours} год до запланованого часу — це сьогоднішня доза?`,
+  "today.logAtTime.helper.range": () =>
+    "Будь-який час від опівночі сьогодні. Раніші дози додаються через історію.",
+  // Bare EN time reads fine after "to"/"at"; Ukrainian needs its own
+  // preposition here so the fragment composes into `next.moves`/`next.stays`
+  // exactly the way `today.nextDose.today` already does in this file.
+  "today.logAtTime.when.today": (p) => `о ${p.time}`,
+  "today.logAtTime.when.tomorrow": (p) => `завтра о ${p.time}`,
+  "today.logAtTime.when.onDate": (p) => `${p.date} о ${p.time}`,
+  // Mirrors `today.nextDose.*`: the verb carries no preposition of its own,
+  // so it composes with all three `when.*` fragments above.
+  "today.logAtTime.next.moves": (p) => `Наступна доза переноситься ${p.when}`,
+  "today.logAtTime.next.movesDetailLater": (p) =>
+    `Цей курс відлічується від останньої дози, тож увесь ланцюжок зсувається за введеним часом — на ${p.delta} пізніше за план.`,
+  "today.logAtTime.next.movesDetailEarlier": (p) =>
+    `Цей курс відлічується від останньої дози, тож увесь ланцюжок зсувається за введеним часом — на ${p.delta} раніше за план.`,
+  "today.logAtTime.next.stays": (p) => `Наступна доза залишається ${p.when}`,
+  "today.logAtTime.next.staysDetail": (p) => `Історія покаже "${p.late}".`,
+  "today.logAtTime.next.none": () => "Більше доз не заплановано.",
+  "today.logAtTime.confirm": (p) => `Записати о ${p.time}`,
+  "today.logAtTime.skipInstead": () => "Натомість пропустити цю дозу",
 
   "today.toast.logged": (p) => `${p.medicationName} записано`,
   "today.toast.skipped": (p) => `${p.medicationName} пропущено`,

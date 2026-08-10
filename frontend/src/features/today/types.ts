@@ -137,3 +137,11 @@ export interface TodayView {
   emptyDetail: string | null;
   comingUp: ComingUp | null;
 }
+
+/** Everything §6.1a's sheet needs that the row's `TodayDose` does not carry. */
+export interface LogAtTimeContext {
+  pet: Pet;
+  course: Course;
+  events: DoseEvent[]; // unfiltered — nextDueAt anchors on events days old
+  scheduleSummary: string; // ALREADY LOCALIZED by the caller
+}
