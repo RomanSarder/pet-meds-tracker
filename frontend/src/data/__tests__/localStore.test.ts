@@ -80,4 +80,35 @@ describe.each(implementations)("%s — localStoreIsDisposable", (_name, makeRepo
 
     expect(await localStoreIsDisposable(repo)).toBe(false);
   });
+
+  // sync never pushes or pulls `users`/`households` (repo.types.ts's
+  // `RemoteChanges` deliberately excludes both), so a customised
+  // `displayName` or household `name` is local-only, user-entered content
+  // that `lastPushedAt` can never vouch for — it must block disposal even
+  // with zero domain rows.
+  it("is false when there are zero domain rows but the self user's displayName was customised", async () => {
+    const repo = makeRepo();
+    const self = await repo.getCurrentUser();
+    await repo.updateUser(self.id, { displayName: "Roman" });
+
+    expect(await localStoreIsDisposable(repo)).toBe(false);
+  });
+
+  it("is false when there are zero domain rows but the household was named", async () => {
+    const repo = makeRepo();
+    const household = await repo.getCurrentHousehold();
+    await repo.updateHousehold(household.id, { name: "The Byte House" });
+
+    expect(await localStoreIsDisposable(repo)).toBe(false);
+  });
+
+  // The case the fix must not break: a genuinely fresh device — default
+  // display name, unnamed household, no domain rows — must still read as
+  // disposable, or the silent-reset path (owner mismatch + disposable) could
+  // never fire on first run.
+  it("is true when there are zero domain rows, the default display name, and no household name", async () => {
+    const repo = makeRepo();
+
+    expect(await localStoreIsDisposable(repo)).toBe(true);
+  });
 });

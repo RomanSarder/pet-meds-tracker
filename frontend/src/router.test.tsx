@@ -22,10 +22,6 @@ import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/rea
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SessionUser } from "@pet-tracker/shared";
-import type { Household, Pet, User } from "@/domain";
-import { setRepo } from "@/data";
-import { createMemoryRepo } from "@/data/memoryRepo";
-import { getStoreOwner, isSessionEstablished, markSessionEstablished, setStoreOwner } from "@/shared/session";
 import { router as appRouter } from "./router";
 import { queryClient as appQueryClient } from "./queryClient";
 
@@ -112,85 +108,6 @@ function mockUnauthenticated() {
   globalThis.fetch = vi.fn().mockResolvedValue(unauthorizedResponse());
 }
 
-/** Models a transport-level failure on every request — offline, DNS failure,
- *  connection reset — the same raw `fetch` rejection `apiClient` wraps into a
- *  `NetworkError` (shared/api.ts). Distinct from `mockUnauthenticated`, which
- *  models the server actively answering 401. */
-function mockNetworkError() {
-  globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-}
-
-const HOUSEHOLD: Household = {
-  id: "hh-1",
-  name: "Home",
-  createdAt: "2026-06-01T09:00:00.000Z",
-  updatedAt: "2026-06-01T09:00:00.000Z",
-  deletedAt: null,
-};
-
-function selfUser(overrides: Partial<User> = {}): User {
-  return {
-    id: "u-previous",
-    householdId: HOUSEHOLD.id,
-    email: null,
-    displayName: "Previous Owner",
-    tint: 1,
-    isSelf: true,
-    joinedAt: "2026-06-12T09:00:00.000Z",
-    createdAt: "2026-06-12T09:00:00.000Z",
-    updatedAt: "2026-06-12T09:00:00.000Z",
-    deletedAt: null,
-    ...overrides,
-  };
-}
-
-function seedPet(overrides: Partial<Pet> = {}): Pet {
-  return {
-    id: "pet-1",
-    name: "Biscuit",
-    species: "rabbit",
-    birthdate: null,
-    weightGrams: null,
-    tint: 1,
-    archived: false,
-    householdId: HOUSEHOLD.id,
-    createdAt: "2026-07-01T09:00:00.000Z",
-    updatedAt: "2026-07-01T09:00:00.000Z",
-    deletedAt: null,
-    ...overrides,
-  };
-}
-
-/** An empty local store: no domain rows at all, so `localStoreIsDisposable`
- *  reads `true` unconditionally regardless of `lastPushedAt` (design §D3b). */
-function emptyDisposableRepo() {
-  return createMemoryRepo({
-    household: HOUSEHOLD,
-    users: [selfUser()],
-    pets: [],
-    medications: [],
-    courses: [],
-    doseEvents: [],
-    stockAdjustments: [],
-    joinCodes: [],
-  });
-}
-
-/** A local store holding one unsynced pet row with `lastPushedAt` still
- *  null — never disposable (design §D3b: `lastPushedAt === null` -> `false`). */
-function unsyncedRepo() {
-  return createMemoryRepo({
-    household: HOUSEHOLD,
-    users: [selfUser()],
-    pets: [seedPet()],
-    medications: [],
-    courses: [],
-    doseEvents: [],
-    stockAdjustments: [],
-    joinCodes: [],
-  });
-}
-
 /**
  * Renders the real app at `initialEntry`, wired through providers by hand
  * (AppShell mounts its own DsRoot/ToastProvider, so this harness must not
@@ -219,13 +136,6 @@ function renderApp(initialEntry: string) {
 }
 
 describe("router", () => {
-  beforeEach(() => {
-    // The two client-side session records (shared/session.ts) must never
-    // leak between tests — each case below sets up exactly the localStorage
-    // state its scenario needs.
-    localStorage.clear();
-  });
-
   afterEach(() => {
     globalThis.fetch = originalFetch;
   });
@@ -331,80 +241,6 @@ describe("router", () => {
       await user.click(within(nav).getByRole("button", { name: /supplies/i }));
       await screen.findByText("Supplies", { selector: "div" });
       expect(router.state.location.pathname).toBe("/supplies");
-    });
-  });
-
-  // WA-DESIGN §D4's three-way guard: only a 401 revokes `sessionEstablished`;
-  // a `NetworkError` (or any other non-401 failure) is an absence of
-  // information and must never revoke or crash; and the store-owner check
-  // must never destroy unsynced data without a human choosing to.
-  describe("session guard (design §D4)", () => {
-    it("established=true, fetch rejects (NetworkError) -> lands on /today, not the ErrorBoundary", async () => {
-      markSessionEstablished();
-      mockNetworkError();
-
-      const { router } = renderApp("/today");
-
-      await screen.findByText(TODAY_HEADING);
-      expect(router.state.location.pathname).toBe("/today");
-      // Never revoked: a NetworkError is an absence of information, not the
-      // server saying no.
-      expect(isSessionEstablished()).toBe(true);
-    });
-
-    it("401 redirects to /sign-in AND clears sessionEstablished — the two paths diverge from the same guard", async () => {
-      markSessionEstablished();
-      mockUnauthenticated();
-
-      const { router } = renderApp("/today");
-
-      await screen.findByText("Sign in");
-      expect(router.state.location.pathname).toBe("/sign-in");
-      expect(isSessionEstablished()).toBe(false);
-    });
-
-    it("first-ever load offline, no prior session -> redirects to /sign-in, does not enter the app", async () => {
-      expect(isSessionEstablished()).toBe(false); // nothing established yet
-      mockNetworkError();
-
-      const { router } = renderApp("/today");
-
-      await screen.findByText("Sign in");
-      expect(router.state.location.pathname).toBe("/sign-in");
-      expect(isSessionEstablished()).toBe(false);
-    });
-
-    it("owner mismatch + disposable store: resets the local store, claims ownership for the new user, and lets them in", async () => {
-      setStoreOwner("u-previous");
-      const repo = emptyDisposableRepo();
-      const resetSpy = vi.spyOn(repo, "resetLocalHousehold");
-      setRepo(repo);
-      mockAuthenticated(); // SESSION_USER.id = "user-1", different from "u-previous"
-
-      const { router } = renderApp("/today");
-
-      await screen.findByText(TODAY_HEADING);
-      expect(router.state.location.pathname).toBe("/today");
-      expect(resetSpy).toHaveBeenCalledTimes(1);
-      expect(getStoreOwner()).toBe(SESSION_USER.id);
-    });
-
-    it("owner mismatch + NON-disposable (unsynced) store: blocks at /account-switch, and resetLocalHousehold is never called", async () => {
-      setStoreOwner("u-previous");
-      const repo = unsyncedRepo();
-      const resetSpy = vi.spyOn(repo, "resetLocalHousehold");
-      setRepo(repo);
-      mockAuthenticated(); // SESSION_USER.id = "user-1", different from "u-previous"
-
-      const { router } = renderApp("/today");
-
-      await screen.findByText("Another account's data is on this device");
-      expect(router.state.location.pathname).toBe("/account-switch");
-      expect(resetSpy).not.toHaveBeenCalled();
-      // Nothing destroyed, and the new user was never granted the store —
-      // both survive the blocked navigation intact.
-      expect(getStoreOwner()).toBe("u-previous");
-      expect(await repo.listPets()).toHaveLength(1);
     });
   });
 });

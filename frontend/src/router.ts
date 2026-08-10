@@ -120,24 +120,33 @@ const appLayoutRoute = createRoute({
         setStoreOwner(signedInUser.id);
       } else {
         // A different account previously owned this device's local store.
-        // Wrap the repo calls: an IndexedDB failure here must not turn an
-        // otherwise valid, server-vouched-for session into a blank
-        // ErrorBoundary. Fall through to the same rule the offline branch
-        // above uses.
+        // Wrap the repo calls, but do NOT fall back to `isSessionEstablished()`
+        // here the way the outer offline branch does: that fallback is only
+        // justified when we do not know who the user is. In THIS branch we
+        // DO know — `/auth/me` already succeeded ONLINE and identified user
+        // B, and `getStoreOwner()` is already known to be a DIFFERENT user A
+        // (that is the only way this branch is reached).
+        // `isSessionEstablished()` being true only means SOME session (A's)
+        // was once live on this device; it says nothing about B. Returning
+        // here would enter the app shell without resetting and without
+        // blocking, and AppShell/TodayPage/PetsPage read IndexedDB directly
+        // (SPEC §9) — so B would see A's rows. A repo failure in this branch
+        // must therefore FAIL CLOSED to the blocking screen, not fail open
+        // into the app: it neither destroys data nor exposes it, and
+        // /account-switch still offers the sign-out path when the repo is
+        // broken.
         let disposable: boolean;
         try {
           disposable = await localStoreIsDisposable(getRepo());
         } catch {
-          if (isSessionEstablished()) return;
-          throw redirect({ to: "/sign-in" });
+          throw redirect({ to: "/account-switch" });
         }
 
         if (disposable) {
           try {
             await getRepo().resetLocalHousehold();
           } catch {
-            if (isSessionEstablished()) return;
-            throw redirect({ to: "/sign-in" });
+            throw redirect({ to: "/account-switch" });
           }
           setStoreOwner(signedInUser.id);
           queryClient.clear();
