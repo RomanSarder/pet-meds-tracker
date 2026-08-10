@@ -28,6 +28,10 @@ function baseOccurrence(overrides: Partial<Occurrence> = {}): Occurrence {
 }
 
 describe("doseRowPropsFor", () => {
+  // SPEC §4: "given" here uses `baseOccurrence()`'s default `event: null`,
+  // so its trailing `time` falls through to the scheduled clock (the same
+  // fallback every other non-given state uses) — this table does not
+  // exercise the logged-time path; see the dedicated test below for that.
   const STATE_TABLE: Array<{ state: DoseState; rowState: NonNullable<import("@/components/ds").DoseRowProps["state"]>; time: string }> = [
     { state: "given", rowState: "given", time: "08:00" },
     { state: "overdue", rowState: "overdue", time: "08:00" },
@@ -49,6 +53,41 @@ describe("doseRowPropsFor", () => {
     expect(props.time).toBe(time);
   });
 
+  it("given derives its trailing time from the logged givenAt, not the scheduled dueAt (SPEC §4: 'the logged time')", () => {
+    // Scheduled for 08:00 BST, actually given 16:25 BST — 8h25m late.
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence({
+        event: {
+          id: "event-1",
+          courseId: "course-1",
+          scheduledFor: "2026-08-08T07:00:00.000Z",
+          status: "given",
+          loggedAt: "2026-08-08T15:25:00.000Z",
+          givenAt: "2026-08-08T15:25:00.000Z", // 16:25 BST
+          amount: 0.4,
+          note: null,
+          occurrenceKey: "course-1|2026-08-08T07:00:00.000Z",
+          supersedesId: null,
+          actorId: "actor-1",
+          createdAt: "2026-08-08T15:25:00.000Z",
+          updatedAt: "2026-08-08T15:25:00.000Z",
+          deletedAt: null,
+        },
+      }),
+      state: "given",
+      medicationName: "Amoxicillin",
+      instructions: null,
+      progress: "Day 1 of 7",
+      tr: enTr,
+    });
+
+    // SPEC §4: the trailing slot shows the logged time...
+    expect(props.time).toBe("16:25");
+    // ...while `detail`'s schedule clause keeps the SCHEDULED time — it's the
+    // day's schedule, and dropping it would lose information.
+    expect(props.detail).toBe("08:00 · Day 1 of 7");
+  });
+
   it("skipped renders as the given variant with the literal 'Skipped' time, regardless of dueAt", () => {
     const props = doseRowPropsFor({
       occurrence: baseOccurrence(),
@@ -59,6 +98,26 @@ describe("doseRowPropsFor", () => {
       tr: enTr,
     });
     expect(props).toMatchObject({ state: "given", time: "Skipped" });
+  });
+
+  // Before 28c8a89, `detail` was derived from `time`, so a skipped row's
+  // schedule clause inherited the literal "Skipped" word too — the row said
+  // "Skipped" twice (once in `detail`, once in the trailing slot). SPEC §4's
+  // logged-time split gave `detail` its own scheduled-clock source
+  // independent of `time`, so a skipped row now says "Skipped" once. This is
+  // the intended shape — don't "restore" the duplication as a bug fix.
+  it("skipped: detail starts with the scheduled clock, not the 'Skipped' word — it appears once per row, not twice", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence(),
+      state: "skipped",
+      medicationName: "Metacam",
+      instructions: null,
+      progress: "Day 3 of 7",
+      tr: enTr,
+    });
+    expect(props.time).toBe("Skipped");
+    expect(props.detail).toMatch(/^08:00/);
+    expect(props.detail).not.toContain("Skipped");
   });
 
   it("notStarted with dueAt: null renders as later with the literal 'Not started'", () => {
@@ -127,6 +186,26 @@ describe("doseRowPropsFor — Ukrainian", () => {
       tr: ukTr,
     });
     expect(props).toMatchObject({ state: "given", time: "Пропущено" });
+  });
+
+  // Before 28c8a89, `detail` was derived from `time`, so a skipped row's
+  // schedule clause inherited the literal "Пропущено" word too — the row
+  // said "Пропущено" twice (once in `detail`, once in the trailing slot).
+  // SPEC §4's logged-time split gave `detail` its own scheduled-clock source
+  // independent of `time`, so a skipped row now says "Пропущено" once. This
+  // is the intended shape — don't "restore" the duplication as a bug fix.
+  it("skipped: detail starts with the scheduled clock, not the 'Пропущено' word — it appears once per row, not twice", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence(),
+      state: "skipped",
+      medicationName: "Metacam",
+      instructions: null,
+      progress: "день 3 з 7",
+      tr: ukTr,
+    });
+    expect(props.time).toBe("Пропущено");
+    expect(props.detail).toMatch(/^08:00/);
+    expect(props.detail).not.toContain("Пропущено");
   });
 
   it("notStarted with dueAt: null renders as later with the literal 'Не розпочато'", () => {

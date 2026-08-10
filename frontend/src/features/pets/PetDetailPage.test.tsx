@@ -181,7 +181,10 @@ describe("PetDetailView", () => {
     expect(scheduleCard.querySelectorAll("[role='button']")).toHaveLength(0);
     expect(within(scheduleCard).queryByText("Give")).not.toBeInTheDocument();
 
-    // given: 55% opacity, strikethrough, its time as text.
+    // given: 55% opacity, strikethrough, its LOGGED time as text (SPEC §4:
+    // "the logged time" — `doseRow.ts` now reads `occurrence.event.givenAt`,
+    // not `occurrence.dueAt`; this fixture's `givenAt` equals `scheduledFor`
+    // 06:00, so the rendered value is unchanged even though its source is).
     const givenTime = within(scheduleCard).getByText("06:00");
     const givenRow = givenTime.closest("div")!.parentElement as HTMLElement;
     expect(givenRow.style.opacity).toBe("0.55");
@@ -283,6 +286,82 @@ describe("PetDetailView", () => {
     expect(within(scheduleCard).queryByText("Overdue")).not.toBeInTheDocument();
     expect(within(scheduleCard).queryByText("Skipped")).not.toBeInTheDocument();
     expect(within(scheduleCard).queryByText("Not started")).not.toBeInTheDocument();
+  });
+
+  // Fix 4b (SPEC §4 "the logged time") + the DEFECT 4 investigation: a dose
+  // given late must show when it was actually given, and — because
+  // `struckThrough`/`overdue` derive from one shared `state` in
+  // `ScheduleRow.tsx` — a `given` row can never carry "Прострочено" once the
+  // courses/events queries have settled (Fix 4a rules out the pre-data-flash
+  // that made it look like it briefly could).
+  it("shows a dose given late with its LOGGED time trailing (not the scheduled time), still struck through, and never the word Прострочено", async () => {
+    const custom = cloneFixtures();
+    const pet = custom.pets.find((p) => p.name === "Clover")!;
+    const medicationId = custom.medications[0].id; // "Metacam"
+
+    const lateCourseId = "test-course-uk-given-late";
+    const scheduledFor = "2026-08-08T07:00:00.000Z"; // 08:00 BST, today
+    const givenAt = "2026-08-08T15:25:00.000Z"; // 16:25 BST — ~8h25m late
+
+    custom.courses = [
+      ...custom.courses,
+      {
+        id: lateCourseId,
+        petId: pet.id,
+        medicationId,
+        doseAmount: 0.5,
+        doseUnit: "ml",
+        instructions: null,
+        schedule: { kind: "fixedTimes", times: ["08:00"] },
+        startDate: "2026-08-01",
+        endDate: null,
+        status: "active",
+        notes: null,
+        resumedAt: null,
+        createdAt: "2026-08-01T08:00:00.000Z",
+        updatedAt: "2026-08-01T08:00:00.000Z",
+        deletedAt: null,
+      },
+    ];
+    custom.doseEvents = [
+      ...custom.doseEvents,
+      {
+        id: `test-event-${lateCourseId}`,
+        courseId: lateCourseId,
+        scheduledFor,
+        status: "given",
+        loggedAt: givenAt,
+        givenAt,
+        amount: 0.5,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(lateCourseId, scheduledFor),
+        supersedesId: null,
+        actorId: "test-actor-id",
+        createdAt: givenAt,
+        updatedAt: givenAt,
+        deletedAt: null,
+      },
+    ];
+
+    const repo = createMemoryRepo(custom);
+    renderWithProviders(<PetDetailView petId={pet.id} />, { repo, locale: "uk" });
+
+    const scheduleLabel = await screen.findByText("Розклад");
+    const scheduleCard = scheduleLabel.closest("div")!.nextElementSibling as HTMLElement;
+
+    // SPEC §4: trailing slot is the LOGGED time (16:25), not the scheduled
+    // one (08:00) — `formatHHMM(occurrence.event.givenAt)`, not
+    // `formatHHMM(occurrence.dueAt)`.
+    const loggedTime = await within(scheduleCard).findByText("16:25");
+    const row = loggedTime.closest("div")!.parentElement as HTMLElement;
+    expect(row.style.opacity).toBe("0.55");
+    const medicationName = within(row).getByText(/Metacam/);
+    expect(medicationName.style.textDecoration).toBe("line-through");
+
+    // The pre-data-flash defect this investigation ruled out: once settled,
+    // this given-late row must never carry "Прострочено" — struckThrough and
+    // overdue are structurally mutually exclusive in `ScheduleRow.tsx`.
+    expect(within(scheduleCard).queryByText("Прострочено")).not.toBeInTheDocument();
   });
 
   it("shows a never-started fromLastDose course as read-only 'Not started' text, with no button of any label", async () => {
