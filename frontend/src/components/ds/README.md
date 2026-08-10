@@ -136,6 +136,9 @@ deferred rather than patched locally because fixing them changes appearance, siz
   outside `ScreenHeader` and were not touched here — they live under `features/`, not `ds/`.
   (`HistoryPage` already hand-rolls its own `<h1>` at the call site; `PetDetailPage`,
   `PetFormPage` and `CourseFormPage` still render a plain, non-heading title.)
+  `JoinHouseholdPage` and `YourNamePanel` are the same case and were missed by the first pass
+  of this list: both render their title in a `<span>` and have **no heading element at all**,
+  so a screen-reader user gets no landmark on either. Verified in the accessibility tree.
 
 ## Conventions the components assume
 
