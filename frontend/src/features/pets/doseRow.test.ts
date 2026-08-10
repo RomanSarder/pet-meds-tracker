@@ -100,6 +100,26 @@ describe("doseRowPropsFor", () => {
     expect(props).toMatchObject({ state: "given", time: "Skipped" });
   });
 
+  // Before 28c8a89, `detail` was derived from `time`, so a skipped row's
+  // schedule clause inherited the literal "Skipped" word too — the row said
+  // "Skipped" twice (once in `detail`, once in the trailing slot). SPEC §4's
+  // logged-time split gave `detail` its own scheduled-clock source
+  // independent of `time`, so a skipped row now says "Skipped" once. This is
+  // the intended shape — don't "restore" the duplication as a bug fix.
+  it("skipped: detail starts with the scheduled clock, not the 'Skipped' word — it appears once per row, not twice", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence(),
+      state: "skipped",
+      medicationName: "Metacam",
+      instructions: null,
+      progress: "Day 3 of 7",
+      tr: enTr,
+    });
+    expect(props.time).toBe("Skipped");
+    expect(props.detail).toMatch(/^08:00/);
+    expect(props.detail).not.toContain("Skipped");
+  });
+
   it("notStarted with dueAt: null renders as later with the literal 'Not started'", () => {
     const props = doseRowPropsFor({
       occurrence: baseOccurrence({ dueAt: null }),
@@ -166,6 +186,26 @@ describe("doseRowPropsFor — Ukrainian", () => {
       tr: ukTr,
     });
     expect(props).toMatchObject({ state: "given", time: "Пропущено" });
+  });
+
+  // Before 28c8a89, `detail` was derived from `time`, so a skipped row's
+  // schedule clause inherited the literal "Пропущено" word too — the row
+  // said "Пропущено" twice (once in `detail`, once in the trailing slot).
+  // SPEC §4's logged-time split gave `detail` its own scheduled-clock source
+  // independent of `time`, so a skipped row now says "Пропущено" once. This
+  // is the intended shape — don't "restore" the duplication as a bug fix.
+  it("skipped: detail starts with the scheduled clock, not the 'Пропущено' word — it appears once per row, not twice", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence(),
+      state: "skipped",
+      medicationName: "Metacam",
+      instructions: null,
+      progress: "день 3 з 7",
+      tr: ukTr,
+    });
+    expect(props.time).toBe("Пропущено");
+    expect(props.detail).toMatch(/^08:00/);
+    expect(props.detail).not.toContain("Пропущено");
   });
 
   it("notStarted with dueAt: null renders as later with the literal 'Не розпочато'", () => {
