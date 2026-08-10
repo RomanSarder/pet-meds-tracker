@@ -8,4 +8,11 @@ export { getOccurrences } from "./occurrences";
 export { getDoseState, summariseDay } from "./state";
 export { nextDueAt, findMissedOccurrences, findCoursesToFinish } from "./sweep";
 export { describeSchedule, courseProgress } from "./describe";
-export type { DoseState, Occurrence, EngineContext } from "./engine.types";
+export type {
+  DoseState,
+  Occurrence,
+  EngineContext,
+  ScheduleSegment,
+  ScheduleDescription,
+  CourseProgress,
+} from "./engine.types";

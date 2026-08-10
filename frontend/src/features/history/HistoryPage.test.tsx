@@ -33,6 +33,7 @@ import {
   type LocalDate,
   type User,
 } from "@/domain";
+import { createTranslator } from "@/i18n";
 import { buildLogEntries } from "./logModel";
 import { exportAsCsv, exportAsText } from "./historyExport";
 import { HistoryView } from "./HistoryPage";
@@ -472,13 +473,16 @@ describe("HistoryView", () => {
     const courseEvents = await repo.listCourseEvents({ courseIds });
     const entries = buildLogEntries({ courses, medications, doseEvents, courseEvents });
     const ctx = { petName: "Clover", from: TODAY, to: TODAY, nameFor: () => "You" };
+    // The screen renders under the harness's pinned English locale, so the
+    // independent re-export uses the same translator it did.
+    const tr = createTranslator("en");
 
-    const text = exportAsText(entries, ctx);
+    const text = exportAsText(entries, ctx, tr);
     expect(text).toContain("Clover — history");
     expect(text).toContain("Metacam 0.4 ml");
     expect(text).toContain("by You");
 
-    const csv = exportAsCsv(entries, ctx);
+    const csv = exportAsCsv(entries, ctx, tr);
     const csvRows = csv.trimEnd().split("\n");
     expect(csvRows[0]).toBe('"date","time","type","medication","detail","by"');
     expect(csv).toContain("Metacam 0.4 ml");
@@ -639,5 +643,40 @@ describe("HistoryView", () => {
 
     expect(container.textContent).not.toContain(EMAIL);
     expect(container.textContent).not.toContain("clover.mum");
+  });
+
+  // Pre-localization this line read `${n} active courses` unconditionally, so
+  // a single course rendered "1 active courses". Routing the count through a
+  // real plural rule (SPEC §10a: "pluralization is a rule, not a suffix")
+  // corrects it.
+  it("pluralizes the active-course count — one course reads '1 active course'", async () => {
+    const { repo, petId } = await seedMixedScenario();
+    renderWithProviders(<HistoryView petId={petId} />, { repo });
+    await screen.findByText("History");
+
+    expect(screen.getByText("Rabbit · 1 active course")).toBeInTheDocument();
+  });
+
+  it("renders the whole screen in Ukrainian under a Ukrainian locale", async () => {
+    const { repo, petId } = await seedMixedScenario();
+    renderWithProviders(<HistoryView petId={petId} />, { repo, locale: "uk" });
+
+    await screen.findByText("Історія");
+    expect(screen.getByText("Кріль · 1 активний курс")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Усі" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Дози" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Курси" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Експортувати історію" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Назад" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Завантажити раніші" })).toBeInTheDocument();
+    // A day heading, a detail line and an attribution, all localized — and a
+    // clock time still 24-hour and unlocalized (SPEC §10a).
+    expect(screen.getByText(/^Сьогодні · /)).toBeInTheDocument();
+    expect(screen.getAllByText(/^виконано: /).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^Курс призупинено$/).length).toBe(1);
+    expect(screen.getAllByText(/^\d{2}:\d{2}$/).length).toBeGreaterThan(0);
+    // No English copy left on the screen.
+    expect(screen.queryByText("History")).not.toBeInTheDocument();
+    expect(screen.queryByText(/active courses?$/)).not.toBeInTheDocument();
   });
 });

@@ -12,6 +12,11 @@ import { speciesLabel } from "@/features/pets/format";
 import { suggestNameFromEmail } from "@/features/onboarding/nameSuggestion";
 import { needsDisplayName, useJoinPreview, useRedeemJoinCode, useSelf, useSessionEmail } from "./hooks";
 import { JoinCodeRejectedError, joinCodeRejectionMessage, type JoinCodeRejection } from "./joinCode";
+import { createTranslator } from "@/i18n";
+
+// TODO(wave3): replace enTr with a real translator when the household feature
+// is localized.
+const enTr = createTranslator("en");
 
 const NAME_INPUT_ID = "join-household-name";
 const EMPTY_CHARS: string[] = Array(JOIN_CODE_LENGTH).fill("");
@@ -219,7 +224,7 @@ export function JoinHouseholdPage() {
                 <div key={pet.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <PetAvatar name={pet.name} tint={pet.tint} size={34} />
                   <span style={{ fontSize: 15, color: "var(--ink-1)" }}>
-                    {pet.name} · {speciesLabel(pet.species)}
+                    {pet.name} · {speciesLabel(pet.species, enTr)}
                   </span>
                 </div>
               ))

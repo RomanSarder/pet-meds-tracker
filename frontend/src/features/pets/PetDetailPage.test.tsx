@@ -13,6 +13,8 @@ import {
   type DoseEvent,
 } from "@/domain";
 import { courseProgress, describeSchedule } from "@/engine";
+import { renderCourseProgress, renderSchedule } from "@/i18n/schedule";
+import { createTranslator } from "@/i18n";
 import { DoseRow } from "@/components/ds";
 import { ageLabel } from "./age";
 import { doseRowPropsFor } from "./doseRow";
@@ -20,6 +22,7 @@ import { courseLabel, joinMeta, speciesLabel, weightLabel } from "./format";
 import { PetDetailView } from "./PetDetailPage";
 
 const TODAY = localDayKey(new Date(FIXTURE_NOW));
+const enTr = createTranslator("en");
 
 function clover() {
   return fixtures.pets.find((p) => p.name === "Clover")!;
@@ -276,8 +279,8 @@ describe("PetDetailView", () => {
       // card — found via the `aria-label` the page gives it for navigation.
       const card = screen.getByRole("button", { name: `Open ${label}` });
       expect(within(card).getByText(label)).toBeInTheDocument();
-      expect(within(card).getByText(describeSchedule(course.schedule))).toBeInTheDocument();
-      expect(within(card).getByText(courseProgress(course, TODAY))).toBeInTheDocument();
+      expect(within(card).getByText(renderSchedule(describeSchedule(course.schedule), enTr))).toBeInTheDocument();
+      expect(within(card).getByText(renderCourseProgress(courseProgress(course, TODAY), enTr))).toBeInTheDocument();
     }
   });
 

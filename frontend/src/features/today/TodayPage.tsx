@@ -24,6 +24,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { AlertBanner, Card, EmptyState, PetCard, ScreenHeader } from "@/components/ds";
 import { localDayKey } from "@/domain";
 import { useNow } from "@/app/useNow";
+import { useTranslator } from "@/i18n";
 import { TodayDoseRow } from "./TodayDoseRow";
 import { buildTodayView, greetingFor, scheduledForOf } from "./todayModel";
 import type { TodayDose, TodayPetGroup } from "./types";
@@ -81,6 +82,10 @@ export function TodayPage(): ReactElement {
   const navigate = useNavigate();
   const now = useNow();
   const day = localDayKey(now);
+  // The whole screen's wording, injected once. `tr` is the memoized
+  // per-locale translator, so it is a stable `useMemo` dependency below.
+  const tr = useTranslator();
+  const t = tr.t;
 
   useDailySweep(now);
   const { data: snapshot, isPending } = useTodayQuery(day);
@@ -95,8 +100,8 @@ export function TodayPage(): ReactElement {
   );
 
   const view = useMemo(
-    () => (snapshot ? buildTodayView(snapshot, now, { keepResolved }) : null),
-    [snapshot, now, keepResolved],
+    () => (snapshot ? buildTodayView(snapshot, now, tr, { keepResolved }) : null),
+    [snapshot, now, tr, keepResolved],
   );
 
   const log = useCallback(
@@ -116,9 +121,11 @@ export function TodayPage(): ReactElement {
       log({
         ...identityOf(dose),
         status: "given",
-        toastMessage: `${dose.medicationName} logged`,
+        toastMessage: t("today.toast.logged", {
+          medicationName: dose.medicationName,
+        }),
       }),
-    [log],
+    [log, t],
   );
 
   const skip = useCallback(
@@ -126,9 +133,11 @@ export function TodayPage(): ReactElement {
       log({
         ...identityOf(dose),
         status: "skipped",
-        toastMessage: `${dose.medicationName} skipped`,
+        toastMessage: t("today.toast.skipped", {
+          medicationName: dose.medicationName,
+        }),
       }),
-    [log],
+    [log, t],
   );
 
   // SPEC §4: "the user can always log a past dose with a corrected `givenAt`".
@@ -139,9 +148,11 @@ export function TodayPage(): ReactElement {
         ...identityOf(dose),
         status: "given",
         givenAt: givenAt.toISOString(),
-        toastMessage: `${dose.medicationName} logged`,
+        toastMessage: t("today.toast.logged", {
+          medicationName: dose.medicationName,
+        }),
       }),
-    [log],
+    [log, t],
   );
 
   // SPEC §3b: starting a `fromLastDose` course logs its first dose now. The
@@ -156,9 +167,11 @@ export function TodayPage(): ReactElement {
       log({
         ...identityOf(dose),
         status: "given",
-        toastMessage: `${dose.medicationName} logged`,
+        toastMessage: t("today.toast.logged", {
+          medicationName: dose.medicationName,
+        }),
       }),
-    [log],
+    [log, t],
   );
 
   const openPet = useCallback(
@@ -204,7 +217,7 @@ export function TodayPage(): ReactElement {
         key={pet.id}
         role="button"
         tabIndex={0}
-        aria-label={`Open ${pet.name}`}
+        aria-label={t("today.openPet", { petName: pet.name })}
         onClick={() => openPet(pet.id)}
         onKeyDown={(event) => onCardKeyDown(event, pet.id)}
         style={{ cursor: "pointer" }}
@@ -247,10 +260,10 @@ export function TodayPage(): ReactElement {
     return (
       <div style={SCREEN_STYLE}>
         <ScreenHeader
-          title={greetingFor(now)}
-          subtitle={isPending ? "Loading today's doses" : undefined}
+          title={greetingFor(now, tr)}
+          subtitle={isPending ? t("today.loadingDoses") : undefined}
           action="plus"
-          actionLabel="Add a course"
+          actionLabel={t("today.addCourse")}
           onAction={onAddCourse}
         />
         <div style={LIST_STYLE} />
@@ -266,16 +279,23 @@ export function TodayPage(): ReactElement {
         title={view.greeting}
         subtitle={view.subtitle}
         action="plus"
-        actionLabel="Add a course"
+        actionLabel={t("today.addCourse")}
         onAction={onAddCourse}
       />
 
       {count > 0 && earliest ? (
         <div style={{ padding: "0 22px 14px" }}>
           <AlertBanner
-            title={`${count} dose${count === 1 ? "" : "s"} overdue`}
-            detail={`${petName} · ${earliest.medicationName}, ${earliest.time}`}
-            action="Log"
+            title={t("today.banner.overdueCount", { count })}
+            detail={t("today.banner.detail", {
+              // `petName` is null only when there is no earliest dose, and
+              // this branch has one. The empty string keeps the interpolation
+              // total rather than printing "null".
+              petName: petName ?? "",
+              medicationName: earliest.medicationName,
+              time: earliest.time ?? "",
+            })}
+            action={t("today.log")}
             // Exactly the dose the engine named as earliest, and nothing else.
             onAction={() => give(earliest)}
           />
@@ -286,7 +306,7 @@ export function TodayPage(): ReactElement {
         {view.isEmpty ? (
           <EmptyState
             icon="calendar-check"
-            title="Nothing due today."
+            title={t("today.emptyTitle")}
             detail={view.emptyDetail ?? undefined}
           />
         ) : null}

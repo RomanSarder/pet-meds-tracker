@@ -57,7 +57,7 @@ export function PetCard({
             justifyContent: "center",
           }}
         >
-          <Icon name="check" size={14} />
+          <Icon name="check" size={14} aria-hidden />
         </span>
       </Card>
     );

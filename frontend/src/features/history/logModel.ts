@@ -2,6 +2,13 @@
 // IndexedDB — this module turns a course's DoseEvent/CourseEvent rows into
 // the rows and groupings the screen renders. Every date/time computation goes
 // through `@/domain`; every schedule description goes through `@/engine`.
+//
+// LOCALE-FREE BY CONTRACT (I18N-DESIGN.md §5/§6): this module composes no
+// prose, takes no `Translator`, and imports no `Intl`. Row titles are emitted
+// as structured medication+dose objects, detail lines as `DetailClause[]` and
+// day headings as descriptors;
+// `i18n/history.ts#renderLogTitle`/`#renderDetail`/`#renderDayHeading` do the
+// wording.
 import type {
   Course,
   CourseEvent,
@@ -10,12 +17,55 @@ import type {
   LocalDate,
   Medication,
 } from "@/domain";
-import { differenceInLocalDays, formatHHMM, localDayKey, parseLocalDay } from "@/domain";
+import { differenceInLocalDays, formatHHMM, localDayKey } from "@/domain";
+import type { CourseProgress, ScheduleDescription } from "@/engine";
 import { courseProgress, describeSchedule, nextDueAt } from "@/engine";
-import { courseLabel, doseLabel, joinMeta } from "@/features/pets/format";
 
 export type LogEntryKind = "dose" | "course";
 export type LogEntryStatus = "given" | "skipped" | "missed" | "course";
+
+/**
+ * One clause of a row's factual detail line (I18N-DESIGN.md §6). The renderer
+ * joins the present clauses with " · ", which is what the old
+ * `joinMeta(clauses)` did when this module still built the string itself.
+ *
+ * `text` is the one clause carrying free-form content: course instructions
+ * and the user's own dose note. Both are DATA (SPEC §10a) — passed through
+ * verbatim, never translated, never looked up in the catalogue. Clock times
+ * likewise travel as the literal "HH:MM" they were formatted to.
+ */
+export type DetailClause =
+  | { kind: "given" }
+  | { kind: "givenLate"; hours: number; minutes: number } // hours may be 0
+  | { kind: "skipped" }
+  | { kind: "missed" }
+  | { kind: "scheduledAt"; time: string } // "07:00"
+  | { kind: "text"; text: string } // instructions / note — DATA, verbatim
+  | { kind: "chainShifted" }
+  | { kind: "nextDue"; time: string; schedule: ScheduleDescription }
+  | { kind: "progress"; progress: CourseProgress }
+  | { kind: "courseStarted"; schedule: ScheduleDescription; totalDays: number | null }
+  | { kind: "coursePaused" }
+  | { kind: "courseResumed" }
+  | { kind: "courseStopped" }
+  | { kind: "courseFinished" }
+  | { kind: "courseEdited" }
+  | { kind: "intervalChanged"; before: ScheduleDescription; after: ScheduleDescription }
+  | {
+      kind: "doseChanged";
+      before: { amount: number; unit: string };
+      after: { amount: number; unit: string };
+    };
+
+/**
+ * Which day a group of rows belongs to, and whether the screen should call it
+ * out relatively. `i18n/history.ts#renderDayHeading` turns this into
+ * "Today · Sun 9 Aug" / "Yesterday · Sat 8 Aug" / "Fri 7 Aug".
+ */
+export interface DayHeading {
+  relative: "today" | "yesterday" | null;
+  day: LocalDate;
+}
 
 export interface LogEntry {
   id: string;
@@ -39,10 +89,19 @@ export interface LogEntry {
   displayAt: string;
   /** "HH:MM" — what the row displays. Always derived from the actual instant (`displayAt`), never from `at` above. */
   time: string;
-  /** "Metacam 0.4 ml". */
-  title: string;
-  /** The factual detail line — see the per-kind builders below. */
-  detail: string;
+  /**
+   * The row's medication + dose, as STRUCTURE — rendered into
+   * "Metacam 0.4 ml" by `i18n/history.ts#renderLogTitle`, exactly as `detail`
+   * below is rendered by `#renderDetail`. Kept structured so the unit's
+   * countable-plural morphology is the renderer's decision, not this
+   * locale-free module's.
+   *
+   * All three fields are DATA (SPEC §1/§10a) — rendered verbatim, never
+   * translated.
+   */
+  title: { medicationName: string; amount: number; unit: string };
+  /** The factual detail line, as structure — see the per-kind builders below. */
+  detail: DetailClause[];
   actorId: string;
 }
 
@@ -53,61 +112,41 @@ export interface LogSource {
   courseEvents: CourseEvent[];
 }
 
-// --- local date-heading formatting -----------------------------------------
-// format.ts already owns SHORT_MONTHS but we may not edit or import from a
-// module outside this feature's four files' concerns — redeclared here.
-
-const SHORT_MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-/** JS `Date#getDay()` indexing: 0 = Sunday. This is a DISPLAY label, not the domain's ISO weekday numbering. */
-const SHORT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-function formatDayHeading(day: LocalDate): string {
-  const d = parseLocalDay(day);
-  return `${SHORT_WEEKDAYS[d.getDay()]} ${d.getDate()} ${SHORT_MONTHS[d.getMonth()]}`;
-}
+// --- day-heading descriptor -------------------------------------------------
+// No month/weekday tables here any more: the names come from the renderer's
+// `tr.fmt.weekdayDayMonth` (i.e. from `Intl.DateTimeFormat`), which is why
+// this module needs neither a locale nor a lookup table.
 
 /**
- * "Today · Sun 9 Aug" / "Yesterday · Sat 8 Aug" / "Fri 7 Aug" — the design
- * kit's exact section-label format for §6.4.
+ * Which day a group covers, and whether it is today/yesterday relative to
+ * `today`. Rendered as "Today · Sun 9 Aug" / "Yesterday · Sat 8 Aug" /
+ * "Fri 7 Aug" — the design kit's exact section-label format for §6.4.
  */
-export function dayLabel(day: LocalDate, today: LocalDate): string {
+export function dayHeading(day: LocalDate, today: LocalDate): DayHeading {
   const daysAgo = differenceInLocalDays(today, day);
-  const heading = formatDayHeading(day);
-  if (daysAgo === 0) return `Today · ${heading}`;
-  if (daysAgo === 1) return `Yesterday · ${heading}`;
-  return heading;
+  if (daysAgo === 0) return { relative: "today", day };
+  if (daysAgo === 1) return { relative: "yesterday", day };
+  return { relative: null, day };
 }
 
-// --- detail-line builders ---------------------------------------------------
+// --- detail-clause builders -------------------------------------------------
 
-function lateLabel(lateMs: number): string {
+/**
+ * Splits the lateness into whole hours and leftover minutes. `hours` is 0 for
+ * anything under an hour; the wording ("40 min" / "2 h" / "2 h 15 min") is the
+ * renderer's to choose.
+ */
+function lateParts(lateMs: number): { hours: number; minutes: number } {
   const totalMinutes = Math.round(lateMs / 60_000);
-  if (totalMinutes < 60) return `${totalMinutes} min`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+  return { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 };
 }
 
-function doseHeadClause(status: DoseEventStatus, lateMs: number | null): string {
+function doseHeadClause(status: DoseEventStatus, lateMs: number | null): DetailClause {
   if (status === "given") {
-    return lateMs !== null ? `Given ${lateLabel(lateMs)} late` : "Given";
+    return lateMs !== null ? { kind: "givenLate", ...lateParts(lateMs) } : { kind: "given" };
   }
-  if (status === "skipped") return "Skipped";
-  return "Missed";
+  if (status === "skipped") return { kind: "skipped" };
+  return { kind: "missed" };
 }
 
 function buildDoseEntry(
@@ -119,7 +158,7 @@ function buildDoseEntry(
   const scheduledFor = de.scheduledFor;
   const givenAtDate = new Date(de.givenAt);
   const at = scheduledFor ?? de.givenAt;
-  const title = courseLabel(medication.name, de.amount, course.doseUnit);
+  const title = { medicationName: medication.name, amount: de.amount, unit: course.doseUnit };
 
   // SPEC §6.4: "Given 40 min late" — late only when GIVEN and at least a
   // minute past its scheduled instant. An interval course's first-ever dose
@@ -130,29 +169,34 @@ function buildDoseEntry(
     if (diff >= 60_000) lateMs = diff;
   }
 
-  const clauses: Array<string | null | undefined> = [doseHeadClause(de.status, lateMs)];
+  const clauses: DetailClause[] = [doseHeadClause(de.status, lateMs)];
 
   if (de.status === "missed" && scheduledFor !== null) {
-    clauses.push(`scheduled ${formatHHMM(new Date(scheduledFor))}`);
+    clauses.push({ kind: "scheduledAt", time: formatHHMM(new Date(scheduledFor)) });
   }
-  if (course.instructions) clauses.push(course.instructions);
-  if (de.note) clauses.push(de.note);
+  // Instructions and the user's note are DATA — carried verbatim.
+  if (course.instructions) clauses.push({ kind: "text", text: course.instructions });
+  if (de.note) clauses.push({ kind: "text", text: de.note });
 
   if (de.status === "given") {
     if (course.schedule.kind === "fromLastDose") {
       if (lateMs !== null) {
-        clauses.push("chain shifted");
+        clauses.push({ kind: "chainShifted" });
       } else {
         // `nextDueAt` is the engine's own function — never reimplemented
         // here. It returns null once the course is no longer active, in
         // which case the clause is simply omitted.
         const nextDue = nextDueAt(course, allDoseEvents, givenAtDate);
         if (nextDue !== null) {
-          clauses.push(`next due ${formatHHMM(nextDue)}, ${describeSchedule(course.schedule)}`);
+          clauses.push({
+            kind: "nextDue",
+            time: formatHHMM(nextDue),
+            schedule: describeSchedule(course.schedule),
+          });
         }
       }
     } else if (course.schedule.kind === "fixedTimes" && course.endDate !== null) {
-      clauses.push(courseProgress(course, localDayKey(new Date(at))));
+      clauses.push({ kind: "progress", progress: courseProgress(course, localDayKey(new Date(at))) });
     }
   }
 
@@ -164,55 +208,56 @@ function buildDoseEntry(
     displayAt: de.givenAt,
     time: formatHHMM(givenAtDate),
     title,
-    detail: joinMeta(clauses),
+    detail: clauses,
     actorId: de.actorId,
   };
 }
 
-function courseEventDetail(ce: CourseEvent): string {
+function courseEventDetail(ce: CourseEvent): DetailClause[] {
   switch (ce.kind) {
     case "started": {
       const after = ce.after;
       const totalDays =
         after.endDate !== null ? differenceInLocalDays(after.endDate, after.startDate) + 1 : null;
       // NOTE: SPEC §6.4's illustrative "2× daily for 7 days" is shorter than
-      // `describeSchedule`'s real output ("2× daily · 08:00, 20:00"). Using
-      // describeSchedule is deliberate — hand-writing the shorter string
-      // would reimplement the frozen engine's formatting. The composed
-      // result reads "Course started · 2× daily · 08:00, 20:00 · for 7 days".
-      return joinMeta([
-        "Course started",
-        describeSchedule(after.schedule),
-        totalDays !== null ? `for ${totalDays} days` : null,
-      ]);
+      // the engine's real schedule description ("2× daily · 08:00, 20:00").
+      // Carrying the engine's own description is deliberate — hand-writing
+      // the shorter one would reimplement the frozen engine's formatting. The
+      // composed result reads
+      // "Course started · 2× daily · 08:00, 20:00 · for 7 days".
+      return [{ kind: "courseStarted", schedule: describeSchedule(after.schedule), totalDays }];
     }
     case "paused":
-      return "Course paused";
+      return [{ kind: "coursePaused" }];
     case "resumed":
-      return "Course resumed";
+      return [{ kind: "courseResumed" }];
     case "stopped":
-      return "Course stopped";
+      return [{ kind: "courseStopped" }];
     case "finished":
-      return "Course finished";
+      return [{ kind: "courseFinished" }];
     case "edited": {
-      if (ce.before === null) return "Course edited";
+      if (ce.before === null) return [{ kind: "courseEdited" }];
       const before = ce.before;
       const after = ce.after;
-      const clauses: string[] = [];
+      const clauses: DetailClause[] = [];
       if (JSON.stringify(before.schedule) !== JSON.stringify(after.schedule)) {
-        clauses.push(
-          `Interval changed · ${describeSchedule(before.schedule)} to ${describeSchedule(after.schedule)}`,
-        );
+        clauses.push({
+          kind: "intervalChanged",
+          before: describeSchedule(before.schedule),
+          after: describeSchedule(after.schedule),
+        });
       }
       if (before.doseAmount !== after.doseAmount || before.doseUnit !== after.doseUnit) {
-        clauses.push(
-          `Dose changed · ${doseLabel(before.doseAmount, before.doseUnit)} to ${doseLabel(after.doseAmount, after.doseUnit)}`,
-        );
+        clauses.push({
+          kind: "doseChanged",
+          before: { amount: before.doseAmount, unit: before.doseUnit },
+          after: { amount: after.doseAmount, unit: after.doseUnit },
+        });
       }
       // Defensive fallback: `before` is non-null but nothing a detail line
       // renders actually changed (e.g. only `notes`/`instructions` edited,
       // which SPEC says records no lifecycle event in the first place).
-      return clauses.length > 0 ? joinMeta(clauses) : "Course edited";
+      return clauses.length > 0 ? clauses : [{ kind: "courseEdited" }];
     }
   }
 }
@@ -225,7 +270,11 @@ function buildCourseEntry(ce: CourseEvent, medication: Medication): LogEntry {
     at: ce.at,
     displayAt: ce.at,
     time: formatHHMM(new Date(ce.at)),
-    title: courseLabel(medication.name, ce.after.doseAmount, ce.after.doseUnit),
+    title: {
+      medicationName: medication.name,
+      amount: ce.after.doseAmount,
+      unit: ce.after.doseUnit,
+    },
     detail: courseEventDetail(ce),
     actorId: ce.actorId,
   };
@@ -296,8 +345,8 @@ export function filterEntries(
 export function groupByDay(
   entries: LogEntry[],
   today: LocalDate,
-): Array<{ key: LocalDate; label: string; entries: LogEntry[] }> {
-  const groups: Array<{ key: LocalDate; label: string; entries: LogEntry[] }> = [];
+): Array<{ key: LocalDate; heading: DayHeading; entries: LogEntry[] }> {
+  const groups: Array<{ key: LocalDate; heading: DayHeading; entries: LogEntry[] }> = [];
   const indexByKey = new Map<string, number>();
 
   for (const entry of entries) {
@@ -306,7 +355,7 @@ export function groupByDay(
     if (idx === undefined) {
       idx = groups.length;
       indexByKey.set(key, idx);
-      groups.push({ key, label: dayLabel(key, today), entries: [] });
+      groups.push({ key, heading: dayHeading(key, today), entries: [] });
     }
     groups[idx].entries.push(entry);
   }

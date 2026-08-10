@@ -29,7 +29,15 @@ import {
   setOccurrences,
   setState,
 } from "./testEngine";
+import { createTranslator } from "@/i18n";
 import { buildTodayView, greetingFor, scheduledForOf } from "./todayModel";
+
+// Every literal asserted below is English, so the model is driven with the
+// English translator explicitly (I18N-DESIGN.md §5: these are pure functions
+// that take an injected translator). The assertions therefore keep meaning
+// exactly what they meant before localization — they pin the English
+// rendering of the catalogue entries against the pre-i18n strings.
+const EN = createTranslator("en");
 
 const NOW = new Date(FIXTURE_NOW);
 const DAY = localDayKey(NOW);
@@ -96,10 +104,10 @@ beforeEach(() => {
 
 describe("greetingFor", () => {
   it("cuts at 12:00 and 18:00 local", () => {
-    expect(greetingFor(new Date(2026, 7, 8, 11, 59))).toBe("Good morning");
-    expect(greetingFor(new Date(2026, 7, 8, 12, 0))).toBe("Good afternoon");
-    expect(greetingFor(new Date(2026, 7, 8, 17, 59))).toBe("Good afternoon");
-    expect(greetingFor(new Date(2026, 7, 8, 18, 0))).toBe("Good evening");
+    expect(greetingFor(new Date(2026, 7, 8, 11, 59), EN)).toBe("Good morning");
+    expect(greetingFor(new Date(2026, 7, 8, 12, 0), EN)).toBe("Good afternoon");
+    expect(greetingFor(new Date(2026, 7, 8, 17, 59), EN)).toBe("Good afternoon");
+    expect(greetingFor(new Date(2026, 7, 8, 18, 0), EN)).toBe("Good evening");
   });
 });
 
@@ -108,7 +116,7 @@ describe("buildTodayView — dose fields", () => {
     const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
     setState(occ.key, "later");
 
-    const dose = groupNamed(buildTodayView(snapshotOf([occ]), NOW), "Clover")
+    const dose = groupNamed(buildTodayView(snapshotOf([occ]), NOW, EN), "Clover")
       .pending[0];
 
     expect(dose.title).toBe("Metacam 0.4 ml");
@@ -131,7 +139,7 @@ describe("buildTodayView — dose fields", () => {
     const given = occAt(COURSE_BISCUIT_IVERMECTIN, "07:00");
     setState(given.key, "given");
 
-    const dose = groupNamed(buildTodayView(snapshotOf([given]), NOW), "Biscuit")
+    const dose = groupNamed(buildTodayView(snapshotOf([given]), NOW, EN), "Biscuit")
       .resolved[0];
 
     expect(dose.occurrence.dueAt && formatHHMM(dose.occurrence.dueAt)).toBe(
@@ -145,7 +153,7 @@ describe("buildTodayView — dose fields", () => {
     const given = occAt(COURSE_CLOVER_METACAM, "20:00");
     setState(given.key, "given");
 
-    const dose = groupNamed(buildTodayView(snapshotOf([given]), NOW), "Clover")
+    const dose = groupNamed(buildTodayView(snapshotOf([given]), NOW, EN), "Clover")
       .resolved[0];
 
     expect(dose.occurrence.event).toBeNull();
@@ -156,7 +164,7 @@ describe("buildTodayView — dose fields", () => {
     const occ = occNotStarted(COURSE_BISCUIT_METOCLOPRAMIDE);
     setState(occ.key, "notStarted");
 
-    const dose = groupNamed(buildTodayView(snapshotOf([occ]), NOW), "Biscuit")
+    const dose = groupNamed(buildTodayView(snapshotOf([occ]), NOW, EN), "Biscuit")
       .pending[0];
 
     expect(dose.time).toBeNull();
@@ -175,7 +183,7 @@ describe("buildTodayView — grouping and ordering", () => {
     setState(later.key, "later");
     setState(given.key, "given");
 
-    const view = buildTodayView(snapshotOf([overdue, later, given]), NOW);
+    const view = buildTodayView(snapshotOf([overdue, later, given]), NOW, EN);
 
     expect(view.groups.map((g) => g.pet.name)).toEqual([
       "Clover",
@@ -194,7 +202,7 @@ describe("buildTodayView — grouping and ordering", () => {
   });
 
   it("gives a pet with no occurrences an empty group", () => {
-    const view = buildTodayView(snapshotOf([]), NOW);
+    const view = buildTodayView(snapshotOf([]), NOW, EN);
 
     expect(view.groups).toHaveLength(3);
     const clover = groupNamed(view, "Clover");
@@ -211,7 +219,7 @@ describe("buildTodayView — grouping and ordering", () => {
     setState(none.key, "notStarted");
 
     const group = groupNamed(
-      buildTodayView(snapshotOf([none, evening, morning]), NOW),
+      buildTodayView(snapshotOf([none, evening, morning]), NOW, EN),
       "Clover",
     );
 
@@ -227,12 +235,12 @@ describe("buildTodayView — subtitle", () => {
     setState(overdue.key, "overdue");
     setState(later.key, "later");
 
-    expect(buildTodayView(snapshotOf([overdue, later]), NOW).subtitle).toBe(
+    expect(buildTodayView(snapshotOf([overdue, later]), NOW, EN).subtitle).toBe(
       "2 doses left today · 1 overdue",
     );
 
     setState(overdue.key, "later");
-    const clear = buildTodayView(snapshotOf([overdue, later]), NOW);
+    const clear = buildTodayView(snapshotOf([overdue, later]), NOW, EN);
     expect(clear.subtitle).toBe("2 doses left today");
     expect(clear.subtitle).not.toContain("overdue");
   });
@@ -241,7 +249,7 @@ describe("buildTodayView — subtitle", () => {
     const only = occAt(COURSE_CLOVER_METACAM, "08:00");
     setState(only.key, "due");
 
-    expect(buildTodayView(snapshotOf([only]), NOW).subtitle).toBe(
+    expect(buildTodayView(snapshotOf([only]), NOW, EN).subtitle).toBe(
       "1 dose left today",
     );
   });
@@ -255,7 +263,7 @@ describe("buildTodayView — counterLabel", () => {
     setState(pending.key, "later");
 
     expect(
-      groupNamed(buildTodayView(snapshotOf([given, pending]), NOW), "Clover")
+      groupNamed(buildTodayView(snapshotOf([given, pending]), NOW, EN), "Clover")
         .counterLabel,
     ).toBe("1 of 2 today");
   });
@@ -270,7 +278,7 @@ describe("buildTodayView — counterLabel", () => {
 
     expect(
       groupNamed(
-        buildTodayView(snapshotOf([given, pending, none]), NOW),
+        buildTodayView(snapshotOf([given, pending, none]), NOW, EN),
         "Clover",
       ).counterLabel,
     ).toBe("1 of 2 today");
@@ -285,11 +293,11 @@ describe("buildTodayView — body and keepResolved", () => {
     setState(pending.key, "later");
     const snapshot = snapshotOf([given, pending]);
 
-    const without = groupNamed(buildTodayView(snapshot, NOW), "Clover");
+    const without = groupNamed(buildTodayView(snapshot, NOW, EN), "Clover");
     expect(without.body.map((d) => d.key)).toEqual([pending.key]);
 
     const withKept = groupNamed(
-      buildTodayView(snapshot, NOW, { keepResolved: new Set([given.key]) }),
+      buildTodayView(snapshot, NOW, EN, { keepResolved: new Set([given.key]) }),
       "Clover",
     );
     expect(withKept.body.map((d) => d.key)).toEqual([given.key, pending.key]);
@@ -306,7 +314,7 @@ describe("buildTodayView — overdue banner", () => {
     setState(late.key, "overdue");
     const named = engineDouble.summariseDay([early, late], NOW).earliestOverdue;
 
-    const view = buildTodayView(snapshotOf([early, late]), NOW);
+    const view = buildTodayView(snapshotOf([early, late]), NOW, EN);
 
     expect(view.overdue.count).toBe(2);
     expect(named?.key).toBe(early.key);
@@ -318,7 +326,7 @@ describe("buildTodayView — overdue banner", () => {
     const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
     setState(occ.key, "later");
 
-    const view = buildTodayView(snapshotOf([occ]), NOW);
+    const view = buildTodayView(snapshotOf([occ]), NOW, EN);
 
     expect(view.overdue).toEqual({ count: 0, earliest: null, petName: null });
   });
@@ -330,7 +338,7 @@ describe("buildTodayView — empty state", () => {
     setState(given.key, "given");
     engineStore.nextDue = atLocalTime(DAY, "20:00");
 
-    const view = buildTodayView(snapshotOf([given]), NOW);
+    const view = buildTodayView(snapshotOf([given]), NOW, EN);
 
     expect(view.isEmpty).toBe(true);
     expect(view.emptyDetail).toBe("Next dose at 20:00");
@@ -340,23 +348,23 @@ describe("buildTodayView — empty state", () => {
     const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
     setState(occ.key, "later");
 
-    expect(buildTodayView(snapshotOf([occ]), NOW).isEmpty).toBe(false);
+    expect(buildTodayView(snapshotOf([occ]), NOW, EN).isEmpty).toBe(false);
   });
 
   it("says tomorrow for the next local day and names further days", () => {
     engineStore.nextDue = new Date(2026, 7, 9, 9, 0);
-    expect(buildTodayView(snapshotOf([]), NOW).emptyDetail).toBe(
+    expect(buildTodayView(snapshotOf([]), NOW, EN).emptyDetail).toBe(
       "Next dose tomorrow at 09:00",
     );
 
     engineStore.nextDue = new Date(2026, 7, 15, 7, 0);
-    expect(buildTodayView(snapshotOf([]), NOW).emptyDetail).toBe(
+    expect(buildTodayView(snapshotOf([]), NOW, EN).emptyDetail).toBe(
       "Next dose Sat 15 Aug at 07:00",
     );
   });
 
   it("is null when no active course has a next dose", () => {
-    expect(buildTodayView(snapshotOf([]), NOW).emptyDetail).toBeNull();
+    expect(buildTodayView(snapshotOf([]), NOW, EN).emptyDetail).toBeNull();
   });
 });
 
@@ -367,7 +375,7 @@ describe("buildTodayView — comingUp", () => {
       endDate: "2026-08-14",
     };
 
-    const view = buildTodayView(snapshotOf([], { courses: [ending] }), NOW);
+    const view = buildTodayView(snapshotOf([], { courses: [ending] }), NOW, EN);
 
     expect(view.comingUp).toEqual({
       label: "Coming up · Clover's Metacam course ends",
@@ -385,7 +393,7 @@ describe("buildTodayView — comingUp", () => {
       }),
     ]);
 
-    const view = buildTodayView(snapshotOf([], { courses: [weekly] }), NOW);
+    const view = buildTodayView(snapshotOf([], { courses: [weekly] }), NOW, EN);
 
     expect(view.comingUp).toEqual({
       label: "Coming up · Nugget's Ivermectin",
@@ -394,7 +402,87 @@ describe("buildTodayView — comingUp", () => {
   });
 
   it("is null when nothing notable falls inside the window", () => {
-    expect(buildTodayView(snapshotOf([], { courses: [] }), NOW).comingUp).toBeNull();
+    expect(buildTodayView(snapshotOf([], { courses: [] }), NOW, EN).comingUp).toBeNull();
+  });
+});
+
+// Deliberate Ukrainian coverage (I18N-DESIGN.md §2.7): the model is the same
+// pure function, driven with the other translator. These are the cases where
+// Ukrainian is not a word-for-word swap — real one/few/many plural forms, a
+// locale date, and the possessive that Ukrainian has no equivalent of.
+describe("buildTodayView — Ukrainian", () => {
+  const UK = createTranslator("uk");
+
+  it("greets in Ukrainian on the same 12:00/18:00 cuts", () => {
+    expect(greetingFor(new Date(2026, 7, 8, 11, 59), UK)).toBe("Доброго ранку");
+    expect(greetingFor(new Date(2026, 7, 8, 12, 0), UK)).toBe("Доброго дня");
+    expect(greetingFor(new Date(2026, 7, 8, 18, 0), UK)).toBe("Доброго вечора");
+  });
+
+  /** Registers `count` `due` occurrences of the same course and builds the view. */
+  function subtitleForRemaining(count: number): string {
+    const occs = Array.from({ length: count }, (_, i) => {
+      const occ = occAt(COURSE_CLOVER_METACAM, `0${i}:00` as LocalTime);
+      setState(occ.key, "due");
+      return occ;
+    });
+    return buildTodayView(snapshotOf(occs), NOW, UK).subtitle;
+  }
+
+  it("uses real one/few/many forms for the remaining-dose count, never a suffix", () => {
+    expect(subtitleForRemaining(1)).toBe("сьогодні залишилася 1 доза");
+    expect(subtitleForRemaining(2)).toBe("сьогодні залишилося 2 дози");
+    expect(subtitleForRemaining(5)).toBe("сьогодні залишилося 5 доз");
+  });
+
+  it("appends the overdue clause in the many form", () => {
+    const occs = Array.from({ length: 5 }, (_, i) => {
+      const occ = occAt(COURSE_CLOVER_METACAM, `0${i}:00` as LocalTime);
+      setState(occ.key, "overdue");
+      return occ;
+    });
+
+    expect(buildTodayView(snapshotOf(occs), NOW, UK).subtitle).toBe(
+      "сьогодні залишилося 5 доз · 5 прострочених",
+    );
+  });
+
+  it("localizes the card status, the counter and the empty state's date", () => {
+    const given = occAt(COURSE_CLOVER_METACAM, "08:00");
+    const pending = occAt(COURSE_CLOVER_METACAM, "20:00");
+    setState(given.key, "given");
+    setState(pending.key, "overdue");
+
+    const group = groupNamed(
+      buildTodayView(snapshotOf([given, pending]), NOW, UK),
+      "Clover",
+    );
+    expect(group.status).toBe("Прострочено з 20:00");
+    expect(group.counterLabel).toBe("1 з 2 сьогодні");
+
+    engineStore.nextDue = new Date(2026, 7, 15, 7, 0);
+    // The date is `Intl.DateTimeFormat("uk-UA")`'s; the clock time is not
+    // localized at all (SPEC §10a).
+    expect(buildTodayView(snapshotOf([]), NOW, UK).emptyDetail).toBe(
+      "Наступна доза сб, 15 серп. о 07:00",
+    );
+  });
+
+  it("re-words the English possessive without declining either proper noun", () => {
+    const ending: Course = {
+      ...courseOf(COURSE_CLOVER_METACAM),
+      endDate: "2026-08-14",
+    };
+
+    const view = buildTodayView(snapshotOf([], { courses: [ending] }), NOW, UK);
+
+    // "Clover's Metacam course ends" has no Ukrainian equivalent, so the
+    // clause is rebuilt analytically — and both names go in exactly as
+    // stored, in the nominative, because they are DATA.
+    expect(view.comingUp).toEqual({
+      label: "Скоро · курс Metacam для Clover завершується",
+      when: "через 6 днів",
+    });
   });
 });
 

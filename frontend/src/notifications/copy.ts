@@ -5,6 +5,11 @@
  */
 import type { DoseState } from "@/engine";
 import { doseLabel } from "@/features/pets/format";
+import { createTranslator } from "@/i18n";
+
+// TODO(wave3): replace enTr with a real translator when the notifications
+// feature is localized.
+const enTr = createTranslator("en");
 
 /**
  * `` `${petName} · ${medicationName} ${doseLabel(amount, unit)} ${stateWord}` ``
@@ -25,5 +30,5 @@ export function buildTitle(input: {
   state: DoseState;
 }): string {
   const stateWord = input.state === "due" ? "due now" : "overdue";
-  return `${input.petName} · ${input.medicationName} ${doseLabel(input.amount, input.unit)} ${stateWord}`;
+  return `${input.petName} · ${input.medicationName} ${doseLabel(input.amount, input.unit, enTr)} ${stateWord}`;
 }

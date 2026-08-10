@@ -237,7 +237,14 @@ describe("TodayPage", () => {
     // The collapsed, greyed variant: a status line and a check, no dose rows.
     const biscuit = cards[2];
     expect(within(biscuit).getByText("All done · Ivermectin at 07:12")).toBeInTheDocument();
-    expect(within(biscuit).getByRole("img", { name: "check" })).toBeInTheDocument();
+    // The checkmark is PAINTED but SILENT. It used to be findable as
+    // `getByRole("img", { name: "check" })`; localization made that wrong —
+    // the glyph is purely decorative, so `PetCard` now passes `aria-hidden`
+    // and it no longer announces the raw English token "check" in the middle
+    // of an otherwise Ukrainian screen (I18N-DESIGN.md ADDENDUM A3). Both
+    // halves are asserted: it is still drawn, and it is no longer named.
+    expect(biscuit.querySelector('[aria-hidden="true"] > svg.lucide-check')).not.toBeNull();
+    expect(within(biscuit).queryByRole("img", { name: "check" })).toBeNull();
     expect(within(biscuit).queryByRole("button", { name: "Give" })).toBeNull();
     expect(within(biscuit).queryByRole("group")).toBeNull();
   });

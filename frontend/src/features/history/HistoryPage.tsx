@@ -22,6 +22,8 @@ import { useCourseEventLog, useDoseEventLog, useUsers } from "./hooks";
 import { useCourses, useMedications } from "@/features/courses/hooks";
 import { usePet } from "@/features/pets/hooks";
 import { speciesLabel } from "@/features/pets/format";
+import { useTranslator } from "@/i18n";
+import { renderDayHeading, renderDetail, renderLogTitle } from "@/i18n/history";
 
 const DAYS_PER_PAGE = 30;
 
@@ -84,6 +86,8 @@ function downloadText(filename: string, content: string, mime: string): void {
 /** All the behaviour. This is what the tests render. */
 export function HistoryView({ petId }: { petId: string }) {
   const navigate = useNavigate();
+  const tr = useTranslator();
+  const t = tr.t;
   const [filter, setFilter] = useState<Filter>("all");
   const [pages, setPages] = useState(1);
   const [exportOpen, setExportOpen] = useState(false);
@@ -143,7 +147,9 @@ export function HistoryView({ petId }: { petId: string }) {
     setExportOpen(false);
     const exportCtx = { petName: petData.name, from: windowStartDay, to: today, nameFor };
     const content =
-      kind === "text" ? exportAsText(allEntries, exportCtx) : exportAsCsv(allEntries, exportCtx);
+      kind === "text"
+        ? exportAsText(allEntries, exportCtx, tr)
+        : exportAsCsv(allEntries, exportCtx, tr);
     const ext = kind === "text" ? "txt" : "csv";
     const mime = kind === "text" ? "text/plain" : "text/csv";
     downloadText(`${petData.name}-history-${today}.${ext}`, content, mime);
@@ -163,7 +169,7 @@ export function HistoryView({ petId }: { petId: string }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 22px 12px" }}>
         <button
           onClick={() => navigate({ to: "/pets/$petId", params: { petId } })}
-          aria-label="Back"
+          aria-label={t("history.back")}
           style={{
             background: "none",
             border: "none",
@@ -225,14 +231,19 @@ export function HistoryView({ petId }: { petId: string }) {
                   margin: 0,
                 }}
               >
-                History
+                {t("history.title")}
               </h1>
               <div style={{ fontSize: 14, color: "var(--ink-3)", marginTop: 3 }}>
-                {speciesLabel(petData.species)} · {activeCourseCount} active courses
+                {t("history.subtitle", {
+                  species: speciesLabel(petData.species, tr),
+                  courses: activeCourseCount,
+                })}
               </div>
             </div>
           </div>
-          <Menu.Trigger render={<IconButton icon="ellipsis" label="Export history" size={44} />} />
+          <Menu.Trigger
+            render={<IconButton icon="ellipsis" label={t("history.export.action")} size={44} />}
+          />
         </div>
 
         <Menu.Portal>
@@ -248,10 +259,10 @@ export function HistoryView({ petId }: { petId: string }) {
               }}
             >
               <Menu.Item style={MENU_ITEM_STYLE} onClick={() => handleExport("text")}>
-                Plain text
+                {t("history.export.plainText")}
               </Menu.Item>
               <Menu.Item style={MENU_ITEM_STYLE} onClick={() => handleExport("csv")}>
-                CSV
+                {t("history.export.csv")}
               </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>
@@ -266,24 +277,24 @@ export function HistoryView({ petId }: { petId: string }) {
           frozen DS component is not changed.
         */}
         <Chip aria-pressed={filter === "all"} selected={filter === "all"} onClick={() => setFilter("all")}>
-          All
+          {t("history.filter.all")}
         </Chip>
         <Chip aria-pressed={filter === "doses"} selected={filter === "doses"} onClick={() => setFilter("doses")}>
-          Doses
+          {t("history.filter.doses")}
         </Chip>
         <Chip aria-pressed={filter === "courses"} selected={filter === "courses"} onClick={() => setFilter("courses")}>
-          Courses
+          {t("history.filter.courses")}
         </Chip>
       </div>
 
       <div style={{ padding: "0 22px 14px" }}>
         <Card tone="quiet" pad={14}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, textAlign: "center" }}>
-            {stat(stats.given, "Given", "var(--ok)")}
+            {stat(stats.given, t("history.stat.given"), "var(--ok)")}
             <div style={{ width: 1, background: "var(--line)" }}></div>
-            {stat(stats.skipped, "Skipped", "var(--ink-2)")}
+            {stat(stats.skipped, t("history.stat.skipped"), "var(--ink-2)")}
             <div style={{ width: 1, background: "var(--line)" }}></div>
-            {stat(stats.missed, "Missed", "var(--alert)")}
+            {stat(stats.missed, t("history.stat.missed"), "var(--alert)")}
           </div>
         </Card>
       </div>
@@ -300,10 +311,8 @@ export function HistoryView({ petId }: { petId: string }) {
       >
         {groups.map((group) => (
           <div key={group.key} style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-            <SectionLabel
-              trailing={`${group.entries.length}${group.entries.length === 1 ? " event" : " events"}`}
-            >
-              {group.label}
+            <SectionLabel trailing={t("history.eventCount", { count: group.entries.length })}>
+              {renderDayHeading(group.heading, tr)}
             </SectionLabel>
             <Card pad={0}>
               {group.entries.map((entry, i) => {
@@ -343,8 +352,12 @@ export function HistoryView({ petId }: { petId: string }) {
                       }}
                     ></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: d.titleColor }}>{entry.title}</div>
-                      <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>{entry.detail}</div>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: d.titleColor }}>
+                        {renderLogTitle(entry.title, tr)}
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
+                        {renderDetail(entry.detail, tr)}
+                      </div>
                     </div>
                     <div
                       style={{
@@ -355,7 +368,7 @@ export function HistoryView({ petId }: { petId: string }) {
                         paddingTop: 2,
                       }}
                     >
-                      by {nameFor(entry.actorId)}
+                      {t("history.byActor", { name: nameFor(entry.actorId) })}
                     </div>
                   </div>
                 );
@@ -365,7 +378,7 @@ export function HistoryView({ petId }: { petId: string }) {
         ))}
         <div style={{ display: "flex", justifyContent: "center", padding: "4px 0 8px" }}>
           <Button variant="secondary" size="sm" onClick={() => setPages((p) => p + 1)}>
-            Load earlier
+            {t("history.loadEarlier")}
           </Button>
         </div>
       </div>

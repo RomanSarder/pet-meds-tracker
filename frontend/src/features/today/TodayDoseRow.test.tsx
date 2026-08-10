@@ -394,6 +394,32 @@ describe("TodayDoseRow", () => {
     expect(onCardClick).toHaveBeenCalledTimes(1);
   });
 
+  // Deliberate Ukrainian coverage. The DS `DoseRow`'s button label defaults to
+  // the English "Give"; ADDENDUM A1 made that default overridable precisely so
+  // this row could pass a translated one, and this is the test that the wire
+  // is actually connected rather than the default silently winning.
+  it("labels the one-tap control in Ukrainian, and the row with it", async () => {
+    const user = userEvent.setup();
+    const props = handlers();
+    renderWithProviders(<TodayDoseRow dose={makeDose("due")} {...props} />, {
+      locale: "uk",
+    });
+
+    const give = await screen.findByRole("button", { name: "Дати" });
+    expect(screen.queryByRole("button", { name: "Give" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Metacam/ })).toHaveAccessibleName(
+      "Більше дій для Metacam",
+    );
+
+    await user.click(give);
+    expect(props.onGive).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Більше дій для Metacam" }));
+    expect(
+      await screen.findByRole("menuitem", { name: "Записати в інший час" }),
+    ).toBeInTheDocument();
+  });
+
   it("cancels the long-press when the pointer is released early", async () => {
     const user = userEvent.setup();
     renderWithProviders(<TodayDoseRow dose={makeDose("due")} {...handlers()} />);

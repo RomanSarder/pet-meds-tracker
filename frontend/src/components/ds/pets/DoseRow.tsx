@@ -13,6 +13,8 @@ export interface DoseRowProps {
   onGive?: (event: MouseEvent<HTMLButtonElement>) => void;
   /** Hairline separator above the row. */
   divider?: boolean;
+  /** Button label. Defaults to "Give". */
+  label?: string;
   style?: CSSProperties;
 }
 
@@ -23,6 +25,7 @@ export function DoseRow({
   state = "later",
   onGive,
   divider,
+  label,
   style,
 }: DoseRowProps) {
   const given = state === "given";
@@ -68,7 +71,7 @@ export function DoseRow({
             onGive?.(e);
           }}
         >
-          Give
+          {label ?? "Give"}
         </Button>
       )}
     </div>

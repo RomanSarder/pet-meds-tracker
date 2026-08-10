@@ -44,6 +44,8 @@ import {
 import { Menu } from "@base-ui/react/menu";
 import { Button, DoseRow, IconButton } from "@/components/ds";
 import { formatHHMM, now } from "@/domain";
+import { useT } from "@/i18n";
+import type { T } from "@/i18n";
 import { LogAtTimeDialog } from "./LogAtTimeDialog";
 import type { TodayDose } from "./types";
 
@@ -89,10 +91,18 @@ function usePrefersReducedMotion(): boolean {
  * SPEC §3b: a `fromLastDose` course with no `given` event yet "shows 'not
  * started'". The phrase has to be readable, not implied by a missing time, so
  * it is folded into the detail line unless the caller already said it.
+ *
+ * The "already said it" test is a case-insensitive search for the *localized*
+ * phrase, not for the English words: `buildTodayView` leads a `notStarted`
+ * dose's detail with the same `today.notStarted` entry, so the two always
+ * agree whatever the language.
  */
-function notStartedDetail(detail: string): string {
-  if (!detail) return "Not started";
-  return /not started/i.test(detail) ? detail : `Not started · ${detail}`;
+function notStartedDetail(detail: string, t: T): string {
+  const phrase = t("today.notStarted");
+  if (!detail) return phrase;
+  return detail.toLowerCase().includes(phrase.toLowerCase())
+    ? detail
+    : `${phrase} · ${detail}`;
 }
 
 const MENU_ITEM_STYLE = {
@@ -115,6 +125,7 @@ export function TodayDoseRow({
   onOpenCourse,
   onStartCourse,
 }: TodayDoseRowProps): ReactElement {
+  const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   // Captured when the dialog opens, not read on every render: the field seeds
@@ -201,9 +212,9 @@ export function TodayDoseRow({
 
   let body: ReactElement;
   if (dose.state === "notStarted") {
-    // Not a `DoseRow`: its button label is the hard-coded string "Give", and
-    // SPEC §3b wants **Start course** here. Composed from DS primitives to
-    // match `DoseRow`'s layout without re-porting its source.
+    // Not a `DoseRow`: SPEC §3b wants **Start course** here, and that is a
+    // different control from Give rather than a relabelled one. Composed from
+    // DS primitives to match `DoseRow`'s layout without re-porting its source.
     body = (
       <div
         style={{
@@ -219,7 +230,7 @@ export function TodayDoseRow({
             {dose.title}
           </div>
           <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
-            {notStartedDetail(dose.detail)}
+            {notStartedDetail(dose.detail, t)}
           </div>
         </div>
         <Button
@@ -230,7 +241,7 @@ export function TodayDoseRow({
             onStartCourse();
           }}
         >
-          Start course
+          {t("today.startCourse")}
         </Button>
       </div>
     );
@@ -244,7 +255,11 @@ export function TodayDoseRow({
         medication={dose.title}
         detail={dose.detail}
         state="given"
-        time={dose.state === "skipped" ? "Skipped" : (dose.time ?? "")}
+        time={dose.state === "skipped" ? t("today.skipped") : (dose.time ?? "")}
+        // A resolved row shows its time, not a button, so `label` never
+        // renders here — passed anyway so neither call site relies on the DS
+        // default's English (I18N-DESIGN.md ADDENDUM A1).
+        label={t("today.give")}
         style={rowStyle}
       />
     );
@@ -255,6 +270,9 @@ export function TodayDoseRow({
         detail={dose.detail}
         state={dose.state === "upcoming" ? "later" : dose.state}
         onGive={onGive}
+        // SPEC §5.1's one-tap control. The DS default is the English "Give";
+        // this is the translated one (I18N-DESIGN.md ADDENDUM A1).
+        label={t("today.give")}
         style={rowStyle}
       />
     );
@@ -267,7 +285,9 @@ export function TodayDoseRow({
         role="group"
         aria-label={
           resolved
-            ? `${dose.title}, ${dose.state === "skipped" ? "skipped" : "given"}`
+            ? dose.state === "skipped"
+              ? t("today.row.skippedLabel", { title: dose.title })
+              : t("today.row.givenLabel", { title: dose.title })
             : dose.title
         }
         onClickCapture={handleClickCapture}
@@ -297,7 +317,9 @@ export function TodayDoseRow({
               size={40}
               // SPEC §9: every tap target ≥ 44px.
               style={{ minWidth: 44, minHeight: 44, flexShrink: 0 }}
-              label={`More options for ${dose.medicationName}`}
+              label={t("today.moreOptions", {
+                medicationName: dose.medicationName,
+              })}
             />
           }
         />
@@ -324,13 +346,13 @@ export function TodayDoseRow({
             }}
           >
             <Menu.Item style={MENU_ITEM_STYLE} onClick={openLogAtTime}>
-              Log at a different time
+              {t("today.menu.logAtTime")}
             </Menu.Item>
             <Menu.Item style={MENU_ITEM_STYLE} onClick={onSkip}>
-              Skip this dose
+              {t("today.menu.skip")}
             </Menu.Item>
             <Menu.Item style={MENU_ITEM_STYLE} onClick={onOpenCourse}>
-              Open course
+              {t("today.menu.openCourse")}
             </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>

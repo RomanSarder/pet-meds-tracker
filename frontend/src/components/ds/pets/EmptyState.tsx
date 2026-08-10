@@ -43,7 +43,7 @@ export function EmptyState({
           color: "var(--ink-3)",
         }}
       >
-        <Icon name={icon} size={22} />
+        <Icon name={icon} size={22} aria-hidden />
       </span>
       <div style={{ fontSize: 17, fontWeight: 600, color: "var(--ink-1)" }}>
         {title}

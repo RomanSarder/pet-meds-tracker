@@ -1,13 +1,20 @@
 // Slice 5's view model: `TodaySnapshot` in, `TodayView` out.
 //
-// PURITY RULE. Everything here is a pure function of (snapshot, now, opts).
-// No React, no clock reads, and — the load-bearing one — no scheduling
+// PURITY RULE. Everything here is a pure function of (snapshot, now, tr, opts).
+// No React, no clock reads, no locale lookup of its own — the translator is
+// injected (I18N-DESIGN.md §5) — and, the load-bearing one, no scheduling
 // semantics: dose states come from `getDoseState`, counters from
 // `summariseDay`, future occurrences from `getOccurrences`/`nextDueAt`, and
-// the interval-schedule wording from `describeSchedule`. SPEC §10: slice 5
-// consumes the engine and must not reimplement it. If a rule below looks like
-// it could be derived from `dueAt` and `now`, that is exactly the derivation
-// this file is forbidden to make.
+// the interval-schedule wording from `describeSchedule` rendered through
+// `@/i18n/schedule`. SPEC §10: slice 5 consumes the engine and must not
+// reimplement it. If a rule below looks like it could be derived from `dueAt`
+// and `now`, that is exactly the derivation this file is forbidden to make.
+//
+// WORDING RULE (SPEC §10a). No user-facing literal appears in this file; every
+// composed string resolves through `i18n/catalogue/today.ts`. Clock times stay
+// 24-hour via `formatHHMM` and are never localized; dates go through
+// `tr.fmt.weekdayDayMonth`; every count goes through `f.plural` inside the
+// catalogue entry, never by appending a letter here.
 import type { Course, IsoDateTime, Medication, Pet } from "@/domain";
 import {
   addLocalDays,
@@ -24,6 +31,8 @@ import {
   nextDueAt,
   summariseDay,
 } from "@/engine";
+import type { Translator } from "@/i18n";
+import { renderCourseProgress, renderSchedule } from "@/i18n/schedule";
 import type {
   ComingUp,
   TodayDose,
@@ -46,31 +55,17 @@ const RESOLVED_STATES: ReadonlySet<DoseState> = new Set<DoseState>([
   "skipped",
 ]);
 
-/** Indexed by `Date#getDay()` (0 = Sunday) — locale-independent by design. */
-const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTH_SHORT = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
+/** The separator every composed clause on this screen is joined with. */
+const SEPARATOR = " · ";
 
 /** How far ahead the "coming up" row looks (COMMON §6 item 11). */
 const COMING_UP_DAYS = 7;
 
-export function greetingFor(now: Date): string {
+export function greetingFor(now: Date, tr: Translator): string {
   const hour = now.getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
+  if (hour < 12) return tr.t("today.greeting.morning");
+  if (hour < 18) return tr.t("today.greeting.afternoon");
+  return tr.t("today.greeting.evening");
 }
 
 /**
@@ -118,18 +113,21 @@ function detailFor(
   course: Course,
   day: string,
   time: string | null,
+  tr: Translator,
 ): string {
   const parts = [
-    time ?? "Not started",
+    // A clock time when there is one — never localized (SPEC §10a).
+    time ?? tr.t("today.notStarted"),
+    // Instructions are user-entered DATA: interpolated verbatim.
     course.instructions ?? "",
-    // SPEC §3b: an interval course's detail line must carry the literal
-    // phrase "from last dose", and `describeSchedule` is the only place that
-    // phrase is written.
+    // SPEC §3b: an interval course's detail line must carry the "from last
+    // dose" phrase. The engine names the segment; `renderSchedule` is the only
+    // place that phrase is worded, in either language.
     occ.kind === "fixedTimes"
-      ? courseProgress(course, day)
-      : describeSchedule(course.schedule),
+      ? renderCourseProgress(courseProgress(course, day), tr)
+      : renderSchedule(describeSchedule(course.schedule), tr),
   ];
-  return parts.filter((p) => p.length > 0).join(" · ");
+  return parts.filter((p) => p.length > 0).join(SEPARATOR);
 }
 
 /**
@@ -159,6 +157,7 @@ function toDose(
   medication: Medication,
   snapshot: TodaySnapshot,
   now: Date,
+  tr: Translator,
 ): TodayDose {
   const state = getDoseState(occ, now);
   const time = timeFor(occ, state);
@@ -168,9 +167,12 @@ function toDose(
     state,
     courseId: occ.courseId,
     petId: occ.petId,
+    // Medication name, dose amount and unit are all DATA (SPEC §10a): the
+    // amount keeps the decimal separator it was entered with, and the unit is
+    // never translated.
     title: `${medication.name} ${occ.doseAmount} ${occ.doseUnit}`,
     medicationName: medication.name,
-    detail: detailFor(occ, course, snapshot.day, time),
+    detail: detailFor(occ, course, snapshot.day, time, tr),
     time,
   };
 }
@@ -180,27 +182,32 @@ function statusFor(
   resolved: TodayDose[],
   earliestOverdue: TodayDose | null,
   next: Date | null,
+  tr: Translator,
 ): string {
   if (earliestOverdue !== null && earliestOverdue.time !== null) {
-    return `Overdue since ${earliestOverdue.time}`;
+    return tr.t("today.status.overdueSince", { time: earliestOverdue.time });
   }
-  if (next !== null) return `Next at ${formatHHMM(next)}`;
-  if (pending.length > 0) return "Not started";
+  if (next !== null) return tr.t("today.status.nextAt", { time: formatHHMM(next) });
+  if (pending.length > 0) return tr.t("today.notStarted");
   if (resolved.length > 0) {
     // Last by scheduled due time; the time it reports is the logged one.
     const last = resolved[resolved.length - 1];
     const time = last.time;
     return time === null
-      ? `All done · ${last.medicationName}`
-      : `All done · ${last.medicationName} at ${time}`;
+      ? tr.t("today.status.allDone", { medicationName: last.medicationName })
+      : tr.t("today.status.allDoneAt", {
+          medicationName: last.medicationName,
+          time,
+        });
   }
-  return "Nothing scheduled";
+  return tr.t("today.status.nothingScheduled");
 }
 
 function groupFor(
   pet: Pet,
   doses: TodayDose[],
   keepResolved: ReadonlySet<string> | undefined,
+  tr: Translator,
 ): TodayPetGroup {
   const pending = doses.filter((d) => PENDING_STATES.has(d.state)).sort(byDueAt);
   const resolved = doses
@@ -227,8 +234,9 @@ function groupFor(
     pending,
     resolved,
     body,
-    counterLabel: total === 0 ? "" : `${resolved.length} of ${total} today`,
-    status: statusFor(pending, resolved, overdueDoses[0] ?? null, next ?? null),
+    counterLabel:
+      total === 0 ? "" : tr.t("today.counter", { done: resolved.length, total }),
+    status: statusFor(pending, resolved, overdueDoses[0] ?? null, next ?? null, tr),
     hasOverdue: overdueDoses.length > 0,
     done: pending.length === 0,
     nextDueAt: next ?? null,
@@ -262,19 +270,26 @@ function compareGroups(a: TodayPetGroup, b: TodayPetGroup): number {
   return a.pet.name.localeCompare(b.pet.name);
 }
 
-function formatNextDose(due: Date, now: Date): string {
+function formatNextDose(due: Date, now: Date, tr: Translator): string {
   const today = localDayKey(now);
   const dueDay = localDayKey(due);
-  if (dueDay === today) return `Next dose at ${formatHHMM(due)}`;
+  // `formatHHMM` throughout: SPEC §10a keeps clock times 24-hour and
+  // unlocalized in both languages.
+  const time = formatHHMM(due);
+  if (dueDay === today) return tr.t("today.nextDose.today", { time });
   if (dueDay === addLocalDays(today, 1)) {
-    return `Next dose tomorrow at ${formatHHMM(due)}`;
+    return tr.t("today.nextDose.tomorrow", { time });
   }
-  const weekday = WEEKDAY_SHORT[due.getDay()];
-  const month = MONTH_SHORT[due.getMonth()];
-  return `Next dose ${weekday} ${due.getDate()} ${month} at ${formatHHMM(due)}`;
+  // The weekday/month names come from `Intl.DateTimeFormat` via the
+  // formatters, never from a table in this file.
+  return tr.t("today.nextDose.onDate", { date: tr.fmt.weekdayDayMonth(due), time });
 }
 
-function emptyDetailFor(snapshot: TodaySnapshot, now: Date): string | null {
+function emptyDetailFor(
+  snapshot: TodaySnapshot,
+  now: Date,
+  tr: Translator,
+): string | null {
   let earliest: Date | null = null;
   for (const course of snapshot.courses) {
     if (course.status !== "active") continue;
@@ -282,13 +297,13 @@ function emptyDetailFor(snapshot: TodaySnapshot, now: Date): string | null {
     if (due === null) continue;
     if (earliest === null || due.getTime() < earliest.getTime()) earliest = due;
   }
-  return earliest === null ? null : formatNextDose(earliest, now);
+  return earliest === null ? null : formatNextDose(earliest, now, tr);
 }
 
-function whenLabel(offsetDays: number): string {
-  if (offsetDays === 0) return "today";
-  if (offsetDays === 1) return "tomorrow";
-  return `in ${offsetDays} days`;
+function whenLabel(offsetDays: number, tr: Translator): string {
+  if (offsetDays === 0) return tr.t("today.when.today");
+  if (offsetDays === 1) return tr.t("today.when.tomorrow");
+  return tr.t("today.when.inDays", { days: offsetDays });
 }
 
 interface ComingUpCandidate {
@@ -301,6 +316,7 @@ function courseEndingCandidate(
   snapshot: TodaySnapshot,
   petsById: Map<string, Pet>,
   medsById: Map<string, Medication>,
+  tr: Translator,
 ): ComingUpCandidate | null {
   let best: ComingUpCandidate | null = null;
   for (const course of snapshot.courses) {
@@ -313,7 +329,12 @@ function courseEndingCandidate(
     if (best === null || offsetDays < best.offsetDays) {
       best = {
         offsetDays,
-        label: `Coming up · ${pet.name}'s ${medication.name} course ends`,
+        // Pet and medication names are DATA: handed to the catalogue entry
+        // verbatim, in whatever order that language's wording needs them.
+        label: tr.t("today.comingUp.courseEnds", {
+          petName: pet.name,
+          medicationName: medication.name,
+        }),
       };
     }
   }
@@ -330,6 +351,7 @@ function weeklyTreatmentCandidate(
   coursesById: Map<string, Course>,
   petsById: Map<string, Pet>,
   medsById: Map<string, Medication>,
+  tr: Translator,
 ): ComingUpCandidate | null {
   for (let offsetDays = 1; offsetDays <= COMING_UP_DAYS; offsetDays++) {
     const day = addLocalDays(snapshot.day, offsetDays);
@@ -354,7 +376,10 @@ function weeklyTreatmentCandidate(
       if (!pet || pet.archived || !medication) continue;
       return {
         offsetDays,
-        label: `Coming up · ${pet.name}'s ${medication.name}`,
+        label: tr.t("today.comingUp.treatment", {
+          petName: pet.name,
+          medicationName: medication.name,
+        }),
       };
     }
   }
@@ -366,13 +391,15 @@ function comingUpFor(
   coursesById: Map<string, Course>,
   petsById: Map<string, Pet>,
   medsById: Map<string, Medication>,
+  tr: Translator,
 ): ComingUp | null {
-  const ending = courseEndingCandidate(snapshot, petsById, medsById);
+  const ending = courseEndingCandidate(snapshot, petsById, medsById, tr);
   const weekly = weeklyTreatmentCandidate(
     snapshot,
     coursesById,
     petsById,
     medsById,
+    tr,
   );
   const chosen =
     ending === null
@@ -381,12 +408,13 @@ function comingUpFor(
         ? ending
         : weekly;
   if (chosen === null) return null;
-  return { label: chosen.label, when: whenLabel(chosen.offsetDays) };
+  return { label: chosen.label, when: whenLabel(chosen.offsetDays, tr) };
 }
 
 export function buildTodayView(
   snapshot: TodaySnapshot,
   now: Date,
+  tr: Translator,
   opts?: { keepResolved?: ReadonlySet<string> },
 ): TodayView {
   const petsById = new Map(snapshot.pets.map((p) => [p.id, p]));
@@ -400,7 +428,7 @@ export function buildTodayView(
     const course = coursesById.get(occ.courseId);
     const medication = medsById.get(occ.medicationId);
     if (!course || !medication) continue;
-    doses.push(toDose(occ, course, medication, snapshot, now));
+    doses.push(toDose(occ, course, medication, snapshot, now, tr));
   }
 
   const groups = snapshot.pets
@@ -410,6 +438,7 @@ export function buildTodayView(
         pet,
         doses.filter((d) => d.petId === pet.id),
         opts?.keepResolved,
+        tr,
       ),
     )
     .sort(compareGroups);
@@ -424,10 +453,15 @@ export function buildTodayView(
       : (doses.find((d) => d.key === earliestKey) ?? null);
 
   return {
-    greeting: greetingFor(now),
-    subtitle:
-      `${summary.remaining} dose${summary.remaining === 1 ? "" : "s"} left today` +
-      (summary.overdue > 0 ? ` · ${summary.overdue} overdue` : ""),
+    greeting: greetingFor(now, tr),
+    // SPEC §6.1 drops the second clause when M = 0. Both clauses pluralise
+    // through `f.plural` inside the catalogue, never by appending a letter.
+    subtitle: [
+      tr.t("today.subtitle", { remaining: summary.remaining }),
+      ...(summary.overdue > 0
+        ? [tr.t("today.subtitle.overdue", { overdue: summary.overdue })]
+        : []),
+    ].join(SEPARATOR),
     groups,
     overdue: {
       count: summary.overdue,
@@ -435,7 +469,7 @@ export function buildTodayView(
       petName: earliest ? (petsById.get(earliest.petId)?.name ?? null) : null,
     },
     isEmpty: groups.every((g) => g.pending.length === 0),
-    emptyDetail: emptyDetailFor(snapshot, now),
-    comingUp: comingUpFor(snapshot, coursesById, petsById, medsById),
+    emptyDetail: emptyDetailFor(snapshot, now, tr),
+    comingUp: comingUpFor(snapshot, coursesById, petsById, medsById, tr),
   };
 }

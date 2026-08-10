@@ -21,6 +21,7 @@ import type { DoseEvent, IsoDateTime, LocalDate } from "@/domain";
 import { UNDO_WINDOW_MS, now, occurrenceKeyFor, qk } from "@/domain";
 import { getRepo, RetractWindowExpiredError } from "@/data";
 import { useToast } from "@/app/Toast";
+import { useT } from "@/i18n";
 import type { TodaySnapshot } from "./types";
 
 export interface LogDoseVars {
@@ -31,7 +32,11 @@ export interface LogDoseVars {
   status: "given" | "skipped";
   /** Omitted → the repo stamps the current time. Set for "log at a different time". */
   givenAt?: IsoDateTime;
-  /** Toast copy, e.g. "Metacam logged" or "Metacam skipped". */
+  /**
+   * Toast copy, ALREADY LOCALIZED by the caller — `TodayPage` resolves
+   * `today.toast.logged` / `today.toast.skipped` before handing the vars over,
+   * so this hook never words anything about a medication itself.
+   */
   toastMessage: string;
 }
 
@@ -78,6 +83,7 @@ function provisionalEvent(vars: LogDoseVars, actorId: string): DoseEvent {
 export function useUndoDose(day: LocalDate): (eventId: string) => Promise<void> {
   const queryClient = useQueryClient();
   const { show } = useToast();
+  const t = useT();
 
   return useCallback(
     async (eventId: string): Promise<void> => {
@@ -89,7 +95,7 @@ export function useUndoDose(day: LocalDate): (eventId: string) => Promise<void> 
         // rather than being thrown at an error boundary. Anything else is a
         // real failure and propagates.
         if (error instanceof RetractWindowExpiredError) {
-          show({ message: "Too late to undo" });
+          show({ message: t("today.undo.tooLate") });
           return;
         }
         throw error;
@@ -99,13 +105,14 @@ export function useUndoDose(day: LocalDate): (eventId: string) => Promise<void> 
         queryClient.invalidateQueries({ queryKey: qk.events({}) }),
       ]);
     },
-    [queryClient, show, day],
+    [queryClient, show, day, t],
   );
 }
 
 export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, LogDoseVars> {
   const queryClient = useQueryClient();
   const { show } = useToast();
+  const t = useT();
   const undo = useUndoDose(day);
 
   return useMutation<DoseEvent, Error, LogDoseVars, LogDoseContext>({
@@ -150,7 +157,7 @@ export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, 
     onSuccess: (event, vars) => {
       show({
         message: vars.toastMessage,
-        actionLabel: "Undo",
+        actionLabel: t("today.undo"),
         durationMs: UNDO_WINDOW_MS,
         onAction: () => {
           void undo(event.id);

@@ -19,6 +19,7 @@ import {
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@/components/ds";
 import { atLocalTime, type LocalDate } from "@/domain";
+import { useT } from "@/i18n";
 
 /**
  * Keeps the dialog's interactions inside the dialog.
@@ -55,6 +56,7 @@ export function LogAtTimeDialog({
   medicationName,
   onConfirm,
 }: LogAtTimeDialogProps): ReactElement {
+  const t = useT();
   const [value, setValue] = useState(defaultTime);
   const inputId = useId();
 
@@ -104,11 +106,12 @@ export function LogAtTimeDialog({
           <Dialog.Title
             style={{ fontSize: 17, fontWeight: 600, color: "var(--ink-1)" }}
           >
-            Log at a different time
+            {t("today.logAtTime.title")}
           </Dialog.Title>
           <Dialog.Description
             style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}
           >
+            {/* A medication name is DATA (SPEC §10a) — rendered verbatim. */}
             {medicationName}
           </Dialog.Description>
 
@@ -117,7 +120,7 @@ export function LogAtTimeDialog({
               htmlFor={inputId}
               style={{ fontSize: 13, color: "var(--ink-2)" }}
             >
-              Time given
+              {t("today.logAtTime.timeGiven")}
             </label>
             <input
               id={inputId}
@@ -148,7 +151,7 @@ export function LogAtTimeDialog({
             <Dialog.Close
               render={
                 <Button type="button" size="md" variant="secondary">
-                  Cancel
+                  {t("today.cancel")}
                 </Button>
               }
             />
@@ -159,7 +162,7 @@ export function LogAtTimeDialog({
               disabled={!value}
               onClick={confirm}
             >
-              Log
+              {t("today.log")}
             </Button>
           </div>
         </Dialog.Popup>

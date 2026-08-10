@@ -4,6 +4,13 @@
 // computation belong to `@/engine` (SPEC §10: "slices 5 and 7 consume it and
 // must not reimplement it"); these types only describe how the Today screen
 // arranges what the engine returns.
+//
+// Every `string` field below is ALREADY LOCALIZED. `buildTodayView` takes an
+// injected `Translator` and resolves each of them through
+// `i18n/catalogue/today.ts` (and, for the schedule/course clauses,
+// `i18n/schedule.ts`), so the English examples in the comments are the English
+// rendering of a catalogue key, not a literal any file contains. The page
+// renders these fields verbatim and composes no copy of its own.
 import type { Course, DoseEvent, LocalDate, Medication, Pet } from "@/domain";
 import type { DoseState, Occurrence } from "@/engine";
 
@@ -27,11 +34,16 @@ export interface TodayDose {
   state: DoseState;
   courseId: string;
   petId: string;
-  /** "Metacam 0.4 ml" */
+  /** "Metacam 0.4 ml" — medication name, amount and unit are all DATA. */
   title: string;
-  /** Short medication name alone, for the banner and the done-card status. */
+  /** Short medication name alone, for the banner and the done-card status. DATA. */
   medicationName: string;
-  /** "08:00 · after food · day 3 of 7" — the trailing clause is the engine's wording. */
+  /**
+   * "08:00 · after food · day 3 of 7" in English. Clock time (never
+   * localized) · the course's own instructions (DATA, verbatim) · the
+   * engine's `courseProgress`/`describeSchedule` descriptor rendered through
+   * `i18n/schedule.ts`. Leads with `today.notStarted` when there is no time.
+   */
   detail: string;
   /** "08:00", or null for a `notStarted` occurrence, which has no due time. */
   time: string | null;
@@ -63,13 +75,19 @@ export interface TodayPetGroup {
    */
   body: TodayDose[];
   /**
-   * "1 of 2 today". `Y` counts resolved + pending doses that have a due time,
-   * excluding `notStarted` — COMMON §6 item 8: for an interval course `Y` is
-   * unknowable in advance, so it is "events logged today + 1 if a live
-   * occurrence is due today", which is exactly this count.
+   * `today.counter` — "1 of 2 today" in English. `Y` counts resolved +
+   * pending doses that have a due time, excluding `notStarted` — COMMON §6
+   * item 8: for an interval course `Y` is unknowable in advance, so it is
+   * "events logged today + 1 if a live occurrence is due today", which is
+   * exactly this count. Empty string when `Y` is 0.
    */
   counterLabel: string;
-  /** "Overdue since 08:00" | "Next at 09:00" | "All done · Ivermectin at 07:12". */
+  /**
+   * One of `today.status.overdueSince` | `today.status.nextAt` |
+   * `today.notStarted` | `today.status.allDone(At)` |
+   * `today.status.nothingScheduled` — "Overdue since 08:00", "Next at 09:00",
+   * "All done · Ivermectin at 07:12" in English.
+   */
   status: string;
   hasOverdue: boolean;
   /** Nothing pending: renders as the collapsed, greyed `PetCard done`. */
@@ -80,17 +98,26 @@ export interface TodayPetGroup {
 
 /** The dashed row under the list (COMMON §6 item 11). */
 export interface ComingUp {
-  /** "Coming up · Clover's Baytril course ends" */
+  /**
+   * `today.comingUp.courseEnds` | `today.comingUp.treatment` — "Coming up ·
+   * Clover's Baytril course ends" in English. The English possessive has no
+   * Ukrainian equivalent, so the two catalogues word the clause differently
+   * around the same two interpolated names.
+   */
   label: string;
-  /** "in 6 days" | "tomorrow" | "today" */
+  /** `today.when.*` — "in 6 days" | "tomorrow" | "today" in English. */
   when: string;
 }
 
 /** Everything `TodayPage` renders, assembled in one `useMemo`. */
 export interface TodayView {
-  /** "Good morning" | "Good afternoon" | "Good evening" — cut at 12:00 and 18:00. */
+  /** `today.greeting.*` — cut at 12:00 and 18:00 (SPEC §6.1). */
   greeting: string;
-  /** "3 doses left today · 1 overdue"; the second clause is dropped when M = 0. */
+  /**
+   * `today.subtitle` joined with `today.subtitle.overdue` — "3 doses left
+   * today · 1 overdue" in English; the second clause is dropped when M = 0.
+   * Both counts go through real plural rules per language.
+   */
   subtitle: string;
   /** Ordered: pets with overdue doses, then pending by earliest due, then done. */
   groups: TodayPetGroup[];
@@ -100,9 +127,13 @@ export interface TodayView {
     earliest: TodayDose | null;
     petName: string | null;
   };
-  /** True when no pet has a pending dose: render the "Nothing due today." state. */
+  /** True when no pet has a pending dose: render the `today.emptyTitle` state. */
   isEmpty: boolean;
-  /** "Next dose at 20:00" / "Next dose tomorrow at 09:00" / null if nothing is scheduled. */
+  /**
+   * `today.nextDose.*` — "Next dose at 20:00" / "Next dose tomorrow at 09:00"
+   * / "Next dose Sat 15 Aug at 07:00" in English, the date from
+   * `Intl.DateTimeFormat`. Null when nothing is scheduled.
+   */
   emptyDetail: string | null;
   comingUp: ComingUp | null;
 }

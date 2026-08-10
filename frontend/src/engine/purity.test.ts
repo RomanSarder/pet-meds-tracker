@@ -65,6 +65,37 @@ describe("engine purity — module graph", () => {
     expect(violations, violations.join("\n")).toEqual([]);
   });
 
+  it("never imports the i18n layer — the engine returns structure, the i18n layer words it", () => {
+    const violations: string[] = [];
+    for (const file of engineSourceFiles()) {
+      const content = readFileSync(file, "utf8");
+      for (const { specifier, index } of extractImportSpecifiers(content)) {
+        // "@/i18n" itself, plus any deeper or relative path whose module
+        // segment is `i18n` ("@/i18n/schedule", "../i18n/translator").
+        const isI18n = specifier === "@/i18n" || /(^|\/)i18n(\/|$)/.test(specifier);
+        if (isI18n) {
+          violations.push(
+            `${path.basename(file)}:${lineAt(content, index)}: forbidden import "${specifier}"`,
+          );
+        }
+      }
+    }
+    expect(violations, violations.join("\n")).toEqual([]);
+  });
+
+  it("never touches Intl — no locale-aware formatting inside the engine", () => {
+    const violations: string[] = [];
+    // `Intl.` covers every property access; `Intl[` covers computed access.
+    const intlUse = /\bIntl\s*[.[]/g;
+    for (const file of engineSourceFiles()) {
+      const content = readFileSync(file, "utf8");
+      for (const match of content.matchAll(intlUse)) {
+        violations.push(`${path.basename(file)}:${lineAt(content, match.index!)}: ${match[0]}`);
+      }
+    }
+    expect(violations, violations.join("\n")).toEqual([]);
+  });
+
   it("never constructs an argless `new Date()`", () => {
     const violations: string[] = [];
     const argless = /\bnew\s+Date\s*\(\s*\)/g;

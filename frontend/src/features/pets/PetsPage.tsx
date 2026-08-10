@@ -5,6 +5,8 @@ import { useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Badge, Button, Card, EmptyState, Icon, PetAvatar, ScreenHeader } from "@/components/ds";
 import { describeSchedule } from "@/engine";
+import { renderSchedule } from "@/i18n/schedule";
+import { createTranslator } from "@/i18n";
 import type { Course, Medication } from "@/domain";
 import { localDayKey, now } from "@/domain";
 import { ageLabel } from "./age";
@@ -12,6 +14,8 @@ import { courseLabel, joinMeta, speciesLabel } from "./format";
 import { usePets } from "./hooks";
 import { useCourses, useMedications } from "../courses/hooks";
 import { useMembers } from "../household/hooks";
+
+const enTr = createTranslator("en");
 
 export function PetsPage() {
   const navigate = useNavigate();
@@ -171,7 +175,7 @@ export function PetsPage() {
                       const med = medicationsById.get(c.medicationId);
                       return (
                         <Badge key={c.id} tone={c.endDate ? "accent" : "neutral"}>
-                          {`${courseLabel(med?.name ?? "", c.doseAmount, c.doseUnit)} · ${describeSchedule(c.schedule)}`}
+                          {`${courseLabel(med?.name ?? "", c.doseAmount, c.doseUnit)} · ${renderSchedule(describeSchedule(c.schedule), enTr)}`}
                         </Badge>
                       );
                     })

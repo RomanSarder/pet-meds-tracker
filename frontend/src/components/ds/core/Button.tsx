@@ -81,7 +81,7 @@ export function Button({
       style={{ ...base, ...variants[variant], ...style }}
       {...rest}
     >
-      {icon ? <Icon name={icon} size={s.font + 2} /> : null}
+      {icon ? <Icon name={icon} size={s.font + 2} aria-hidden /> : null}
       {children}
     </button>
   );

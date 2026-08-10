@@ -1,55 +1,54 @@
-// Pure formatting (SPEC §5.3) — no scheduling semantics. The exact strings
-// here are the contract other branches (the DS components, Pet detail) build
-// against; see the decisions doc §9 for the required outputs.
+// Pure schedule/course description (SPEC §5.3) — no scheduling semantics and,
+// since localization, no prose either. These functions return STRUCTURED
+// values (I18N-DESIGN.md §3); `i18n/schedule.ts` owns the wording. The
+// branching and arithmetic below are unchanged from the prose version, and the
+// segment order reproduces the old `parts` order exactly, so the English
+// rendering is byte-identical to what these functions used to return.
 import type { Course, LocalDate, Schedule } from "@/domain";
 import { differenceInLocalDays } from "@/domain";
+import type { CourseProgress, ScheduleDescription, ScheduleSegment } from "./engine.types";
 
-const ISO_WEEKDAY_NAMES: Record<number, string> = {
-  1: "Mon",
-  2: "Tue",
-  3: "Wed",
-  4: "Thu",
-  5: "Fri",
-  6: "Sat",
-  7: "Sun",
-};
-
-export function describeSchedule(s: Schedule): string {
+export function describeSchedule(s: Schedule): ScheduleDescription {
   if (s.kind === "fromLastDose") {
-    // The literal phrase "from last dose" must always appear (SPEC §3b).
-    let text = `every ${s.intervalHours}h · from last dose`;
-    if (s.anchorTime) text += ` · first dose ${s.anchorTime}`;
-    return text;
+    // The clause "from last dose" must always be present (SPEC §3b).
+    const segments: ScheduleSegment[] = [
+      { kind: "everyHours", hours: s.intervalHours },
+      { kind: "fromLastDose" },
+    ];
+    if (s.anchorTime) segments.push({ kind: "firstDose", time: s.anchorTime });
+    return { segments };
   }
 
-  const parts: string[] = [];
+  const segments: ScheduleSegment[] = [];
   const hasDays = s.daysOfWeek !== undefined && s.daysOfWeek.length > 0;
   const hasEveryN = s.everyNDays !== undefined && s.everyNDays > 1;
 
   if (hasDays) {
     const days = [...s.daysOfWeek!].sort((a, b) => a - b);
     if (days.length === 1) {
-      parts.push("weekly");
-      parts.push(ISO_WEEKDAY_NAMES[days[0]]);
+      segments.push({ kind: "weekly" });
+      segments.push({ kind: "weekday", isoWeekday: days[0] });
     } else {
-      parts.push(days.map((d) => ISO_WEEKDAY_NAMES[d]).join(", "));
+      segments.push({ kind: "weekdays", isoWeekdays: days });
     }
     if (hasEveryN) {
-      parts.push(`every ${s.everyNDays} days`);
+      segments.push({ kind: "everyNDays", days: s.everyNDays! });
     }
   } else if (hasEveryN) {
-    parts.push(`every ${s.everyNDays} days`);
+    segments.push({ kind: "everyNDays", days: s.everyNDays! });
   } else {
-    parts.push(s.times.length === 1 ? "once daily" : `${s.times.length}× daily`);
+    segments.push({ kind: "timesPerDay", times: s.times.length });
   }
 
-  parts.push(s.times.join(", "));
-  return parts.join(" · ");
+  // Copied, not aliased: the description must not hand a caller a live
+  // reference to the course's own `times` array.
+  segments.push({ kind: "times", times: [...s.times] });
+  return { segments };
 }
 
-export function courseProgress(c: Course, day: LocalDate): string {
-  if (c.endDate === null) return "ongoing";
+export function courseProgress(c: Course, day: LocalDate): CourseProgress {
+  if (c.endDate === null) return { kind: "ongoing" };
   const dayIndex = differenceInLocalDays(day, c.startDate) + 1;
   const total = differenceInLocalDays(c.endDate, c.startDate) + 1;
-  return `day ${dayIndex} of ${total}`;
+  return { kind: "dayOfTotal", day: dayIndex, total };
 }

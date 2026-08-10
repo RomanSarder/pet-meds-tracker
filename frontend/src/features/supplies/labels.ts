@@ -3,6 +3,11 @@
 // CONTRACT-supplies.md "features/supplies/labels.ts — exact contract".
 import type { Schedule } from "@/domain";
 import { doseLabel, joinMeta } from "@/features/pets/format";
+import { createTranslator } from "@/i18n";
+
+// TODO(wave3): replace enTr with a real translator when the supplies feature
+// is localized.
+const enTr = createTranslator("en");
 
 /**
  * "2× daily" | "daily" | "weekly" | "every 2 days" | "every 5h". Kit's own
@@ -42,7 +47,7 @@ export function forWhomLabel(petNames: string[], schedules: Schedule[]): string 
 
 /** "54 tabs" | "3.3 ml" | "Stock not set". */
 export function stockLabel(stockUnits: number | null, unit: string): string {
-  return stockUnits === null ? "Stock not set" : doseLabel(stockUnits, unit);
+  return stockUnits === null ? "Stock not set" : doseLabel(stockUnits, unit, enTr);
 }
 
 const SHORT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -71,7 +76,7 @@ export function neededLabel(neededPacks: number | null, needed: number, unit: st
   if (neededPacks !== null) {
     return `${neededPacks} more pack${neededPacks === 1 ? "" : "s"}`;
   }
-  return doseLabel(needed, unit);
+  return doseLabel(needed, unit, enTr);
 }
 
 /** "~7 weeks of cover", "~1 week of cover" — never "~0 weeks". */

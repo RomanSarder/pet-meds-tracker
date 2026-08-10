@@ -1,15 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { Course, CourseEvent, CourseSnapshot, DoseEvent, Medication } from "@/domain";
+import { createTranslator } from "@/i18n";
+import { renderDayHeading, renderDetail } from "@/i18n/history";
 import {
   buildLogEntries,
-  dayLabel,
+  dayHeading,
   filterEntries,
   groupByDay,
   summarise,
+  type LogEntry,
   type LogSource,
 } from "./logModel";
 
 const TS = "2026-08-01T00:00:00.000Z";
+
+// This module is locale-free: it emits `DetailClause[]`, not prose. The
+// English literals below are the strings it used to build itself, and they
+// stay pinned here — rendered through the wording layer rather than read off
+// the entry — so a regression in either half still fails this file.
+const en = createTranslator("en");
+
+function detailOf(entry: LogEntry): string {
+  return renderDetail(entry.detail, en);
+}
 
 function makeMedication(overrides: Partial<Medication> = {}): Medication {
   return {
@@ -237,7 +250,8 @@ describe("buildLogEntries", () => {
       const groups = groupByDay(entries, "2026-08-09");
       expect(groups).toHaveLength(1);
       expect(groups[0].key).toBe("2026-08-08");
-      expect(groups[0].label).toBe("Yesterday · Sat 8 Aug");
+      expect(groups[0].heading).toEqual({ relative: "yesterday", day: "2026-08-08" });
+      expect(renderDayHeading(groups[0].heading, en)).toBe("Yesterday · Sat 8 Aug");
     });
   });
 
@@ -252,7 +266,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.detail).toBe("Given");
+      expect(detailOf(entry)).toBe("Given");
     });
 
     it('SPEC §6.4 example: "Given 40 min late · chain shifted"', () => {
@@ -265,7 +279,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.detail).toBe("Given 40 min late · chain shifted");
+      expect(detailOf(entry)).toBe("Given 40 min late · chain shifted");
     });
 
     it("late by more than an hour combines hours and minutes", () => {
@@ -278,7 +292,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.detail.startsWith("Given 1 h 20 min late")).toBe(true);
+      expect(detailOf(entry).startsWith("Given 1 h 20 min late")).toBe(true);
     });
 
     it('SPEC §6.4 example: "Skipped · refused syringe"', () => {
@@ -288,7 +302,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.detail).toBe("Skipped · refused syringe");
+      expect(detailOf(entry)).toBe("Skipped · refused syringe");
       expect(entry.status).toBe("skipped");
     });
 
@@ -303,7 +317,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.detail).toBe("Missed · scheduled 08:00");
+      expect(detailOf(entry)).toBe("Missed · scheduled 08:00");
     });
 
     it("appends instructions and note, in order, after the head clause", () => {
@@ -317,7 +331,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.detail).toBe("Skipped · after food · vomited");
+      expect(detailOf(entry)).toBe("Skipped · after food · vomited");
     });
 
     it("given, fromLastDose, not late -> next due clause via engine's nextDueAt", () => {
@@ -336,7 +350,7 @@ describe("buildLogEntries", () => {
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
       // 07:00 BST + 8h = 15:00 BST.
-      expect(entry.detail).toBe("Given · next due 15:00, every 8h · from last dose");
+      expect(detailOf(entry)).toBe("Given · next due 15:00, every 8h · from last dose");
     });
 
     it("given, fixedTimes, course has an endDate -> course progress clause", () => {
@@ -353,7 +367,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.detail).toBe("Given · day 3 of 7");
+      expect(detailOf(entry)).toBe("Given · day 3 of 7");
     });
 
     it("uses the dose event's own amount snapshot for the title, not the course's current dose", () => {
@@ -363,7 +377,9 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
       );
-      expect(entry.title).toBe("Metacam 0.4 ml");
+      // Structure, not prose — the wording ("Metacam 0.4 ml") is
+      // `i18n/history.ts#renderLogTitle`'s, and is pinned there.
+      expect(entry.title).toEqual({ medicationName: "Metacam", amount: 0.4, unit: "ml" });
     });
   });
 
@@ -375,7 +391,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], courseEvents: [ce] }),
       );
-      expect(entry.detail).toBe("Course paused");
+      expect(detailOf(entry)).toBe("Course paused");
       expect(entry.status).toBe("course");
       expect(entry.kind).toBe("course");
     });
@@ -394,7 +410,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], courseEvents: [ce] }),
       );
-      expect(entry.detail).toBe("Course started · 2× daily · 08:00, 20:00 · for 7 days");
+      expect(detailOf(entry)).toBe("Course started · 2× daily · 08:00, 20:00 · for 7 days");
     });
 
     it('edited with a schedule change -> "Interval changed · … to …"', () => {
@@ -418,7 +434,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], courseEvents: [ce] }),
       );
-      expect(entry.detail).toBe(
+      expect(detailOf(entry)).toBe(
         "Interval changed · every 12h · from last dose to 2× daily · 08:00, 20:00",
       );
     });
@@ -432,7 +448,7 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], courseEvents: [ce] }),
       );
-      expect(entry.detail).toBe("Dose changed · 0.4 ml to 0.6 ml");
+      expect(detailOf(entry)).toBe("Dose changed · 0.4 ml to 0.6 ml");
     });
 
     it('edited with before === null falls back to "Course edited"', () => {
@@ -442,8 +458,86 @@ describe("buildLogEntries", () => {
       const [entry] = buildLogEntries(
         srcOf({ courses: [course], medications: [medication], courseEvents: [ce] }),
       );
-      expect(entry.detail).toBe("Course edited");
+      expect(detailOf(entry)).toBe("Course edited");
     });
+  });
+});
+
+describe("detail lines are structure, not prose (I18N-DESIGN.md §6)", () => {
+  it("emits a clause list, with lateness split into hours and minutes", () => {
+    const course = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 8 } });
+    const medication = makeMedication();
+    const dose = makeDoseEvent({
+      scheduledFor: "2026-08-01T07:00:00.000Z",
+      givenAt: "2026-08-01T07:40:00.000Z",
+    });
+    const [entry] = buildLogEntries(
+      srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
+    );
+    expect(entry.detail).toEqual([
+      { kind: "givenLate", hours: 0, minutes: 40 },
+      { kind: "chainShifted" },
+    ]);
+  });
+
+  it("carries instructions and the user's note verbatim, as data", () => {
+    const course = makeCourse({ instructions: "after food" });
+    const medication = makeMedication();
+    const dose = makeDoseEvent({ status: "skipped", note: "Курс: відмовився" });
+    const [entry] = buildLogEntries(
+      srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
+    );
+    expect(entry.detail).toEqual([
+      { kind: "skipped" },
+      { kind: "text", text: "after food" },
+      { kind: "text", text: "Курс: відмовився" },
+    ]);
+    // Untranslated in either language — it is the user's own text.
+    expect(renderDetail(entry.detail, createTranslator("uk"))).toContain("Курс: відмовився");
+  });
+
+  it("carries the engine's schedule description, not a rendering of it", () => {
+    const course = makeCourse();
+    const medication = makeMedication();
+    const after: CourseSnapshot = {
+      schedule: { kind: "fixedTimes", times: ["08:00", "20:00"] },
+      doseAmount: 0.4,
+      doseUnit: "ml",
+      startDate: "2026-08-01",
+      endDate: "2026-08-07",
+    };
+    const ce = makeCourseEvent({ kind: "started", before: null, after });
+    const [entry] = buildLogEntries(
+      srcOf({ courses: [course], medications: [medication], courseEvents: [ce] }),
+    );
+    expect(entry.detail).toEqual([
+      {
+        kind: "courseStarted",
+        schedule: {
+          segments: [
+            { kind: "timesPerDay", times: 2 },
+            { kind: "times", times: ["08:00", "20:00"] },
+          ],
+        },
+        totalDays: 7,
+      },
+    ]);
+  });
+
+  it("renders the whole screen's detail lines in Ukrainian from the same structure", () => {
+    const uk = createTranslator("uk");
+    const course = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 8 } });
+    const medication = makeMedication();
+    const dose = makeDoseEvent({
+      scheduledFor: "2026-08-01T07:00:00.000Z",
+      givenAt: "2026-08-01T07:40:00.000Z",
+    });
+    const [entry] = buildLogEntries(
+      srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
+    );
+    expect(renderDetail(entry.detail, uk)).toBe(
+      "Дано із запізненням на 40 хв · ланцюжок зсунуто",
+    );
   });
 });
 
@@ -474,17 +568,28 @@ describe("filterEntries", () => {
   });
 });
 
-describe("dayLabel", () => {
-  it("daysAgo 0 -> Today · <heading>", () => {
-    expect(dayLabel("2026-08-09", "2026-08-09")).toBe("Today · Sun 9 Aug");
+describe("dayHeading", () => {
+  it("daysAgo 0 -> today, rendered 'Today · <date>'", () => {
+    expect(dayHeading("2026-08-09", "2026-08-09")).toEqual({
+      relative: "today",
+      day: "2026-08-09",
+    });
+    expect(renderDayHeading(dayHeading("2026-08-09", "2026-08-09"), en)).toBe("Today · Sun 9 Aug");
   });
 
-  it("daysAgo 1 -> Yesterday · <heading>", () => {
-    expect(dayLabel("2026-08-08", "2026-08-09")).toBe("Yesterday · Sat 8 Aug");
+  it("daysAgo 1 -> yesterday, rendered 'Yesterday · <date>'", () => {
+    expect(dayHeading("2026-08-08", "2026-08-09")).toEqual({
+      relative: "yesterday",
+      day: "2026-08-08",
+    });
+    expect(renderDayHeading(dayHeading("2026-08-08", "2026-08-09"), en)).toBe(
+      "Yesterday · Sat 8 Aug",
+    );
   });
 
-  it("otherwise -> bare <heading>, no leading zero on the day", () => {
-    expect(dayLabel("2026-08-07", "2026-08-09")).toBe("Fri 7 Aug");
+  it("otherwise -> no relative part, bare date with no leading zero on the day", () => {
+    expect(dayHeading("2026-08-07", "2026-08-09")).toEqual({ relative: null, day: "2026-08-07" });
+    expect(renderDayHeading(dayHeading("2026-08-07", "2026-08-09"), en)).toBe("Fri 7 Aug");
   });
 });
 

@@ -58,7 +58,7 @@ export function IconButton({
       }}
       {...rest}
     >
-      <Icon name={icon} size={Math.round(size * 0.5)} />
+      <Icon name={icon} size={Math.round(size * 0.5)} aria-hidden />
     </button>
   );
 }

@@ -38,3 +38,30 @@ export interface EngineContext {
   courses: Course[];
   events: DoseEvent[];
 }
+
+/**
+ * One clause of a schedule description (I18N-DESIGN.md §3.1). The engine emits
+ * these instead of prose; `i18n/schedule.ts#renderSchedule` turns them into
+ * localized text. Clock times travel as the literal `"HH:MM"` the user
+ * entered — they are never localized (SPEC §10a).
+ */
+export type ScheduleSegment =
+  | { kind: "everyHours"; hours: number }
+  | { kind: "fromLastDose" }
+  | { kind: "firstDose"; time: string } // "08:00" — a clock time, never localized
+  | { kind: "weekly" }
+  | { kind: "weekday"; isoWeekday: number } // 1 = Mon … 7 = Sun
+  | { kind: "weekdays"; isoWeekdays: number[] }
+  | { kind: "everyNDays"; days: number }
+  | { kind: "timesPerDay"; times: number } // 1 → "once daily", N → "N× daily"
+  | { kind: "times"; times: string[] }; // clock times, never localized
+
+/** Segments in render order; the renderer joins them with " · ". */
+export interface ScheduleDescription {
+  segments: ScheduleSegment[];
+}
+
+/** Where a course stands on a given day (I18N-DESIGN.md §3.2). */
+export type CourseProgress =
+  | { kind: "ongoing" }
+  | { kind: "dayOfTotal"; day: number; total: number };

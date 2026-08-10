@@ -139,6 +139,29 @@ deferred rather than patched locally because fixing them changes appearance, siz
   `JoinHouseholdPage` and `YourNamePanel` are the same case and were missed by the first pass
   of this list: both render their title in a `<span>` and have **no heading element at all**,
   so a screen-reader user gets no landmark on either. Verified in the accessibility tree.
+- **`DoseRow`'s "Give" button label was hard-coded English**, on the one-tap-logging control the
+  default screen is built around. It now takes an optional `label` prop, defaulting to `"Give"`
+  — the same shape as `ScreenHeader.actionLabel` — so every existing call site and DS test keeps
+  rendering byte-identical output, and `features/today/TodayDoseRow.tsx` is the only place that
+  now passes translated copy in. The default staying English-only inside `ds/` (rather than the
+  component reaching into a catalogue itself) is deliberate: `components/ds/**` has no i18n
+  dependency, and giving it one would make a supposedly frozen, source-ported layer depend on an
+  app-specific concern. Should upstream as an optional prop, same as `actionLabel`.
+- **`Button` and `IconButton` nested their nested `<Icon>` without `aria-hidden`, leaking its raw
+  English glyph token into the accessible name.** Same defect `TabBar.tsx:70` already fixed:
+  `Icon` defaults to `aria-label={name}` (e.g. `"plus"`) unless told otherwise, so a live control
+  announced both the lucide token and its real label (`"plus Add a pet"`) to a screen reader —
+  worse for a Ukrainian-locale user, since the token never translates. `Button.tsx` and
+  `IconButton.tsx` now pass `aria-hidden` on their internal `Icon`, matching `TabBar`'s pattern
+  exactly. Verified safe: `IconButton` keeps its own `aria-label={label || icon}` on the outer
+  `<button>`, unaffected by this change, and no live `Button` call site passes `icon` without
+  visible text children, so no control loses its only accessible name. `PetCard.tsx:60` and
+  `EmptyState.tsx:46` had the identical defect one layer out — a purely decorative `<Icon>`
+  (a checkmark, a placeholder glyph) with no adjacent visible label at all, so it isn't inside an
+  interactive control to begin with, but still announced its raw token as a standalone `role="img"`
+  in an otherwise localized screen. Same one-line fix, same zero-pixel change; all four should
+  upstream together as the natural continuation of the `TabBar` fix already documented above,
+  rather than as a fresh design decision.
 
 ## Conventions the components assume
 

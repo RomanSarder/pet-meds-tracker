@@ -11,11 +11,16 @@ import { courseProgress, describeSchedule, getDoseState, getOccurrences } from "
 import { useCourses, useDoseEvents, useMedications } from "@/features/courses/hooks";
 import { buildLogEntries } from "@/features/history/logModel";
 import { useCourseEventLog, useUsers } from "@/features/history/hooks";
+import { renderCourseProgress, renderSchedule } from "@/i18n/schedule";
+import { renderDetail } from "@/i18n/history";
+import { createTranslator } from "@/i18n";
 import { ageLabel } from "./age";
 import { doseRowPropsFor } from "./doseRow";
 import { courseLabel, eventWhenLabel, joinMeta, speciesLabel, weightLabel } from "./format";
 import { usePet, useSetPetArchived } from "./hooks";
 import { ScheduleRow } from "./ScheduleRow";
+
+const enTr = createTranslator("en");
 
 // Same accent-ghost look the hand-rolled `<Button variant="ghost" block>`
 // menu items had, ported to a real `Menu.Item` — see the "Escape doesn't
@@ -214,7 +219,7 @@ export function PetDetailView({ petId }: { petId: string }) {
               state,
               medicationName: medicationName(o.medicationId),
               instructions: o.instructions,
-              progress: course ? courseProgress(course, today) : "",
+              progress: course ? renderCourseProgress(courseProgress(course, today), enTr) : "",
             });
             // Read-only (SPEC §5.3): no `onGive`, and never the DS `DoseRow`
             // itself — it hard-codes a "Give" `Button` for every non-`given`
@@ -264,12 +269,12 @@ export function PetDetailView({ petId }: { petId: string }) {
               <div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--ink-1)" }}>{label}</div>
                 <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
-                  {describeSchedule(c.schedule)}
+                  {renderSchedule(describeSchedule(c.schedule), enTr)}
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 {c.status === "paused" ? <Badge tone="neutral">Paused</Badge> : null}
-                <Badge tone={c.endDate ? "accent" : "neutral"}>{courseProgress(c, today)}</Badge>
+                <Badge tone={c.endDate ? "accent" : "neutral"}>{renderCourseProgress(courseProgress(c, today), enTr)}</Badge>
               </div>
             </Card>
           );
@@ -303,7 +308,7 @@ export function PetDetailView({ petId }: { petId: string }) {
                 : entry.status === "missed"
                   ? " · Missed"
                   : entry.status === "course"
-                    ? ` · ${entry.detail}`
+                    ? ` · ${renderDetail(entry.detail, enTr)}`
                     : "";
             return (
               <div
