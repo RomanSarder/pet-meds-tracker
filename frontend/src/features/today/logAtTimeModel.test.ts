@@ -10,9 +10,13 @@
 // below are real transitions: 2026-03-29 (01:00 → 02:00, a 23-hour day) and
 // 2026-10-25 (02:00 → 01:00, a 25-hour day).
 import { describe, expect, it } from "vitest";
-import type { Course, DoseEvent, LocalDate, Schedule } from "@/domain";
+import type { Course, DoseEvent, LocalDate, Medication, Schedule } from "@/domain";
 import { FIXTURE_NOW, occurrenceKeyFor, startOfLocalDay } from "@/domain";
 import type { Occurrence } from "@/engine";
+// The one cross-feature import in this file, and a deliberate one: the sheet's
+// "History will read …" promise is only meaningful if it is checked against
+// History's REAL builder rather than against a number copied out of it.
+import { buildLogEntries } from "@/features/history/logModel";
 import {
   atOffset,
   boundsFor,
@@ -24,6 +28,7 @@ import {
   DEFAULT_OFFSET_MIN,
   elapsedSince,
   helperFor,
+  isBelowFloor,
   OFFSET_CHOICES_MIN,
   scheduledChoice,
   stepBy,
@@ -100,6 +105,16 @@ function makeOccurrence(course: Course, day: LocalDate, dueAt: Date | null): Occ
 const DAY: LocalDate = "2026-08-08";
 function at(hours: number, minutes = 0): Date {
   return new Date(2026, 7, 8, hours, minutes);
+}
+
+/**
+ * An instant named in UTC, so a DST expectation is written independently of
+ * the arithmetic under test. `new Date(2026, 2, 29, 1, 30)` cannot express
+ * these: 01:30 does not exist on the spring-forward day, and 01:30 happens
+ * twice on the fall-back one.
+ */
+function utc(month: number, day: number, hours: number, minutes = 0): Date {
+  return new Date(Date.UTC(2026, month, day, hours, minutes));
 }
 
 describe("boundsFor", () => {
@@ -188,6 +203,81 @@ describe("clamping and the stepper", () => {
   });
 });
 
+describe("DST — the exact instant, not merely one inside the bounds", () => {
+  // The sweep above only asserts `chosen ∈ [floor, ceiling]` and `canConfirm`
+  // on these two days. That is not enough to pin the arithmetic: on
+  // 2026-03-29 a wall-clock reconstruction ("subtract 2 from the hour field")
+  // and correct elapsed-ms arithmetic differ by exactly one hour, and BOTH
+  // land inside the bounds. So each case below names the expected instant in
+  // UTC, and states what the wrong construction would have produced.
+
+  it("2026-03-29: a 2 h offset means 2 REAL hours, crossing the 01:00 gap", () => {
+    // 03:30 BST = 02:30Z. Two elapsed hours earlier is 00:30Z, which reads
+    // 00:30 GMT locally — the wall-clock answer, "01:30 local", is an instant
+    // that does not exist and resolves to 01:30Z, a full hour late.
+    const now = new Date(2026, 2, 29, 3, 30);
+    expect(now.toISOString()).toBe("2026-03-29T02:30:00.000Z");
+
+    const chosen = atOffset(120, now);
+    expect(chosen.getTime()).toBe(utc(2, 29, 0, 30).getTime());
+    expect(chosen.getTime()).not.toBe(new Date(2026, 2, 29, 1, 30).getTime());
+    expect(chosen.getHours()).toBe(0);
+    expect(chosen.getMinutes()).toBe(30);
+  });
+
+  it("2026-03-29: a − 5 min step off 02:00 BST lands 5 real minutes earlier, at 00:55 GMT", () => {
+    // 02:00 BST = 01:00Z is the transition instant itself: five elapsed
+    // minutes earlier is 00:55Z — local 00:55, not local 01:55 (nonexistent,
+    // and an hour late once resolved).
+    const now = new Date(2026, 2, 29, 3, 30);
+    const current = new Date(2026, 2, 29, 2, 0);
+    expect(current.toISOString()).toBe("2026-03-29T01:00:00.000Z");
+
+    const stepped = stepBy(current, -STEP_MIN, now);
+    expect(stepped.getTime()).toBe(utc(2, 29, 0, 55).getTime());
+    expect(stepped.getHours()).toBe(0);
+    expect(stepped.getMinutes()).toBe(55);
+  });
+
+  it("2026-10-25: a 2 h offset lands in the FIRST pass of the repeated hour", () => {
+    // 02:30 GMT = 02:30Z. Two elapsed hours earlier is 00:30Z, which reads
+    // 01:30 BST — the repeated hour's first pass. The wall-clock answer,
+    // "00:30 local", is 2026-10-24T23:30Z: an hour too early.
+    const now = new Date(2026, 9, 25, 2, 30);
+    expect(now.toISOString()).toBe("2026-10-25T02:30:00.000Z");
+
+    const chosen = atOffset(120, now);
+    expect(chosen.getTime()).toBe(utc(9, 25, 0, 30).getTime());
+    expect(chosen.getTime()).not.toBe(new Date(2026, 9, 25, 0, 30).getTime());
+    expect(chosen.getHours()).toBe(1);
+    expect(chosen.getMinutes()).toBe(30);
+  });
+
+  it("2026-10-25: a − 5 min step out of the second 01:00 lands in the first one", () => {
+    // 01:00Z is the SECOND 01:00 (GMT); five elapsed minutes earlier is
+    // 00:55Z = 01:55 BST, the first pass. Wall-clock would say "00:55 local"
+    // = 2026-10-24T23:55Z, over an hour off.
+    const now = new Date(2026, 9, 25, 2, 30);
+    const current = utc(9, 25, 1, 0);
+    expect(current.getHours()).toBe(1);
+
+    const stepped = stepBy(current, -STEP_MIN, now);
+    expect(stepped.getTime()).toBe(utc(9, 25, 0, 55).getTime());
+    expect(stepped.getHours()).toBe(1);
+    expect(stepped.getMinutes()).toBe(55);
+  });
+
+  it("keeps the floor a WALL-CLOCK midnight on both transition days", () => {
+    // The other half of the file header's rule: offsets are elapsed ms, but
+    // the floor goes through `new Date(y, m, d)`. On the 23-hour day midnight
+    // is 00:00Z; on the 25-hour day it is still BST, so 23:00Z the day before.
+    expect(boundsFor(new Date(2026, 2, 29, 3, 30)).floor.getTime()).toBe(utc(2, 29, 0, 0).getTime());
+    expect(boundsFor(new Date(2026, 9, 25, 2, 30)).floor.getTime()).toBe(
+      utc(9, 24, 23, 0).getTime(),
+    );
+  });
+});
+
 describe("scheduledChoice", () => {
   const course = makeCourse({ schedule: { kind: "fixedTimes", times: ["08:00"] } });
 
@@ -223,6 +313,54 @@ describe("scheduledChoice", () => {
   it("uses the same midnight the sheet's floor uses, for an occurrence filed under today", () => {
     const now = at(14, 0);
     expect(new Date(2026, 7, 8, 0, 0).getTime()).toBe(boundsFor(now).floor.getTime());
+  });
+
+  it("carries dueAt through the AMBIGUOUS repeated hour on 2026-10-25 without losing which pass it was", () => {
+    // The identity assertion above runs on a non-DST date, where a
+    // derived-but-lossless reconstruction of `dueAt` from its local fields
+    // would pass unnoticed. 01:00 occurs TWICE on the fall-back day: this
+    // dueAt is the second pass (01:00 GMT, 01:00Z), and any round-trip
+    // through local components resolves to the first (00:00Z) — an hour out.
+    const dueAt = utc(9, 25, 1, 0);
+    expect(dueAt.getHours()).toBe(1);
+    const chosen = scheduledChoice(makeOccurrence(course, "2026-10-25", dueAt));
+    expect(chosen?.getTime()).toBe(dueAt.getTime());
+    expect(chosen?.getTime()).not.toBe(new Date(2026, 9, 25, 1, 0).getTime());
+  });
+
+  it("carries dueAt through the spring-forward day, and still floors on that day's own midnight", () => {
+    const dueAt = utc(2, 29, 0, 30);
+    const chosen = scheduledChoice(makeOccurrence(course, "2026-03-29", dueAt));
+    expect(chosen?.getTime()).toBe(dueAt.getTime());
+    // The cross-midnight guard uses the occurrence's own local day, which on
+    // the 23-hour day is 00:00Z — an hour earlier than the naive "midnight is
+    // always 23:00Z the day before in London summer" assumption.
+    expect(scheduledChoice(makeOccurrence(course, "2026-03-29", utc(2, 28, 23, 30)))).toBeNull();
+  });
+});
+
+describe("isBelowFloor", () => {
+  const now = at(14, 0);
+
+  it("is false at the floor and above it, true one millisecond under", () => {
+    const { floor } = boundsFor(now);
+    expect(isBelowFloor(floor, now)).toBe(false);
+    expect(isBelowFloor(new Date(floor.getTime() + 1), now)).toBe(false);
+    expect(isBelowFloor(new Date(floor.getTime() - 1), now)).toBe(true);
+  });
+
+  it("is FALSE for a future value — it is not the negation of canConfirm", () => {
+    // The distinction the sheet leans on: a future value stays on offer with
+    // a berry headline, a below-floor one is withdrawn entirely.
+    const future = new Date(now.getTime() + 6 * HOUR);
+    expect(isBelowFloor(future, now)).toBe(false);
+    expect(canConfirm(future, now)).toBe(false);
+  });
+
+  it("turns yesterday's scheduled time below-floor the moment the day rolls over", () => {
+    const scheduled = at(8, 0);
+    expect(isBelowFloor(scheduled, at(23, 59))).toBe(false);
+    expect(isBelowFloor(scheduled, new Date(2026, 7, 9, 0, 1))).toBe(true);
   });
 });
 
@@ -291,6 +429,83 @@ describe("helperFor", () => {
     const chosen = new Date(now.getTime() - 20 * HOUR);
     expect(helperFor(chosen, null, now)).toEqual({ kind: "range" });
   });
+});
+
+describe("the lateness the sheet promises is the lateness History renders", () => {
+  // The sheet's consequence card says `History will read "Given N min late"`
+  // and resolves it through History's own `history.detail.givenLate` key, so
+  // the two numbers must be equal on the SAME persisted event — not merely
+  // each defensible alone. `chosen` comes off a real sub-minute clock read, so
+  // the seconds are where they used to disagree: History rounds, the sheet
+  // used to floor, and every leftover past 30 s split them by a whole minute.
+  const medication: Medication = {
+    id: "med-1",
+    name: "Metacam",
+    strength: null,
+    form: "liquid",
+    unit: "ml",
+    packSize: null,
+    stockUnits: null,
+    lowThreshold: null,
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    deletedAt: null,
+  };
+
+  /** Whole minutes late as History itself computes them, or null for no clause. */
+  function historyLateMinutes(course: Course, dueAt: Date, chosen: Date): number | null {
+    const scheduledFor = dueAt.toISOString();
+    const event = givenEvent(course, chosen, {
+      scheduledFor,
+      occurrenceKey: occurrenceKeyFor(course.id, scheduledFor),
+    });
+    const [entry] = buildLogEntries({
+      courses: [course],
+      medications: [medication],
+      doseEvents: [event],
+      courseEvents: [],
+    });
+    const clause = entry.detail.find((c) => c.kind === "givenLate");
+    return clause === undefined || clause.kind !== "givenLate"
+      ? null
+      : clause.hours * 60 + clause.minutes;
+  }
+
+  /** Whole minutes late as the sheet previews them. */
+  function sheetLateMinutes(course: Course, dueAt: Date, chosen: Date): number | null {
+    const result = consequenceFor({
+      course,
+      events: [],
+      occurrence: makeOccurrence(course, DAY, dueAt),
+      chosen,
+    });
+    return result.kind === "stays" ? result.lateMin : null;
+  }
+
+  const cases: Array<[string, number, number | null]> = [
+    ["41 min 40 s — History rounds this UP to 42", 41 * MIN + 40_000, 42],
+    ["41 min 20 s — and this DOWN to 41", 41 * MIN + 20_000, 41],
+    ["exactly 41 min", 41 * MIN, 41],
+    ["5 h 30 min 31 s, straddling the hour split", 5 * HOUR + 30 * MIN + 31_000, 331],
+    ["59.999 s — under History's own one-minute threshold", 59_999, null],
+    ["exactly 60 s — History's threshold, inclusive", 60_000, 1],
+    ["89.999 s, which rounds to 1 rather than to 2", 89_999, 1],
+    ["90 s, which rounds to 2", 90_000, 2],
+    ["given 3 min early", -3 * MIN, null],
+  ];
+
+  for (const [label, offsetMs, expected] of cases) {
+    it(`agrees with History at ${label}`, () => {
+      const course = makeCourse({ schedule: { kind: "fixedTimes", times: ["08:00", "20:00"] } });
+      const dueAt = at(8, 0);
+      const chosen = new Date(dueAt.getTime() + offsetMs);
+
+      expect(sheetLateMinutes(course, dueAt, chosen)).toBe(expected);
+      // Not a second hard-coded number: History's REAL builder, run on the
+      // event this sheet would persist.
+      expect(sheetLateMinutes(course, dueAt, chosen)).toBe(historyLateMinutes(course, dueAt, chosen));
+    });
+  }
 });
 
 describe("consequenceFor · fromLastDose", () => {

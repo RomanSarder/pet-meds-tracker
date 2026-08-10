@@ -8,9 +8,9 @@
 // 2026-08-08T14:00 local (BST, UTC+1).
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
-import { occurrenceKeyFor } from "@/domain";
+import { fixedClock, occurrenceKeyFor, setClock } from "@/domain";
 import type { Course, DoseEvent, LocalDate, Pet, Schedule } from "@/domain";
 import type { Occurrence } from "@/engine";
 import { LogAtTimeSheet } from "./LogAtTimeSheet";
@@ -360,6 +360,78 @@ describe("LogAtTimeSheet", () => {
     ).toBeInTheDocument();
   });
 
+  it("phrases 'stays' for today, tomorrow and a later date, with exactly one preposition", async () => {
+    // `next.stays` supplies the only "at"; the `when.*` fragment is time-first
+    // and carries none, so "stays at tomorrow at 08:00" cannot come back.
+    const today = makeCourse({ schedule: { kind: "fixedTimes", times: ["08:00", "20:00"] } });
+    const first = renderSheet(
+      makeDose(makeOccurrence(today, DAY, at(8, 0))),
+      makeContext(today),
+    );
+    expect(await screen.findByText("Next dose stays at 20:00")).toBeInTheDocument();
+    first.unmount();
+
+    // A once-daily grid: the 08:00 slot's own next is tomorrow's 08:00.
+    const daily = makeCourse({ schedule: { kind: "fixedTimes", times: ["08:00"] } });
+    const second = renderSheet(makeDose(makeOccurrence(daily, DAY, at(8, 0))), makeContext(daily));
+    expect(await screen.findByText("Next dose stays at 08:00 tomorrow")).toBeInTheDocument();
+    second.unmount();
+
+    // A 48 h chain whose newest given event is already later than the chosen
+    // time, so this log is not the anchor and the chain genuinely stays put.
+    const chain = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 48 } });
+    renderSheet(
+      makeDose(makeOccurrence(chain, DAY, at(8, 0))),
+      makeContext(chain, [givenEvent(chain, at(16, 0))]),
+    );
+    expect(await screen.findByText("Next dose stays at 16:00 on Mon 10 Aug")).toBeInTheDocument();
+  });
+
+  it("phrases 'moves' for today, tomorrow and a later date, with exactly one preposition", async () => {
+    const sameDay = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 8 } });
+    const first = renderSheet(
+      makeDose(makeOccurrence(sameDay, DAY, at(8, 0))),
+      makeContext(sameDay, [givenEvent(sameDay, at(0, 0))]),
+    );
+    // Default chosen 13:30 + 8 h = 21:30 today.
+    expect(await screen.findByText("Next dose moves to 21:30")).toBeInTheDocument();
+    first.unmount();
+
+    const nextDay = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 24 } });
+    const second = renderSheet(
+      makeDose(makeOccurrence(nextDay, DAY, at(8, 0))),
+      makeContext(nextDay, [givenEvent(nextDay, at(0, 0))]),
+    );
+    expect(await screen.findByText("Next dose moves to 13:30 tomorrow")).toBeInTheDocument();
+    second.unmount();
+
+    const twoDays = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 48 } });
+    renderSheet(
+      makeDose(makeOccurrence(twoDays, DAY, at(8, 0))),
+      makeContext(twoDays, [givenEvent(twoDays, at(0, 0))]),
+    );
+    expect(await screen.findByText("Next dose moves to 13:30 on Mon 10 Aug")).toBeInTheDocument();
+  });
+
+  it("gives each Ukrainian verb its own preposition: «переноситься на», «залишається о»", async () => {
+    // The two verbs govern different cases, so they cannot share one time
+    // fragment: «переноситися» takes the allative «на», «залишатися» the
+    // locative «о». The catalogue carries both families; this pins the sheet
+    // to routing `moves` at `whenMoves.*` rather than at `when.*`, which
+    // typecheck cannot see — an uncalled catalogue key is not an error.
+    const chain = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 8 } });
+    const moves = renderSheet(
+      makeDose(makeOccurrence(chain, DAY, at(8, 0))),
+      makeContext(chain, [givenEvent(chain, at(0, 0))]),
+      { locale: "uk" },
+    );
+    expect(await screen.findByText("Наступна доза переноситься на 21:30")).toBeInTheDocument();
+    moves.unmount();
+
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), { locale: "uk" });
+    expect(await screen.findByText("Наступна доза залишається о 20:00")).toBeInTheDocument();
+  });
+
   it("skips instead of logging, closing the sheet first and never confirming", async () => {
     const user = userEvent.setup();
     const { onConfirm, onSkipInstead } = renderSheet(
@@ -463,6 +535,178 @@ describe("LogAtTimeSheet", () => {
     expect(backdrop).not.toBeNull();
     expect(backdrop).toHaveClass("ds-root");
     expect(popup).toHaveClass("ds-root");
+  });
+
+  it("keeps Confirm live when the clock has moved on since the last paint (Just now must not disable itself)", async () => {
+    // `useNow()` repaints at most every 30 s, but the handlers read `now()`
+    // fresh so the committed `givenAt` is not up to 30 s stale. Those two
+    // facts used to contradict each other: `chosen = freshNow` is strictly
+    // later than the last painted tick, so the render right after the tap
+    // called its own value "in the future" — berry headline, dead Confirm —
+    // for the rest of the 30 s window. This test reproduces exactly that gap
+    // by advancing the injected clock without letting the tick fire.
+    const user = userEvent.setup();
+    const { onConfirm } = renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse));
+    await screen.findByRole("dialog");
+
+    const twentySecondsLater = "2026-08-08T13:00:20.000Z";
+    setClock(fixedClock(twentySecondsLater));
+
+    await user.click(screen.getByRole("button", { name: "Just now" }));
+
+    const headlineEl = await headline();
+    expect(headlineEl).toHaveTextContent("14:00");
+    expect(headlineEl).toHaveStyle({ color: "var(--ink-1)" });
+
+    const confirmButton = screen.getByRole("button", { name: "Log at 14:00" });
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    // ...and the value committed is still the FRESH read, to the second — the
+    // whole reason the handlers do not close over the tick.
+    const givenAt = onConfirm.mock.calls[0][0] as Date;
+    expect(givenAt.getTime()).toBe(new Date(twentySecondsLater).getTime());
+  });
+
+  it("steps up to now without the stepper disabling itself against a stale tick", async () => {
+    // The same collision reached through `+ 5 min` landing exactly on now.
+    // 00:03 local, so the 30-min seed clamps to midnight and a single
+    // `+ 5 min` overshoots `now` and clamps back onto it.
+    const user = userEvent.setup();
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
+      now: "2026-08-07T23:03:00.000Z",
+    });
+    await screen.findByRole("dialog");
+    expect(await headline()).toHaveTextContent("00:00");
+
+    setClock(fixedClock("2026-08-07T23:03:20.000Z"));
+    await user.click(screen.getByRole("button", { name: "+ 5 min" }));
+
+    // Clamped to the fresh now (00:03:20), which is later than the painted tick.
+    const headlineEl = await headline();
+    expect(headlineEl).toHaveTextContent("00:03");
+    expect(headlineEl).toHaveStyle({ color: "var(--ink-1)" });
+    expect(screen.getByRole("button", { name: "Log at 00:03" })).toBeEnabled();
+    // The one thing that MUST still be disabled at the cap.
+    expect(screen.getByRole("button", { name: "+ 5 min" })).toBeDisabled();
+    // And the helper still explains why (SPEC §6.1a's `chosen >= now` branch).
+    expect(await screen.findByText("A dose cannot be logged in the future.")).toBeInTheDocument();
+  });
+
+  it("promises the minute History will actually render, seconds and all", async () => {
+    // 14:00:40 local, so the 30-min seed is 13:30:40 — 5 h 30 min 40 s after
+    // the 08:00 due time. History ROUNDS that to 5 h 31 min; the sheet used to
+    // floor it to 5 h 30 min and promise a number History would not print.
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
+      now: "2026-08-08T13:00:40.000Z",
+    });
+
+    expect(await screen.findByText('History will read "Given 5 h 31 min late".')).toBeInTheDocument();
+    // The "N ago" label still FLOORS — a partial minute is not yet elapsed.
+    expect(screen.getByText("today · 30 min ago")).toBeInTheDocument();
+  });
+
+  it("exposes the selected offset chip through aria-pressed, not colour alone", async () => {
+    const user = userEvent.setup();
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse));
+
+    await screen.findByRole("dialog");
+    const chip = (name: string) => screen.getByRole("button", { name });
+    expect(chip("30 min")).toHaveAttribute("aria-pressed", "true");
+    for (const name of ["Just now", "15 min", "1 h", "2 h"]) {
+      expect(chip(name)).toHaveAttribute("aria-pressed", "false");
+    }
+
+    await user.click(chip("1 h"));
+    expect(chip("1 h")).toHaveAttribute("aria-pressed", "true");
+    expect(chip("30 min")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("exposes the scheduled row's selected state through aria-pressed too", async () => {
+    const user = userEvent.setup();
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse));
+
+    const row = await screen.findByRole("button", { name: /At its scheduled time/ });
+    expect(row).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(row);
+    expect(row).toHaveAttribute("aria-pressed", "true");
+    // Every offset chip goes unpressed with it — the row and the chips are one
+    // exclusive choice, not two independent toggles.
+    expect(screen.getByRole("button", { name: "30 min" })).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "15 min" }));
+    expect(row).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("announces the chosen time politely, from a node it mutates rather than replaces", async () => {
+    const user = userEvent.setup();
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse));
+
+    const headlineEl = await headline();
+    expect(headlineEl).toHaveAttribute("aria-live", "polite");
+    expect(headlineEl).toHaveAttribute("aria-atomic", "true");
+
+    await user.click(screen.getByRole("button", { name: "1 h" }));
+
+    // Same DOM node, new text: a live region that was torn down and rebuilt
+    // would announce nothing, which is what makes this identity check the
+    // real assertion rather than the attribute above.
+    expect(await headline()).toBe(headlineEl);
+    expect(headlineEl).toHaveTextContent("13:00");
+    // Exactly one live region — the derived lines stay silent so a single tap
+    // does not queue four overlapping utterances.
+    expect(screen.getByRole("dialog").querySelectorAll("[aria-live]")).toHaveLength(1);
+  });
+
+  it("withdraws yesterday's scheduled row once the day has rolled over", async () => {
+    // 00:05 on 9 Aug, with an occurrence still filed under 8 Aug: its 08:00
+    // due time is now below the floor, so offering it as a one-tap row would
+    // offer a value `canConfirm` refuses.
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
+      now: "2026-08-08T23:05:00.000Z",
+    });
+
+    await screen.findByRole("dialog");
+    expect(await headline()).toHaveTextContent("00:00");
+    expect(screen.queryByRole("button", { name: /At its scheduled time/ })).not.toBeInTheDocument();
+  });
+
+  it("re-clamps a chosen time that midnight has left behind, instead of dead-ending the footer", async () => {
+    // Fake timers so `useNow`'s 30 s `setTimeout` actually fires inside this
+    // sub-second test — the same pattern (and the same `shouldAdvanceTime`
+    // caveat) as `HistoryPage.test.tsx`'s own clock-tick test.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // A clock whose `now()` reads a mutable `iso`, so a later mutation is
+      // visible to the `now()` call made from inside `useNow`'s already-
+      // scheduled timeout.
+      let iso = "2026-08-08T22:50:00.000Z"; // 23:50 local
+      const advanceable = { now: () => new Date(iso) };
+      setClock(advanceable);
+
+      renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), { now: iso });
+      // `renderWithProviders` installs its own frozen clock immediately before
+      // it renders, so the advanceable one is re-asserted after the mount.
+      setClock(advanceable);
+
+      expect(await headline()).toHaveTextContent("23:20");
+      expect(screen.getByRole("button", { name: "Log at 23:20" })).toBeEnabled();
+
+      await act(async () => {
+        iso = "2026-08-08T23:05:00.000Z"; // 00:05 local, the next day
+        vi.advanceTimersByTime(30_001);
+      });
+
+      // 23:20 belongs to a day this sheet can no longer log into, so the
+      // value moves to the new floor in plain sight — headline and footer
+      // both — rather than sitting there un-confirmable with no explanation.
+      expect(await headline()).toHaveTextContent("00:00");
+      expect(screen.getByRole("button", { name: "Log at 00:00" })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hides the scheduled row entirely when scheduledChoice returns null", async () => {

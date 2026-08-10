@@ -136,6 +136,23 @@ export function canStepLater(current: Date, now: Date): boolean {
   return current.getTime() < now.getTime();
 }
 
+/**
+ * `candidate` sits before today's floor — i.e. it belongs to a day this sheet
+ * cannot log into (SPEC §4, "the current day only").
+ *
+ * Exists because the floor MOVES while the sheet is open: a sheet left up
+ * across local midnight sees `boundsFor(now).floor` advance a whole day while
+ * `chosen` — and the occurrence's own `dueAt` — stay where they were. The view
+ * needs to detect exactly that, and detecting it by comparing instants in the
+ * view would put scheduling arithmetic back into the component. Note this is
+ * NOT the negation of `canConfirm`: a FUTURE value is un-confirmable but not
+ * below the floor, and the sheet treats those two cases differently (the
+ * future one is offered with a berry headline; this one is withdrawn).
+ */
+export function isBelowFloor(candidate: Date, now: Date): boolean {
+  return candidate.getTime() < boundsFor(now).floor.getTime();
+}
+
 /** SPEC §12's invariant, as one predicate: `00:00 today <= chosen <= now`. */
 export function canConfirm(chosen: Date, now: Date): boolean {
   const { floor, ceiling } = boundsFor(now);
@@ -230,14 +247,27 @@ function syntheticGiven(course: Course, occurrence: Occurrence, at: Date): DoseE
  * Whole minutes late, or `null` when there is nothing to be late for.
  *
  * `null` covers "no scheduled time" AND "not actually late" — given early, or
- * given in the same minute it was due. The view uses it as the drop signal for
- * the "Given N min late" note, and "Given 0 min late" is not a sentence worth
- * rendering, so a non-null value here always means a real, positive lateness.
+ * given less than a whole minute past due. The view uses it as the drop signal
+ * for the "Given N min late" note, and "Given 0 min late" is not a sentence
+ * worth rendering, so a non-null value here always means a real, positive
+ * lateness.
+ *
+ * MIRRORS HISTORY EXACTLY, and must keep doing so. The sheet's consequence
+ * card promises `History will read "Given N min late"`, resolved through the
+ * very same `history.detail.givenLate` key — so this has to agree with
+ * `features/history/logModel.ts` on the SAME persisted instant, not merely be
+ * defensible on its own. That file draws the line in two places, both copied
+ * here: `buildDoseEntry` only calls a dose late at `diff >= 60_000`, and
+ * `lateParts` then ROUNDS (`Math.round`) rather than flooring. `chosen` comes
+ * off a real sub-minute clock read, so flooring here disagreed with History by
+ * a whole minute whenever the leftover seconds passed 30 — the sheet promised
+ * "41 min late" and History rendered "42 min".
  */
 function lateMinutes(chosen: Date, dueAt: Date | null): number | null {
   if (dueAt === null) return null;
-  const minutes = Math.floor((chosen.getTime() - dueAt.getTime()) / MS_PER_MIN);
-  return minutes > 0 ? minutes : null;
+  const lateMs = chosen.getTime() - dueAt.getTime();
+  if (lateMs < MS_PER_MIN) return null;
+  return Math.round(lateMs / MS_PER_MIN);
 }
 
 /**

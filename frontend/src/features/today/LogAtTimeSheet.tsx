@@ -16,6 +16,7 @@ import { useNow } from "@/app/useNow";
 import { useTranslator } from "@/i18n";
 import {
   atOffset,
+  boundsFor,
   canConfirm,
   canStepEarlier,
   canStepLater,
@@ -23,6 +24,7 @@ import {
   DEFAULT_OFFSET_MIN,
   elapsedSince,
   helperFor,
+  isBelowFloor,
   OFFSET_CHOICES_MIN,
   scheduledChoice,
   stepBy,
@@ -91,11 +93,44 @@ export function LogAtTimeSheet({
   const { t, fmt } = useTranslator();
   // Ticks so "today · N ago" advances and a sheet left open across midnight
   // sees the floor move (SPEC §9). Event handlers below read `now()` fresh
-  // instead of closing over this value — see each handler's own comment.
+  // instead of closing over this value — see `readNow` for why.
   const nowTick = useNow();
+  // The latest instant any handler has actually observed. See `effectiveNow`.
+  const [handlerNow, setHandlerNow] = useState<Date>(() => now());
 
   const [chosen, setChosen] = useState<Date>(() => atOffset(DEFAULT_OFFSET_MIN, now()));
   const [source, setSource] = useState<Source>({ kind: "offset", minutes: DEFAULT_OFFSET_MIN });
+
+  /**
+   * The clock read every handler makes, recorded so the render that follows
+   * agrees with it.
+   *
+   * A handler must NOT close over `nowTick`: `useNow()` repaints at most every
+   * 30 s, so an offset measured from it would make "Just now" up to 30 s stale
+   * — `TodayDoseRow.tsx` (~line 202) makes the identical point, and the
+   * committed `givenAt` is the value that staleness would corrupt.
+   *
+   * But a fresh read alone put the two out of order: tapping *Just now* set
+   * `chosen = freshNow`, which is strictly LATER than the last painted
+   * `nowTick`, so the very next render read the headline as in the future —
+   * berry text, disabled Confirm, `+ 5 min` dead — for up to 30 s, on the
+   * sheet's most obvious action. Recording the read fixes the ordering at its
+   * source rather than papering over it at each comparison.
+   */
+  function readNow(): Date {
+    const fresh = now();
+    setHandlerNow(fresh);
+    return fresh;
+  }
+
+  // Time only moves forward, so the later of the two reads is the one closer
+  // to the truth, and taking the max can never invent an instant that has not
+  // happened yet: both are past reads of the same injected clock. Every
+  // render-time comparison below uses this, never `nowTick` — a check that
+  // disagreed with the handler that set `chosen` is the bug above.
+  const effectiveNow =
+    handlerNow.getTime() > nowTick.getTime() ? handlerNow : nowTick;
+  const floorMs = boundsFor(effectiveNow).floor.getTime();
 
   // Re-seed on EVERY open — a cancelled edit must not persist into the next
   // time this sheet is reached. Carried over from `LogAtTimeDialog.tsx`'s own
@@ -103,37 +138,54 @@ export function LogAtTimeSheet({
   useEffect(() => {
     if (!open) return;
     const seedNow = now();
+    setHandlerNow(seedNow);
     setChosen(atOffset(DEFAULT_OFFSET_MIN, seedNow));
     setSource({ kind: "offset", minutes: DEFAULT_OFFSET_MIN });
   }, [open]);
 
-  const scheduledAt = scheduledChoice(dose.occurrence);
-  const isFuture = chosen.getTime() > nowTick.getTime();
-  const confirmDisabled = !canConfirm(chosen, nowTick);
+  // The floor MOVES under an open sheet (SPEC §9): left up across local
+  // midnight, `boundsFor(...).floor` advances a whole day and yesterday's
+  // `chosen` falls out of range. `canConfirm` refuses it correctly, but with
+  // no explanation the user is left staring at a dead footer under a value
+  // this very sheet offered. Re-clamping to the new floor keeps the sheet in a
+  // confirmable state and SHOWS the change: the headline, the "N ago" label
+  // and the Confirm button all read the new time before anything is written.
+  useEffect(() => {
+    if (!open) return;
+    setChosen((current) => (current.getTime() < floorMs ? new Date(floorMs) : current));
+  }, [open, floorMs]);
+
+  // Withdrawn once it falls before the floor, for the same rollover reason:
+  // `scheduledChoice` floors on the occurrence's OWN day, so after midnight it
+  // keeps happily offering yesterday's scheduled time as a one-tap row that
+  // could only ever be re-clamped away. A FUTURE `scheduledAt` is still
+  // offered untouched — that berry-headline case is deliberate (SPEC §6.1a).
+  const rawScheduledAt = scheduledChoice(dose.occurrence);
+  const scheduledAt =
+    rawScheduledAt !== null && !isBelowFloor(rawScheduledAt, effectiveNow) ? rawScheduledAt : null;
+  const isFuture = chosen.getTime() > effectiveNow.getTime();
+  const confirmDisabled = !canConfirm(chosen, effectiveNow);
 
   function selectOffset(minutes: number) {
-    // Fresh clock read, not `nowTick`: `useNow()` re-renders at most every
-    // 30 s, so closing over it would make "Just now" up to 30 s stale —
-    // `TodayDoseRow.tsx` (~line 202) makes the identical point.
-    const freshNow = now();
-    setChosen(atOffset(minutes, freshNow));
+    setChosen(atOffset(minutes, readNow()));
     setSource({ kind: "offset", minutes });
   }
 
   function selectScheduled() {
     if (scheduledAt === null) return;
+    readNow();
     setChosen(new Date(scheduledAt.getTime()));
     setSource({ kind: "scheduled" });
   }
 
   function step(deltaMin: number) {
-    const freshNow = now();
+    const freshNow = readNow();
     setChosen((current) => stepBy(current, deltaMin, freshNow));
     setSource({ kind: "exact" });
   }
 
   function handleConfirm() {
-    const freshNow = now();
+    const freshNow = readNow();
     // SPEC §12's invariant as a property of the component, not of a
     // `disabled` attribute — the old dialog's `if (!value) return;` in the
     // same spirit.
@@ -148,10 +200,10 @@ export function LogAtTimeSheet({
   }
 
   const ago = t("today.logAtTime.ago", {
-    duration: t("history.detail.lateDuration", elapsedSince(chosen, nowTick)),
+    duration: t("history.detail.lateDuration", elapsedSince(chosen, effectiveNow)),
   });
 
-  const helper = helperFor(chosen, scheduledAt, nowTick);
+  const helper = helperFor(chosen, scheduledAt, effectiveNow);
   const helperText =
     helper.kind === "futureCap"
       ? t("today.logAtTime.helper.future")
@@ -254,7 +306,7 @@ export function LogAtTimeSheet({
                   // course has no Give/overflow yet either. Falling back to
                   // the live clock rather than crashing keeps this a pure
                   // rendering choice, not a scheduling one.
-                  time: formatHHMM(dose.occurrence.dueAt ?? nowTick),
+                  time: formatHHMM(dose.occurrence.dueAt ?? effectiveNow),
                   schedule: context.scheduleSummary,
                 })}
               </Dialog.Description>
@@ -287,6 +339,17 @@ export function LogAtTimeSheet({
                 // formatted time, so tests need an unambiguous target for
                 // the headline specifically.
                 data-testid="log-at-time-headline"
+                // SPEC §9: tapping a chip moves the headline, the "N ago"
+                // label, the helper line and the consequence card while focus
+                // stays on the chip — silently, for a screen-reader user.
+                // ONLY the headline is live: the other three are derived from
+                // it, and four regions firing at once would queue four
+                // overlapping utterances for one tap. The element itself is
+                // stable across every re-render (same position, no key), so
+                // React mutates its text rather than replacing the node —
+                // which is what makes a polite announcement fire at all.
+                aria-live="polite"
+                aria-atomic="true"
                 style={{
                   fontSize: 52,
                   fontWeight: 800,
@@ -303,11 +366,23 @@ export function LogAtTimeSheet({
               </div>
             </div>
 
+            {/*
+              A hand-rolled one-of-N row rather than `SegmentedControl`, which
+              is the DS component for exactly this: its wrapper is a plain
+              non-scrolling flex row and it passes no per-Chip style, so the
+              chips here would lose `flex: "0 0 auto"` and start shrinking
+              instead of scrolling at 360px. What `SegmentedControl` really
+              contributes is `aria-pressed` on each Chip — taken directly,
+              below, the same way `HistoryPage.tsx`'s filter row takes it.
+              Without it a screen reader reads five identical buttons and the
+              selection is carried by colour alone, which SPEC §9 forbids.
+            */}
             <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none" }}>
               {OFFSET_CHOICES_MIN.map((minutes) => (
                 <Chip
                   key={minutes}
                   selected={source.kind === "offset" && source.minutes === minutes}
+                  aria-pressed={source.kind === "offset" && source.minutes === minutes}
                   style={{ flex: "0 0 auto" }}
                   onClick={() => selectOffset(minutes)}
                 >
@@ -324,6 +399,10 @@ export function LogAtTimeSheet({
               <button
                 type="button"
                 onClick={selectScheduled}
+                // Same SPEC §9 point as the chips: selected is `--accent-tint`
+                // plus an `--accent` border and nothing else, so without this
+                // the state is colour-only.
+                aria-pressed={source.kind === "scheduled"}
                 style={{
                   ...SCHEDULED_ROW_STYLE,
                   background:
@@ -365,7 +444,7 @@ export function LogAtTimeSheet({
                   variant="secondary"
                   size="md"
                   style={{ flex: 1 }}
-                  disabled={!canStepEarlier(chosen, nowTick)}
+                  disabled={!canStepEarlier(chosen, effectiveNow)}
                   onClick={() => step(-STEP_MIN)}
                 >
                   {t("today.logAtTime.earlier", { minutes: STEP_MIN })}
@@ -393,7 +472,7 @@ export function LogAtTimeSheet({
                   variant="secondary"
                   size="md"
                   style={{ flex: 1 }}
-                  disabled={!canStepLater(chosen, nowTick)}
+                  disabled={!canStepLater(chosen, effectiveNow)}
                   onClick={() => step(STEP_MIN)}
                 >
                   {t("today.logAtTime.later", { minutes: STEP_MIN })}
@@ -404,7 +483,7 @@ export function LogAtTimeSheet({
 
             <ConsequenceCard
               consequence={consequence}
-              now={nowTick}
+              now={effectiveNow}
               chosen={chosen}
               t={t}
               weekdayDayMonth={fmt.weekdayDayMonth}
@@ -440,18 +519,43 @@ export function LogAtTimeSheet({
   );
 }
 
-/** The `when` clause shared by `next.moves`/`next.stays` — mirrors `todayModel.ts`'s `formatNextDose`. */
+/**
+ * The `when` clause inside `next.stays`/`next.moves` — mirrors `todayModel.ts`'s
+ * `formatNextDose`.
+ *
+ * TWO PARALLEL KEY FAMILIES, ONE SHAPE. The params are identical and English
+ * renders both families the same way, so this is pure routing — but the
+ * families are not interchangeable. Ukrainian's «залишається» ("stays") takes
+ * the locative «о», while «переноситься» ("moves") takes the allative «на», and
+ * that preposition lives in the FRAGMENT rather than in the `next.*` template
+ * (which is where a "stays at tomorrow at 08:00" double preposition would come
+ * from otherwise). So each consequence branch must ask for its own family:
+ * `stays` → `when.*`, `moves` → `whenMoves.*`. Written as two explicit
+ * branches rather than an interpolated key so the catalogue's literal key
+ * types keep checking every call.
+ */
+type WhenVariant = "when" | "whenMoves";
+
 function whenFor(
   next: Date,
   now: Date,
   t: ReturnType<typeof useTranslator>["t"],
   weekdayDayMonth: (d: Date) => string,
+  variant: WhenVariant,
 ): string {
   const today = localDayKey(now);
   const day = localDayKey(next);
   const time = formatHHMM(next);
-  if (day === today) return t("today.logAtTime.when.today", { time });
-  if (day === addLocalDays(today, 1)) return t("today.logAtTime.when.tomorrow", { time });
+  const isToday = day === today;
+  const isTomorrow = day === addLocalDays(today, 1);
+
+  if (variant === "whenMoves") {
+    if (isToday) return t("today.logAtTime.whenMoves.today", { time });
+    if (isTomorrow) return t("today.logAtTime.whenMoves.tomorrow", { time });
+    return t("today.logAtTime.whenMoves.onDate", { date: weekdayDayMonth(next), time });
+  }
+  if (isToday) return t("today.logAtTime.when.today", { time });
+  if (isTomorrow) return t("today.logAtTime.when.tomorrow", { time });
   return t("today.logAtTime.when.onDate", { date: weekdayDayMonth(next), time });
 }
 
@@ -487,7 +591,7 @@ function ConsequenceCard(props: {
   }
 
   if (consequence.kind === "moves") {
-    const when = whenFor(consequence.next, nowVal, t, weekdayDayMonth);
+    const when = whenFor(consequence.next, nowVal, t, weekdayDayMonth, "whenMoves");
     // `deltaMin === 0` is the model's "no planned time to compare against"
     // sentinel (an unanchored chain) — render the title only, per
     // `logAtTimeModel.ts`'s own comment on `consequenceFor`.
@@ -529,7 +633,7 @@ function ConsequenceCard(props: {
   }
 
   // "stays"
-  const when = whenFor(consequence.next, nowVal, t, weekdayDayMonth);
+  const when = whenFor(consequence.next, nowVal, t, weekdayDayMonth, "when");
   const late =
     consequence.lateMin === null
       ? null

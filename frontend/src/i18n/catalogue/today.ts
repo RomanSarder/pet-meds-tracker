@@ -127,12 +127,38 @@ export interface TodayMessages {
   "today.logAtTime.helper.dayCheck": (p: { hours: number }) => string;
   /** Default helper line: the entry range is midnight-today onward. */
   "today.logAtTime.helper.range": () => string;
-  /** Just the chosen time — composed into `next.moves` / `next.stays`. */
+  /**
+   * Just the chosen time — composed into `next.stays` in both languages.
+   * `next.moves` does NOT use these: «переноситися» ("moves") takes a
+   * different preposition than «залишається» ("stays") does from the same
+   * time fragment, so it draws on the parallel `whenMoves.*` below instead
+   * (see that key's comment).
+   *
+   * English puts the time first and the day qualifier after ("08:00
+   * tomorrow", "14:30 on Sat 15 Aug") rather than "tomorrow at"/"on … at":
+   * `next.*` already supplies its own trailing "at"/"to", and a second
+   * preposition inside the fragment doubled up into "stays at tomorrow at
+   * 08:00" — not English. Putting the day qualifier after the time means
+   * only one preposition ever appears, from `next.*`, no matter which
+   * variant fills `when`.
+   */
   "today.logAtTime.when.today": (p: { time: string }) => string;
   "today.logAtTime.when.tomorrow": (p: { time: string }) => string;
   /** `date` is already localized by `f.weekdayDayMonth`. */
   "today.logAtTime.when.onDate": (p: { date: string; time: string }) => string;
-  /** `fromLastDose` consequence headline; `when` is a rendered `when.*` value. */
+  /**
+   * The `when.*` fragment, but for `next.moves` specifically. English's
+   * "to" already lives in the `next.*` template and the fragment itself
+   * needs no preposition (same time-first structure as `when.*` above), so
+   * these read identically to `when.*` in English — but Ukrainian's
+   * «переноситися» takes the allative "на", not the punctual-locative "о"
+   * that «залишається» (`when.*`) takes, so the two verbs need their own
+   * fragments even though they share one time value.
+   */
+  "today.logAtTime.whenMoves.today": (p: { time: string }) => string;
+  "today.logAtTime.whenMoves.tomorrow": (p: { time: string }) => string;
+  "today.logAtTime.whenMoves.onDate": (p: { date: string; time: string }) => string;
+  /** `fromLastDose` consequence headline; `when` is a rendered `whenMoves.*` value. */
   "today.logAtTime.next.moves": (p: { when: string }) => string;
   /** `fromLastDose` chain explanation, entered time later than planned. */
   "today.logAtTime.next.movesDetailLater": (p: { delta: string }) => string;
@@ -250,9 +276,16 @@ export const enToday = (f: Formatters): TodayMessages => ({
     `That's more than ${p.hours} h before the scheduled time — is this today's dose?`,
   "today.logAtTime.helper.range": () =>
     "Anything from midnight today. Earlier doses are added from history.",
+  // Time first, day qualifier after — "08:00 tomorrow" / "14:30 on Sat 15
+  // Aug" — so `next.*`'s own trailing "at"/"to" is the only preposition;
+  // "stays at tomorrow at 08:00" was the double-preposition bug this avoids.
   "today.logAtTime.when.today": (p) => p.time,
-  "today.logAtTime.when.tomorrow": (p) => `tomorrow at ${p.time}`,
-  "today.logAtTime.when.onDate": (p) => `${p.date} at ${p.time}`,
+  "today.logAtTime.when.tomorrow": (p) => `${p.time} tomorrow`,
+  "today.logAtTime.when.onDate": (p) => `${p.time} on ${p.date}`,
+  // No separate preposition needed in English — identical to `when.*`.
+  "today.logAtTime.whenMoves.today": (p) => p.time,
+  "today.logAtTime.whenMoves.tomorrow": (p) => `${p.time} tomorrow`,
+  "today.logAtTime.whenMoves.onDate": (p) => `${p.time} on ${p.date}`,
   "today.logAtTime.next.moves": (p) => `Next dose moves to ${p.when}`,
   "today.logAtTime.next.movesDetailLater": (p) =>
     `This course counts from the last dose, so the whole chain follows the time you enter — ${p.delta} later than planned.`,
@@ -372,13 +405,22 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.logAtTime.helper.range": () =>
     "Будь-який час від опівночі сьогодні. Раніші дози додаються через історію.",
   // Bare EN time reads fine after "to"/"at"; Ukrainian needs its own
-  // preposition here so the fragment composes into `next.moves`/`next.stays`
-  // exactly the way `today.nextDose.today` already does in this file.
+  // preposition here too — but only for `next.stays` (`залишається`), which
+  // takes the punctual-locative "о" the same way `today.nextDose.today`
+  // does elsewhere in this file. `next.moves` (`переноситься`) is a verb of
+  // relocation and idiomatically takes the allative "на" instead — a
+  // different grammatical relationship, not a mirror of this one — so it
+  // draws on `whenMoves.*` below rather than these.
   "today.logAtTime.when.today": (p) => `о ${p.time}`,
   "today.logAtTime.when.tomorrow": (p) => `завтра о ${p.time}`,
   "today.logAtTime.when.onDate": (p) => `${p.date} о ${p.time}`,
-  // Mirrors `today.nextDose.*`: the verb carries no preposition of its own,
-  // so it composes with all three `when.*` fragments above.
+  // «переноситися» ("moves") takes the allative "на", not the "о" `when.*`
+  // supplies for «залишається» ("stays") — "на завтра о 14:30" is the
+  // idiomatic form, so "на" leads and the invariant "о" before a bare time
+  // stays put when a date/weekday word already precedes it.
+  "today.logAtTime.whenMoves.today": (p) => `на ${p.time}`,
+  "today.logAtTime.whenMoves.tomorrow": (p) => `на завтра о ${p.time}`,
+  "today.logAtTime.whenMoves.onDate": (p) => `на ${p.date} о ${p.time}`,
   "today.logAtTime.next.moves": (p) => `Наступна доза переноситься ${p.when}`,
   "today.logAtTime.next.movesDetailLater": (p) =>
     `Цей курс відлічується від останньої дози, тож увесь ланцюжок зсувається за введеним часом — на ${p.delta} пізніше за план.`,
