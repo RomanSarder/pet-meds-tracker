@@ -184,7 +184,16 @@ export function SettingsPage() {
               <Button
                 type="button"
                 variant="secondary"
-                style={{ flex: 1 }}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  whiteSpace: "normal",
+                  height: "auto",
+                  minHeight: 44,
+                  lineHeight: 1.25,
+                  padding: "10px 12px",
+                  textAlign: "center",
+                }}
                 onClick={handleExport}
               >
                 {t("settings.exportJson")}
@@ -192,7 +201,16 @@ export function SettingsPage() {
               <Button
                 type="button"
                 variant="secondary"
-                style={{ flex: 1 }}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  whiteSpace: "normal",
+                  height: "auto",
+                  minHeight: 44,
+                  lineHeight: 1.25,
+                  padding: "10px 12px",
+                  textAlign: "center",
+                }}
                 onClick={() => fileInputRef.current?.click()}
               >
                 {t("settings.importJson")}
@@ -226,7 +244,16 @@ export function SettingsPage() {
                     type="button"
                     variant="danger"
                     size="sm"
-                    style={{ flex: 1 }}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      whiteSpace: "normal",
+                      height: "auto",
+                      minHeight: 36,
+                      lineHeight: 1.2,
+                      padding: "8px 10px",
+                      textAlign: "center",
+                    }}
                     onClick={() => handleImport("replace")}
                   >
                     {t("settings.replaceEverything")}
@@ -235,7 +262,16 @@ export function SettingsPage() {
                     type="button"
                     variant="secondary"
                     size="sm"
-                    style={{ flex: 1 }}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      whiteSpace: "normal",
+                      height: "auto",
+                      minHeight: 36,
+                      lineHeight: 1.2,
+                      padding: "8px 10px",
+                      textAlign: "center",
+                    }}
                     onClick={() => handleImport("merge")}
                   >
                     {t("settings.mergeKeepNewest")}

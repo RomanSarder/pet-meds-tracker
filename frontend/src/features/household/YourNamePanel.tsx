@@ -201,17 +201,21 @@ function YourNameForm({ self, onClose }: YourNamePanelProps & { self: User }) {
                 <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 2 }}>
                   {t("household.yourName.previewStatus")}
                 </div>
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 600,
-                  color: "var(--ink-3)",
-                  whiteSpace: "nowrap",
-                  paddingTop: 2,
-                }}
-              >
-                {t("household.yourName.byName", { name: previewName })}
+                {/* Attribution lives in the same flexible column as the title, on its
+                    own line, rather than beside it — a member name is arbitrary-length
+                    user data, and squeezing it into the row starved the title's width
+                    down to a character-by-character wrap. Wrapping here instead costs
+                    only vertical space, which this column has. */}
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--ink-3)",
+                    marginTop: 2,
+                  }}
+                >
+                  {t("household.yourName.byName", { name: previewName })}
+                </div>
               </div>
             </div>
           </div>
