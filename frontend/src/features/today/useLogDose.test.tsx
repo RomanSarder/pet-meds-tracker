@@ -252,13 +252,18 @@ describe("useLogDose", () => {
     expect(await repo.listStockAdjustments()).toEqual(stockBefore);
   });
 
-  it("restores the pre-log snapshot when the write fails", async () => {
+  // SPEC §5's duplicate-toast wording (who logged it, when, given-vs-skipped)
+  // has its own dedicated file: `useLogDose.duplicateToast.test.tsx`.
+
+  it("restores the pre-log snapshot and shows a generic toast when the write fails", async () => {
     const { repo, vars } = await seed();
 
     let releaseWrite!: () => void;
     const writeGate = new Promise<void>((resolve) => {
       releaseWrite = resolve;
     });
+    // An ordinary Error, not `DuplicateDoseError`/`RetractWindowExpiredError`
+    // — the unnamed-error path both those named ones fall through to.
     repo.logDose = async () => {
       await writeGate;
       throw new Error("write failed");
@@ -301,7 +306,13 @@ describe("useLogDose", () => {
     expect(restored?.occurrences).toEqual(previous?.occurrences);
     expect(restored?.occurrences.every((o) => o.event === null)).toBe(true);
     expect(await realListDoseEvents({})).toEqual(eventsBefore);
-    expect(shown.toasts).toHaveLength(0);
+
+    // ANY mutation failure now surfaces a message rather than nothing — a
+    // plain factual toast, with no Undo action to offer.
+    const toast = await screen.findByRole("status");
+    expect(toast).toHaveTextContent("Could not log the dose");
+    expect(within(toast).queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(shown.toasts).toHaveLength(1);
 
     // Let the blocked refetch drain so nothing is left in flight at teardown.
     releaseReads();

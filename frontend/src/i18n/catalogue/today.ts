@@ -105,6 +105,18 @@ export interface TodayMessages {
   "today.toast.skipped": (p: { medicationName: string }) => string;
   "today.undo": () => string;
   "today.undo.tooLate": () => string;
+  /**
+   * SPEC §5's dedup rule: a second Give/Skip within the grace window is
+   * rejected client-side rather than silently dropped. `name` is already
+   * resolved through `displayNameFor` (never an email — SPEC §12) and `time`
+   * through `formatHHMM` — both interpolated verbatim, never declined.
+   * "Already given by Marta at 07:12" is the exact SPEC §5 copy.
+   */
+  "today.toast.duplicateGiven": (p: { name: string; time: string }) => string;
+  /** Same rule, worded accurately when the conflicting event was a skip, not a give. */
+  "today.toast.duplicateSkipped": (p: { name: string; time: string }) => string;
+  /** Any other `logDose` failure that isn't the duplicate guard — a plain factual toast rather than silence. */
+  "today.toast.logFailed": () => string;
 }
 
 export const enToday = (f: Formatters): TodayMessages => ({
@@ -174,6 +186,9 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.toast.skipped": (p) => `${p.medicationName} skipped`,
   "today.undo": () => "Undo",
   "today.undo.tooLate": () => "Too late to undo",
+  "today.toast.duplicateGiven": (p) => `Already given by ${p.name} at ${p.time}`,
+  "today.toast.duplicateSkipped": (p) => `Already skipped by ${p.name} at ${p.time}`,
+  "today.toast.logFailed": () => "Could not log the dose",
 });
 
 export const ukToday = (f: Formatters): TodayMessages => ({
@@ -260,4 +275,9 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.toast.skipped": (p) => `${p.medicationName} пропущено`,
   "today.undo": () => "Скасувати",
   "today.undo.tooLate": () => "Запізно скасовувати",
+  // `name` stays nominative and undeclined — it is DATA (SPEC §10a), the same
+  // rule `today.comingUp.*` follows for pet/medication names.
+  "today.toast.duplicateGiven": (p) => `Вже дано: ${p.name}, о ${p.time}`,
+  "today.toast.duplicateSkipped": (p) => `Вже пропущено: ${p.name}, о ${p.time}`,
+  "today.toast.logFailed": () => "Не вдалося записати дозу",
 });

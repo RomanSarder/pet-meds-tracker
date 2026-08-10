@@ -18,8 +18,9 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type { DoseEvent, IsoDateTime, LocalDate } from "@/domain";
-import { UNDO_WINDOW_MS, now, occurrenceKeyFor, qk } from "@/domain";
-import { getRepo, RetractWindowExpiredError } from "@/data";
+import { UNDO_WINDOW_MS, displayNameFor, formatHHMM, now, occurrenceKeyFor, qk } from "@/domain";
+import { DuplicateDoseError, getRepo, RetractWindowExpiredError } from "@/data";
+import { useMembers } from "@/features/household/hooks";
 import { useToast } from "@/app/Toast";
 import { useT } from "@/i18n";
 import type { TodaySnapshot } from "./types";
@@ -114,6 +115,10 @@ export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, 
   const { show } = useToast();
   const t = useT();
   const undo = useUndoDose(day);
+  // The same household-members hook `HouseholdPage`/`SettingsPage` already
+  // read through — reused here rather than a new query, so there is exactly
+  // one way a `DuplicateDoseError`'s `actorId` becomes a name.
+  const membersQuery = useMembers();
 
   return useMutation<DoseEvent, Error, LogDoseVars, LogDoseContext>({
     mutationFn: (vars) =>
@@ -148,10 +153,32 @@ export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, 
       return { previous };
     },
 
-    onError: (_error, _vars, context) => {
+    onError: (error, _vars, context) => {
       if (context?.previous !== undefined) {
         queryClient.setQueryData<TodaySnapshot>(qk.today(day), context.previous);
       }
+      // SPEC §5: "the second log is rejected client-side with 'Already given
+      // by Marta at 07:12'" — a named error, not a message match, so the
+      // copy is composed from the fields `DuplicateDoseError` carries rather
+      // than parsed out of its (English, developer-facing) `.message`. Never
+      // `error.actorId`'s raw id and never an email (SPEC §12): the name
+      // always goes through `displayNameFor`, which already falls back to
+      // "Someone" for an id this device has no member row for.
+      if (error instanceof DuplicateDoseError) {
+        const name = displayNameFor(error.actorId, membersQuery.data ?? []);
+        const time = formatHHMM(new Date(error.givenAt));
+        show({
+          message:
+            error.status === "skipped"
+              ? t("today.toast.duplicateSkipped", { name, time })
+              : t("today.toast.duplicateGiven", { name, time }),
+        });
+        return;
+      }
+      // Mirrors `useUndoDose` above: a named error gets specific copy, and
+      // anything else still gets a plain factual toast rather than the
+      // silence this hook used to fall back to.
+      show({ message: t("today.toast.logFailed") });
     },
 
     onSuccess: (event, vars) => {

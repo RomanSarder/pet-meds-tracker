@@ -70,6 +70,8 @@ const AT_0800 = "2026-08-08T07:00:00.000Z";
 const AT_0900 = "2026-08-08T08:00:00.000Z";
 /** 07:00 BST today — the Saturday Ivermectin dose the fixtures already logged. */
 const AT_0700 = "2026-08-08T06:00:00.000Z";
+/** 30 minutes before `FIXTURE_NOW` (07:00 UTC = 08:00 BST) — inside the 60-minute fixedTimes grace window. */
+const CONFLICTING_GIVEN_AT = "2026-08-08T06:30:00.000Z";
 
 // --- household helpers -----------------------------------------------------
 // Everything is looked up by shape (pet name, medication name, course status)
@@ -108,6 +110,48 @@ interface Household {
 function household(): Household {
   const data = cloneFixtures();
   return { data, repo: createMemoryRepo(data) };
+}
+
+/** The fixtures' second household member — picked by name, not by a hard-coded id. */
+function martaOf(data: FixtureData): { id: string } {
+  const marta = data.users.find((u) => u.displayName === "Marta");
+  if (!marta) throw new Error("fixture drift: no Marta member");
+  return marta;
+}
+
+/**
+ * Inserts a live `DoseEvent` for `course`, attributed to someone other than
+ * the signed-in device, without going through `logDose` — which always
+ * stamps THIS device's own `currentActorId()` and could never produce an
+ * event Marta logged. `applyRemoteChanges` is the repo's own ledger-insert
+ * path (what W9 sync uses), so this is a real row `logDose`'s dedup guard
+ * will see, not a hand-rolled test-only shortcut.
+ */
+async function seedConflictingEvent(
+  repo: Repo,
+  course: Course,
+  opts: { actorId: string; status: "given" | "skipped"; givenAt: string },
+): Promise<void> {
+  await repo.applyRemoteChanges({
+    doseEvents: [
+      {
+        id: `conflict-${opts.status}`,
+        courseId: course.id,
+        scheduledFor: opts.givenAt,
+        status: opts.status,
+        loggedAt: opts.givenAt,
+        givenAt: opts.givenAt,
+        amount: course.doseAmount,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(course.id, opts.givenAt),
+        supersedesId: null,
+        actorId: opts.actorId,
+        createdAt: opts.givenAt,
+        updatedAt: opts.givenAt,
+        deletedAt: null,
+      },
+    ],
+  });
 }
 
 /**
@@ -339,6 +383,74 @@ describe("TodayPage", () => {
     });
 
     expect(pathname()).toBe(before);
+  });
+
+  it("logs a not-yet-due (later) dose normally when nothing conflicts", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+
+    const toast = await screen.findByRole("status");
+    expect(toast).toHaveTextContent("Metacam logged");
+    expect(within(toast).getByRole("button", { name: "Undo" })).toBeInTheDocument();
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+    const created = newEvents(before, await repo.listDoseEvents({}));
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("given");
+    // The injected clock, not a wall-clock read (SPEC §9) — Give logs "now".
+    expect(created[0].givenAt).toBe(FIXTURE_NOW);
+
+    expect(pathname()).toBe("/today");
+  });
+
+  // SPEC §5: "Two people logging the same dose within the grace window
+  // produce one DoseEvent; the second log is rejected client-side with
+  // 'Already given by Marta at 07:12'." This is the exact repro from the
+  // bug report: a `later` dose's Give must stay actionable and must not
+  // silently no-op.
+  it("rejects a duplicate Give on a later dose, naming who logged it and when, and never leaves Today", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+
+    // 06:30 UTC = 07:30 local (Europe/London, BST).
+    expect(await screen.findByText("Already given by Marta at 07:30")).toBeInTheDocument();
+
+    // Rejected, not silently dropped: no second event, the row rolls back to
+    // its actionable `later` presentation, and the tap never left Today.
+    expect(await repo.listDoseEvents({})).toEqual(before);
+    expect(within(card).getByRole("button", { name: "Give" })).toBeInTheDocument();
+    expect(pathname()).toBe("/today");
   });
 
   it("leaves dose history and stock exactly as they were after log-then-undo", async () => {
