@@ -21,7 +21,7 @@
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor as rtlWaitFor } from "@testing-library/react";
-import { renderWithProviders } from "@/test/renderWithProviders";
+import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import { displayNameFor, newId, occurrenceKeyFor } from "@/domain";
 import type { DoseEvent, Household, User } from "@/domain";
@@ -32,6 +32,7 @@ import { YourNamePanel } from "./YourNamePanel";
 import { FirstRunPage } from "@/features/onboarding/FirstRunPage";
 import { PetsPage } from "@/features/pets/PetsPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { SignInPage } from "@/auth/SignInPage";
 
 vi.mock("@/shared/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api")>()),
@@ -201,32 +202,52 @@ function sweepRepo() {
 // line here: a render thunk plus a readiness check that proves the
 // member/self data (the only place an email could leak from) has loaded
 // before the assertion runs.
+//
+// SCOPE, STATED HONESTLY: this list is the sweep's whole coverage. It does
+// NOT include `auth/SignInPage.tsx`, which has a known, pre-existing SPEC
+// §12 violation (its "check your inbox" state echoes the submitted email
+// address verbatim — see the `sentTo` span in that file, and the code
+// comment sitting right next to it). That screen predates this sweep and
+// predates this localization slice; fixing it is a product decision, not a
+// translation change, so it is deliberately left both unfixed and OUT of
+// `SWEPT_SCREENS` rather than silently "passing" a sweep that never looked
+// at it. See the dedicated `describe` block below for the honest pin.
 const SWEPT_SCREENS: Array<{
   name: string;
   render: () => ReactElement;
   waitForReady: () => Promise<unknown>;
+  /** Same screen, same readiness proof, read in Ukrainian instead. */
+  waitForReadyUk: () => Promise<unknown>;
 }> = [
   {
     name: "HouseholdPage",
     render: () => <HouseholdPage />,
     waitForReady: () => screen.findByText("Marta"),
+    // "Marta" is DATA (a display name) — identical in both languages, so the
+    // same readiness text still proves the Ukrainian render is ready.
+    waitForReadyUk: () => screen.findByText("Marta"),
   },
   {
     name: "JoinHouseholdPage",
     render: () => <JoinHouseholdPage />,
     waitForReady: () =>
       waitFor(() => expect(screen.getByRole("textbox", { name: "Your name" })).toHaveValue("Roman")),
+    waitForReadyUk: () =>
+      waitFor(() => expect(screen.getByRole("textbox", { name: "Ваше ім'я" })).toHaveValue("Roman")),
   },
   {
     name: "FirstRunPage",
     render: () => <FirstRunPage />,
     waitForReady: () =>
       waitFor(() => expect(screen.getByRole("textbox", { name: "Your name" })).toHaveValue("Roman")),
+    waitForReadyUk: () =>
+      waitFor(() => expect(screen.getByRole("textbox", { name: "Ваше ім'я" })).toHaveValue("Roman")),
   },
   {
     name: "PetsPage",
     render: () => <PetsPage />,
     waitForReady: () => screen.findByText("Household · 2 people"),
+    waitForReadyUk: () => screen.findByText("Домогосподарство · 2 особи"),
   },
   // Added after a review-lens pass found this screen rendering `user.email` on
   // its "Signed in" card. SettingsPage predates SPEC §12 — it is exactly the
@@ -236,6 +257,7 @@ const SWEPT_SCREENS: Array<{
     name: "SettingsPage",
     render: () => <SettingsPage />,
     waitForReady: () => screen.findByText("Signed in as Roman"),
+    waitForReadyUk: () => screen.findByText("Увійшли як Roman"),
   },
 ];
 
@@ -248,6 +270,23 @@ describe("SPEC §12 — no email address is rendered anywhere in the UI", () => 
 
     expect(container.textContent ?? "").not.toMatch(EMAIL_REGEX);
   });
+
+  // The same sweep, in Ukrainian — SPEC §12 makes no exception for the
+  // default language, and Ukrainian is the default (SPEC §10a), so the
+  // no-email rule is at least as important to prove there. A locale bug that
+  // routed `User.email` through a Ukrainian-only code path would slip past
+  // an English-only sweep.
+  it.each(SWEPT_SCREENS)(
+    "$name renders no email address anywhere, in Ukrainian",
+    async ({ render, waitForReadyUk }) => {
+      const repo = sweepRepo();
+      const { container } = renderWithProviders(render(), { repo, locale: "uk" });
+
+      await waitForReadyUk();
+
+      expect(container.textContent ?? "").not.toMatch(EMAIL_REGEX);
+    },
+  );
 
   // Positive control: proves the regex above actually matches a rendered
   // address, so a bug that made every screen above render literally nothing
@@ -273,5 +312,43 @@ describe("SPEC §12 — no email address is rendered anywhere in the UI", () => 
         "Signed in as roman@example.com. Your email is never shown to anyone in the household.",
       ),
     ).toBeInTheDocument();
+  });
+});
+
+// SPEC §12 SCOPE GAP, PINNED HONESTLY (not fixed — see I18N-DESIGN.md's
+// wave brief and `auth/SignInPage.tsx`'s own code comment next to `sentTo`).
+//
+// `SWEPT_SCREENS` above does not include `SignInPage`. This block exists so
+// that absence reads as a documented, deliberate gap rather than an
+// oversight: it renders the real screen, drives it to the state where the
+// violation fires, and asserts the CURRENT (wrong) behaviour — the
+// submitted email echoed back verbatim — so a future fix shows up here as a
+// welcome, obvious test failure, not a silent behaviour change nobody
+// notices. Translating the surrounding copy is this wave's job; deciding
+// whether to stop showing the address is a product call this wave does not
+// make.
+describe("SPEC §12 — known scope gap: SignInPage is NOT covered by the sweep above", () => {
+  it("SignInPage's 'check your inbox' state renders the submitted address verbatim (pre-existing, not fixed by this wave)", async () => {
+    const user = userEvent.setup();
+    const repo = sweepRepo();
+    renderWithProviders(<SignInPage />, { repo });
+
+    const emailField = await screen.findByLabelText("Email address");
+    await user.type(emailField, "clover.mum@example.com");
+    await user.click(screen.getByRole("button", { name: "Send link" }));
+
+    expect(await screen.findByText(/clover\.mum@example\.com/)).toBeInTheDocument();
+  });
+
+  it("the same violation is present in Ukrainian too — translating the copy does not change the scope gap", async () => {
+    const user = userEvent.setup();
+    const repo = sweepRepo();
+    renderWithProviders(<SignInPage />, { repo, locale: "uk" });
+
+    const emailField = await screen.findByLabelText("Електронна пошта");
+    await user.type(emailField, "clover.mum@example.com");
+    await user.click(screen.getByRole("button", { name: "Надіслати посилання" }));
+
+    expect(await screen.findByText(/clover\.mum@example\.com/)).toBeInTheDocument();
   });
 });

@@ -143,4 +143,39 @@ describe("engine purity — module graph", () => {
     }
     expect(violations, violations.join("\n")).toEqual([]);
   });
+
+  // I18N-DESIGN.md §3.4: "the engine stays pure and language-agnostic" —
+  // under localization it must return STRUCTURE (ScheduleSegment,
+  // CourseProgress, DetailClause, …), never a finished English/Ukrainian
+  // sentence. Comments are allowed to contain example prose (several engine
+  // files document their segment shapes with an English example inline), so
+  // this strips comments first and only inspects string literals that
+  // survive in actual code. A "prose" literal is approximated as two or more
+  // space-separated alphabetic words inside a string/template literal — every
+  // real code string in this directory today is a short, single-word status
+  // tag ("fixedTimes", "overdue", …) or a clock-time-shaped token, none of
+  // which contain a space before a letter.
+  it("holds no user-facing prose string literal in actual code (comments may still document examples)", () => {
+    const violations: string[] = [];
+    const proseLikeLiteral = /(["'`])((?:\\.|(?!\1)[^\\])*)\1/g;
+    const twoOrMoreWords = /[A-Za-z]+[ \t][A-Za-z]+/;
+    for (const file of engineSourceFiles()) {
+      const raw = readFileSync(file, "utf8");
+      // Strip block comments, then line comments — in that order, so a `//`
+      // inside a `/* … */` block doesn't confuse the line-comment pass.
+      const noBlockComments = raw.replace(/\/\*[\s\S]*?\*\//g, (m) =>
+        m.replace(/[^\n]/g, " "),
+      );
+      const stripped = noBlockComments.replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
+      for (const match of stripped.matchAll(proseLikeLiteral)) {
+        const value = match[2];
+        if (twoOrMoreWords.test(value)) {
+          violations.push(
+            `${path.basename(file)}:${lineAt(stripped, match.index!)}: prose-like string literal "${value}"`,
+          );
+        }
+      }
+    }
+    expect(violations, violations.join("\n")).toEqual([]);
+  });
 });

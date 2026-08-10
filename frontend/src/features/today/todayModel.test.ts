@@ -419,6 +419,28 @@ describe("buildTodayView — Ukrainian", () => {
     expect(greetingFor(new Date(2026, 7, 8, 18, 0), UK)).toBe("Доброго вечора");
   });
 
+  it("also greets before the morning cut and just before the evening cut, in Ukrainian", () => {
+    // Mirrors the English "cuts at 12:00 and 18:00 local" test's four
+    // boundary points, so both languages are pinned against the same clock
+    // arithmetic — a regression that shifted the cut would fail here even if
+    // the English test somehow kept passing.
+    expect(greetingFor(new Date(2026, 7, 8, 17, 59), UK)).toBe("Доброго дня");
+  });
+
+  // The Today row's dose title ("Metacam 0.4 ml") is built by plain string
+  // interpolation in `toDose`, never through the translator — so it must be
+  // byte-identical in both languages. Pinned explicitly here rather than left
+  // to inference, per I18N-DESIGN.md's "dose amounts never localize" rule.
+  it("never localizes the dose amount in the Today row's title, even in Ukrainian", () => {
+    const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(occ.key, "later");
+
+    const dose = groupNamed(buildTodayView(snapshotOf([occ]), NOW, UK), "Clover")
+      .pending[0];
+
+    expect(dose.title).toBe("Metacam 0.4 ml");
+  });
+
   /** Registers `count` `due` occurrences of the same course and builds the view. */
   function subtitleForRemaining(count: number): string {
     const occs = Array.from({ length: count }, (_, i) => {
@@ -435,6 +457,17 @@ describe("buildTodayView — Ukrainian", () => {
     expect(subtitleForRemaining(5)).toBe("сьогодні залишилося 5 доз");
   });
 
+  // n = 21 is the case that catches a naive implementation: Ukrainian's rule
+  // makes 21 take the SAME singular form as 1 ("21 доза", not "21 доз") —
+  // 20 distinct courses is too many to hand-build fixture occurrences for
+  // (`occAt` only has 24 hour slots), so this pins the rule directly through
+  // the catalogue entry `buildTodayView` actually calls (`today.subtitle`),
+  // the same way `i18n/formatters.test.ts` and `HouseholdPage.test.tsx`
+  // already pin their own n=21 cases.
+  it("n = 21 stays singular, never '21 доз' — the same catalogue entry buildTodayView calls", () => {
+    expect(UK.t("today.subtitle", { remaining: 21 })).toBe("сьогодні залишилася 21 доза");
+  });
+
   it("appends the overdue clause in the many form", () => {
     const occs = Array.from({ length: 5 }, (_, i) => {
       const occ = occAt(COURSE_CLOVER_METACAM, `0${i}:00` as LocalTime);
@@ -445,6 +478,42 @@ describe("buildTodayView — Ukrainian", () => {
     expect(buildTodayView(snapshotOf(occs), NOW, UK).subtitle).toBe(
       "сьогодні залишилося 5 доз · 5 прострочених",
     );
+  });
+
+  it("drops the overdue clause in Ukrainian too when M = 0, same as English", () => {
+    const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(occ.key, "later");
+
+    const subtitle = buildTodayView(snapshotOf([occ]), NOW, UK).subtitle;
+
+    expect(subtitle).toBe("сьогодні залишилася 1 доза");
+    expect(subtitle).not.toContain("прострочен");
+  });
+
+  // The overdue banner's own count (`today.banner.overdueCount`), at every
+  // pinned n. Not reachable through `buildTodayView` at n = 21 for the same
+  // reason as the subtitle above, so the high end is pinned directly through
+  // the same catalogue entry the view calls.
+  it("real Ukrainian plural forms for the overdue banner count: n = 1, 2, 5, 21", () => {
+    expect(UK.t("today.banner.overdueCount", { count: 1 })).toBe("1 доза прострочена");
+    expect(UK.t("today.banner.overdueCount", { count: 2 })).toBe("2 дози прострочені");
+    expect(UK.t("today.banner.overdueCount", { count: 5 })).toBe("5 доз прострочено");
+    expect(UK.t("today.banner.overdueCount", { count: 21 })).toBe("21 доза прострочена");
+    // English at 1 and 2 alongside, so a regression in either language is caught.
+    expect(EN.t("today.banner.overdueCount", { count: 1 })).toBe("1 dose overdue");
+    expect(EN.t("today.banner.overdueCount", { count: 2 })).toBe("2 doses overdue");
+  });
+
+  // "in N days" (the comingUp row's `today.when.inDays`). The engine only
+  // ever asks for this inside a 7-day lookahead window (COMING_UP_DAYS), so
+  // 5 is the largest value `buildTodayView` can produce it at in practice —
+  // proven below via `comingUp`. n = 21 is still a real input the catalogue
+  // entry must render correctly (a longer lookahead window is a config
+  // change away, not a code change), so it is pinned directly too.
+  it("real Ukrainian plural forms for 'in N days': n = 1, 2, 5 (via comingUp) and 21 (direct)", () => {
+    expect(UK.t("today.when.inDays", { days: 2 })).toBe("через 2 дні");
+    expect(UK.t("today.when.inDays", { days: 5 })).toBe("через 5 днів");
+    expect(UK.t("today.when.inDays", { days: 21 })).toBe("через 21 день");
   });
 
   it("localizes the card status, the counter and the empty state's date", () => {

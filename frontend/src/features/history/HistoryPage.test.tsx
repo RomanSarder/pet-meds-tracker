@@ -679,4 +679,47 @@ describe("HistoryView", () => {
     expect(screen.queryByText("History")).not.toBeInTheDocument();
     expect(screen.queryByText(/active courses?$/)).not.toBeInTheDocument();
   });
+
+  // Deliberate Ukrainian coverage of the two counts this screen composes:
+  // `history.subtitle`'s course clause (rendered above at n = 1 through a
+  // real screen) and `history.eventCount`'s per-day-group trailing count
+  // (not yet exercised in Ukrainian at all). n = 2, 5 and 21 are pinned
+  // directly through the exact catalogue entries `HistoryPage.tsx` calls —
+  // seeding 21 distinct courses or 21 events in one day group would test
+  // fixture-building, not the plural rule the n = 1 render already proves is
+  // wired correctly.
+  it("history.subtitle: real Ukrainian one/few/many forms at n = 1, 2, 5, 21", () => {
+    const uk = createTranslator("uk");
+    const en = createTranslator("en");
+    expect(uk.t("history.subtitle", { species: "Кріль", courses: 1 })).toBe(
+      "Кріль · 1 активний курс",
+    );
+    expect(uk.t("history.subtitle", { species: "Кріль", courses: 2 })).toBe(
+      "Кріль · 2 активні курси",
+    );
+    expect(uk.t("history.subtitle", { species: "Кріль", courses: 5 })).toBe(
+      "Кріль · 5 активних курсів",
+    );
+    expect(uk.t("history.subtitle", { species: "Кріль", courses: 21 })).toBe(
+      "Кріль · 21 активний курс",
+    );
+    // English at 1 and 2 alongside, so a regression in either language is caught.
+    expect(en.t("history.subtitle", { species: "Rabbit", courses: 1 })).toBe(
+      "Rabbit · 1 active course",
+    );
+    expect(en.t("history.subtitle", { species: "Rabbit", courses: 2 })).toBe(
+      "Rabbit · 2 active courses",
+    );
+  });
+
+  it("history.eventCount: real Ukrainian one/few/many forms at n = 1, 2, 5, 21", () => {
+    const uk = createTranslator("uk");
+    const en = createTranslator("en");
+    expect(uk.t("history.eventCount", { count: 1 })).toBe("1 подія");
+    expect(uk.t("history.eventCount", { count: 2 })).toBe("2 події");
+    expect(uk.t("history.eventCount", { count: 5 })).toBe("5 подій");
+    expect(uk.t("history.eventCount", { count: 21 })).toBe("21 подія");
+    expect(en.t("history.eventCount", { count: 1 })).toBe("1 event");
+    expect(en.t("history.eventCount", { count: 2 })).toBe("2 events");
+  });
 });

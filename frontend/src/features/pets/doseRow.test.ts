@@ -110,3 +110,58 @@ describe("doseRowPropsFor", () => {
     expect(props.medication).toBe("Ivermectin 2 drops");
   });
 });
+
+// Deliberate Ukrainian coverage of the dose states SPEC pins by name:
+// "Skipped", "Overdue" (via ScheduleRow.tsx, not this mapper) and
+// "Not started" both resolve through this file's own catalogue lookups.
+describe("doseRowPropsFor — Ukrainian", () => {
+  const ukTr = createTranslator("uk");
+
+  it("skipped renders the given variant with the literal 'Пропущено' time, regardless of dueAt", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence(),
+      state: "skipped",
+      medicationName: "Metacam",
+      instructions: null,
+      progress: "день 3 з 7",
+      tr: ukTr,
+    });
+    expect(props).toMatchObject({ state: "given", time: "Пропущено" });
+  });
+
+  it("notStarted with dueAt: null renders as later with the literal 'Не розпочато'", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence({ dueAt: null }),
+      state: "notStarted",
+      medicationName: "Metoclopramide",
+      instructions: null,
+      progress: "триває",
+      tr: ukTr,
+    });
+    expect(props).toMatchObject({ state: "later", time: "Не розпочато" });
+  });
+
+  it("keeps a dosed medication label's amount unlocalized (0.4, never 0,4) even while every word around it is Ukrainian", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence(),
+      state: "due",
+      medicationName: "Metacam",
+      instructions: null,
+      progress: "день 3 з 7",
+      tr: ukTr,
+    });
+    expect(props.medication).toBe("Metacam 0.4 ml");
+  });
+
+  it("countable-unit amounts render verbatim in Ukrainian, with no English '+s' suffix", () => {
+    const props = doseRowPropsFor({
+      occurrence: baseOccurrence({ doseAmount: 2, doseUnit: "drop" }),
+      state: "later",
+      medicationName: "Ivermectin",
+      instructions: null,
+      progress: "день 1",
+      tr: ukTr,
+    });
+    expect(props.medication).toBe("Ivermectin 2 drop");
+  });
+});

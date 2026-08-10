@@ -6,7 +6,11 @@ import { screen, waitFor } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { Course, Medication, Pet } from "@/domain";
+import { createTranslator } from "@/i18n";
 import { SuppliesPage } from "./SuppliesPage";
+
+const ukTr = createTranslator("uk");
+const enTr = createTranslator("en");
 
 // The router underlying `renderWithProviders` resolves its first match
 // asynchronously (see `renderWithProviders.test.tsx`), so the first query in
@@ -222,6 +226,38 @@ describe("SuppliesPage", () => {
     // fixed by routing the count through `tr.fmt.plural` (WAVE3-COMMON.md).
     expect(screen.getByRole("button", { name: /Shopping list · 1 item$/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Shopping list · 0 items/ })).not.toBeInTheDocument();
+  });
+
+  // Deliberate Ukrainian coverage of `supplies.shoppingList.countLabel`.
+  // n = 1 and 2 are proven through a real render (the default fixtures carry
+  // enough "Buy now" medications to toggle two distinct items onto the
+  // list); n = 5 and 21 are pinned directly through the same catalogue entry
+  // `SuppliesPage.tsx` calls (`t("supplies.shoppingList.countLabel", { count:
+  // listed.size })`) — building 21 distinct medications just to click "Add
+  // to list" 21 times would test the click handler, not the plural rule,
+  // which is already proven wired by the n = 1/2 render below.
+  it("'Add to list' toggles the bottom bar count in Ukrainian at n = 1 and n = 2", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SuppliesPage />, { repo: createMemoryRepo(), locale: "uk" });
+    await screen.findByText("Купити зараз");
+
+    expect(screen.getByRole("button", { name: /Список покупок · 0 товарів/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Додати Metacam до списку" }));
+    expect(screen.getByRole("button", { name: /Список покупок · 1 товар$/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Додати Metoclopramide до списку" }));
+    expect(screen.getByRole("button", { name: /Список покупок · 2 товари$/ })).toBeInTheDocument();
+  });
+
+  it("supplies.shoppingList.countLabel: real Ukrainian one/few/many forms at n = 1, 2, 5, 21", () => {
+    expect(ukTr.t("supplies.shoppingList.countLabel", { count: 1 })).toBe("Список покупок · 1 товар");
+    expect(ukTr.t("supplies.shoppingList.countLabel", { count: 2 })).toBe("Список покупок · 2 товари");
+    expect(ukTr.t("supplies.shoppingList.countLabel", { count: 5 })).toBe("Список покупок · 5 товарів");
+    expect(ukTr.t("supplies.shoppingList.countLabel", { count: 21 })).toBe("Список покупок · 21 товар");
+    // English at 1 and 2 alongside, so a regression in either language is caught.
+    expect(enTr.t("supplies.shoppingList.countLabel", { count: 1 })).toBe("Shopping list · 1 item");
+    expect(enTr.t("supplies.shoppingList.countLabel", { count: 2 })).toBe("Shopping list · 2 items");
   });
 
   it("opening the shopping list shows the medication name, quantity needed and pet names", async () => {

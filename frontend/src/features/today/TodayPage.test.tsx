@@ -594,6 +594,27 @@ describe("TodayPage", () => {
     expect(screen.getByText("Next dose at 20:00")).toBeInTheDocument();
   });
 
+  // Deliberate Ukrainian coverage of SPEC's exactly-pinned empty-state string
+  // (`today.emptyTitle`), rendered through the real screen rather than the
+  // catalogue directly, so the wiring (not just the translation) is proven.
+  it("shows the Ukrainian empty state when nothing is pending", async () => {
+    const { repo } = household();
+    await register(repo, []);
+    engineStore.nextDue = new Date("2026-08-08T19:00:00.000Z"); // 20:00 BST
+
+    renderWithProviders(
+      <>
+        <TodayPage />
+        <LocationProbe />
+      </>,
+      { repo, route: "/today", locale: "uk" },
+    );
+
+    expect(await screen.findByText("Сьогодні нічого не заплановано.")).toBeInTheDocument();
+    expect(screen.getByText("Наступна доза о 20:00")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing due today.")).not.toBeInTheDocument();
+  });
+
   it("writes an occurrence key that round-trips from the courseId and scheduledFor it logged", async () => {
     const user = userEvent.setup();
     const { data, repo } = household();

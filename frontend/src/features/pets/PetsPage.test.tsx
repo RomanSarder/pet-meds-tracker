@@ -13,6 +13,7 @@ import { ageLabel } from "./age";
 import { PetsPage } from "./PetsPage";
 
 const enTr = createTranslator("en");
+const ukTr = createTranslator("uk");
 
 // The harness's router is a catch-all and does not hand the test its router
 // instance, so the current path is read back out of the tree instead — the
@@ -244,5 +245,64 @@ describe("PetsPage", () => {
     await user.click(screen.getByRole("button", { name: "Household, 2 people" }));
 
     expect(pathname()).toBe("/household");
+  });
+
+  // Deliberate Ukrainian coverage of the three plural counts this screen
+  // composes: the roster subtitle's two clauses (`pets.subtitle.animals`,
+  // `pets.subtitle.activeCourses`) and the Household row's count
+  // (`pets.household.people`). n = 1 and 2 are proven through a real render
+  // (genuine wiring, mirroring the English test above); n = 5 and 21 are
+  // proven directly through the exact catalogue entries `PetsPage.tsx` calls
+  // (`tr.t("pets.subtitle.animals", { count })`, etc.) — the same pattern
+  // `HouseholdPage.test.tsx` already uses for `household.peopleCount`,
+  // because fabricating 5 or 21 distinct pet/course/member fixtures would
+  // test fixture-building, not the plural rule.
+  describe("Ukrainian plural forms", () => {
+    it("renders the roster subtitle in Ukrainian at n = 1 and n = 2 (real render)", async () => {
+      const singular = onePetOneCourseRepo();
+      renderWithProviders(<PetsPage />, { repo: singular, locale: "uk" });
+      expect(await screen.findByText("1 тварина · 1 активний курс")).toBeInTheDocument();
+
+      const plural = twoPetsTwoCoursesRepo();
+      renderWithProviders(<PetsPage />, { repo: plural, locale: "uk" });
+      expect(await screen.findByText("2 тварини · 2 активні курси")).toBeInTheDocument();
+    });
+
+    it("renders the Household row in Ukrainian at n = 1 and n = 2 (real render)", async () => {
+      const onePerson = onePetNoCoursesRepo();
+      renderWithProviders(<PetsPage />, { repo: onePerson, locale: "uk" });
+      expect(await screen.findByText("Домогосподарство · 1 особа")).toBeInTheDocument();
+
+      renderWithProviders(<PetsPage />, { locale: "uk" }); // default fixtures: 2-person household
+      expect(await screen.findByText("Домогосподарство · 2 особи")).toBeInTheDocument();
+    });
+
+    it("pets.subtitle.animals: real Ukrainian one/few/many forms at n = 1, 2, 5, 21", () => {
+      expect(ukTr.t("pets.subtitle.animals", { count: 1 })).toBe("1 тварина");
+      expect(ukTr.t("pets.subtitle.animals", { count: 2 })).toBe("2 тварини");
+      expect(ukTr.t("pets.subtitle.animals", { count: 5 })).toBe("5 тварин");
+      expect(ukTr.t("pets.subtitle.animals", { count: 21 })).toBe("21 тварина");
+      // English at 1 and 2 alongside, so a regression in either language is caught.
+      expect(enTr.t("pets.subtitle.animals", { count: 1 })).toBe("1 animal");
+      expect(enTr.t("pets.subtitle.animals", { count: 2 })).toBe("2 animals");
+    });
+
+    it("pets.subtitle.activeCourses: real Ukrainian one/few/many forms at n = 1, 2, 5, 21", () => {
+      expect(ukTr.t("pets.subtitle.activeCourses", { count: 1 })).toBe("1 активний курс");
+      expect(ukTr.t("pets.subtitle.activeCourses", { count: 2 })).toBe("2 активні курси");
+      expect(ukTr.t("pets.subtitle.activeCourses", { count: 5 })).toBe("5 активних курсів");
+      expect(ukTr.t("pets.subtitle.activeCourses", { count: 21 })).toBe("21 активний курс");
+      expect(enTr.t("pets.subtitle.activeCourses", { count: 1 })).toBe("1 active course");
+      expect(enTr.t("pets.subtitle.activeCourses", { count: 2 })).toBe("2 active courses");
+    });
+
+    it("pets.household.people: real Ukrainian one/few/many forms at n = 1, 2, 5, 21", () => {
+      expect(ukTr.t("pets.household.people", { count: 1 })).toBe("1 особа");
+      expect(ukTr.t("pets.household.people", { count: 2 })).toBe("2 особи");
+      expect(ukTr.t("pets.household.people", { count: 5 })).toBe("5 осіб");
+      expect(ukTr.t("pets.household.people", { count: 21 })).toBe("21 особа");
+      expect(enTr.t("pets.household.people", { count: 1 })).toBe("1 person");
+      expect(enTr.t("pets.household.people", { count: 2 })).toBe("2 people");
+    });
   });
 });

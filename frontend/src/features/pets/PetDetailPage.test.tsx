@@ -206,6 +206,85 @@ describe("PetDetailView", () => {
     expect(within(scheduleCard).getByText("Not started")).toBeInTheDocument();
   });
 
+  // Deliberate Ukrainian coverage of SPEC §4/§9's three dose-state words this
+  // screen renders as literal text (never colour alone): "Прострочено"
+  // (Overdue — via ScheduleRow.tsx's own `pets.schedule.overdue` lookup,
+  // never doseRow.ts), "Пропущено" (Skipped) and "Не розпочато" (Not
+  // started). A lighter fixture than the English six-state test above:
+  // just the three states this wave has not pinned in Ukrainian anywhere
+  // else in the suite.
+  it("renders Overdue, Skipped and Not started as literal Ukrainian words in the read-only Schedule block", async () => {
+    const custom = cloneFixtures();
+    const pet = custom.pets.find((p) => p.name === "Clover")!;
+    const medicationId = custom.medications[0].id;
+
+    function course(id: string, schedule: Course["schedule"]): Course {
+      return {
+        id,
+        petId: pet.id,
+        medicationId,
+        doseAmount: 1,
+        doseUnit: "ml",
+        instructions: null,
+        schedule,
+        startDate: "2026-08-01",
+        endDate: null,
+        status: "active",
+        notes: null,
+        resumedAt: null,
+        createdAt: "2026-08-01T08:00:00.000Z",
+        updatedAt: "2026-08-01T08:00:00.000Z",
+        deletedAt: null,
+      };
+    }
+
+    const skippedCourseId = "test-course-uk-skipped";
+    const overdueCourseId = "test-course-uk-overdue";
+    const notStartedCourseId = "test-course-uk-not-started";
+    const skippedScheduledFor = "2026-08-08T05:30:00.000Z"; // 06:30 BST
+
+    custom.courses = [
+      course(skippedCourseId, { kind: "fixedTimes", times: ["06:30"] }),
+      // 04:00 BST: more than the 60-minute fixedTimes grace window before
+      // FIXTURE_NOW (08:00 BST), with no DoseEvent — "overdue".
+      course(overdueCourseId, { kind: "fixedTimes", times: ["04:00"] }),
+      course(notStartedCourseId, { kind: "fromLastDose", intervalHours: 8 }),
+    ];
+    custom.doseEvents = [
+      ...custom.doseEvents,
+      {
+        id: `test-event-${skippedCourseId}`,
+        courseId: skippedCourseId,
+        scheduledFor: skippedScheduledFor,
+        status: "skipped",
+        loggedAt: skippedScheduledFor,
+        givenAt: skippedScheduledFor,
+        amount: 1,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(skippedCourseId, skippedScheduledFor),
+        supersedesId: null,
+        actorId: "test-actor-id",
+        createdAt: skippedScheduledFor,
+        updatedAt: skippedScheduledFor,
+        deletedAt: null,
+      },
+    ];
+
+    const repo = createMemoryRepo(custom);
+    renderWithProviders(<PetDetailView petId={pet.id} />, { repo, locale: "uk" });
+
+    const scheduleLabel = await screen.findByText("Розклад");
+    const scheduleCard = scheduleLabel.closest("div")!.nextElementSibling as HTMLElement;
+
+    await waitFor(() => expect(within(scheduleCard).getByText("Прострочено")).toBeInTheDocument());
+    expect(within(scheduleCard).getByText("Пропущено")).toBeInTheDocument();
+    expect(within(scheduleCard).getByText("Не розпочато")).toBeInTheDocument();
+    // No English state word left in the block.
+    expect(within(scheduleCard).queryByText("Overdue")).not.toBeInTheDocument();
+    expect(within(scheduleCard).queryByText("Skipped")).not.toBeInTheDocument();
+    expect(within(scheduleCard).queryByText("Not started")).not.toBeInTheDocument();
+  });
+
   it("shows a never-started fromLastDose course as read-only 'Not started' text, with no button of any label", async () => {
     // COURSE_BISCUIT_METOCLOPRAMIDE (fixtures.ts) is fromLastDose with no
     // `given` DoseEvent at all, so `getDoseState` reports "notStarted" for
