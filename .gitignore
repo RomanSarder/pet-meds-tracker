@@ -5,6 +5,8 @@ build/
 .env.*
 !.env.example
 .playwright-mcp/
+test-results/
+playwright-report/
 .claude/testbed-storage-state.*.json
 *.log
 npm-debug.log*
