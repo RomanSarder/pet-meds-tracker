@@ -285,14 +285,39 @@ describe("LogAtTimeSheet", () => {
     expect(screen.getByRole("button", { name: "+ 5 min" })).toBeDisabled();
   });
 
-  it("disables − 5 min once the headline is clamped to midnight", async () => {
-    // now = 00:20 local: the default 30-min-ago seed clamps to the floor.
-    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
-      now: "2026-08-07T23:20:00.000Z",
-    });
+  it("disables − 5 min once the rolling floor catches up with the chosen time", async () => {
+    // The default 30-min-ago seed can no longer reach the floor from a
+    // single `now` choice — the floor is now 24 h back, not local midnight —
+    // so this drives it there the same way the sheet itself would: leaving
+    // the sheet open while `now` advances (SPEC §9), using fake timers so
+    // `useNow`'s poll actually fires. Same technique as the re-clamp test
+    // below.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let iso = "2026-08-08T13:00:00.000Z"; // 14:00 local
+      const advanceable = { now: () => new Date(iso) };
+      setClock(advanceable);
 
-    expect(await headline()).toHaveTextContent("00:00");
-    expect(screen.getByRole("button", { name: "− 5 min" })).toBeDisabled();
+      renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), { now: iso });
+      // `renderWithProviders` installs its own frozen clock immediately
+      // before it renders, so the advanceable one is re-asserted after mount.
+      setClock(advanceable);
+
+      expect(await headline()).toHaveTextContent("13:30");
+      expect(screen.getByRole("button", { name: "− 5 min" })).toBeEnabled();
+
+      await act(async () => {
+        // 23 h 31 min later: one minute past the point the rolling 24 h
+        // floor reaches the chosen 13:30.
+        iso = "2026-08-09T12:31:00.000Z";
+        vi.advanceTimersByTime(30_001);
+      });
+
+      expect(await headline()).toHaveTextContent("13:31");
+      expect(screen.getByRole("button", { name: "− 5 min" })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("disables confirm and turns the headline berry for a future scheduled time, and confirm does nothing", async () => {
@@ -316,7 +341,7 @@ describe("LogAtTimeSheet", () => {
     // range: default 30-min-ago seed, no day-check gap.
     const { unmount } = renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse));
     expect(
-      await screen.findByText("Anything from midnight today. Earlier doses are added from history."),
+      await screen.findByText("Anything from the last 24 h. Earlier doses are added from history."),
     ).toBeInTheDocument();
 
     // futureCap: pin the headline to exactly now.
@@ -507,7 +532,7 @@ describe("LogAtTimeSheet", () => {
     expect(screen.getByRole("button", { name: "15 хв" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 год" })).toBeInTheDocument();
     expect(
-      screen.getByText("Будь-який час від опівночі сьогодні. Раніші дози додаються через історію."),
+      screen.getByText("Будь-який час за останні 24 год. Раніші дози додаються через історію."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Записати о 13:30" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Натомість пропустити цю дозу" })).toBeInTheDocument();
@@ -575,23 +600,27 @@ describe("LogAtTimeSheet", () => {
 
   it("steps up to now without the stepper disabling itself against a stale tick", async () => {
     // The same collision reached through `+ 5 min` landing exactly on now.
-    // 00:03 local, so the 30-min seed clamps to midnight and a single
-    // `+ 5 min` overshoots `now` and clamps back onto it.
+    // The floor no longer works as the anchor here: it is a rolling 24 h
+    // back, never close to `now`, so a single `+ 5 min` step off it can never
+    // overshoot the ceiling. The scheduled row is — it is an arbitrary
+    // instant, not a 5-minute-multiple offset from `now` the way every chip
+    // and stepper value is, so a due time 3 minutes shy of `now` still lands
+    // a `+ 5 min` step past it.
+    const nearNowOccurrence = makeOccurrence(fixedTimesCourse, DAY, at(13, 57));
     const user = userEvent.setup();
-    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
-      now: "2026-08-07T23:03:00.000Z",
-    });
-    await screen.findByRole("dialog");
-    expect(await headline()).toHaveTextContent("00:00");
+    renderSheet(makeDose(nearNowOccurrence), makeContext(fixedTimesCourse));
 
-    setClock(fixedClock("2026-08-07T23:03:20.000Z"));
+    await user.click(await screen.findByRole("button", { name: /At its scheduled time/ }));
+    expect(await headline()).toHaveTextContent("13:57");
+
+    setClock(fixedClock("2026-08-08T13:00:20.000Z")); // now (14:00 local) + 20 s
     await user.click(screen.getByRole("button", { name: "+ 5 min" }));
 
-    // Clamped to the fresh now (00:03:20), which is later than the painted tick.
+    // Clamped to the fresh now (14:00:20), which is later than the painted tick.
     const headlineEl = await headline();
-    expect(headlineEl).toHaveTextContent("00:03");
+    expect(headlineEl).toHaveTextContent("14:00");
     expect(headlineEl).toHaveStyle({ color: "var(--ink-1)" });
-    expect(screen.getByRole("button", { name: "Log at 00:03" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Log at 14:00" })).toBeEnabled();
     // The one thing that MUST still be disabled at the cap.
     expect(screen.getByRole("button", { name: "+ 5 min" })).toBeDisabled();
     // And the helper still explains why (SPEC §6.1a's `chosen >= now` branch).
@@ -664,20 +693,31 @@ describe("LogAtTimeSheet", () => {
     expect(screen.getByRole("dialog").querySelectorAll("[aria-live]")).toHaveLength(1);
   });
 
-  it("withdraws yesterday's scheduled row once the day has rolled over", async () => {
-    // 00:05 on 9 Aug, with an occurrence still filed under 8 Aug: its 08:00
-    // due time is now below the floor, so offering it as a one-tap row would
-    // offer a value `canConfirm` refuses.
+  it("keeps yesterday's scheduled row on offer until a full 24 h have passed, not merely until the day rolls over", async () => {
+    // 07:59:59 on 9 Aug — the day has rolled over twice since the 08:00
+    // occurrence on 8 Aug, but only 23 h 59 min 59 s has elapsed, one second
+    // inside the rolling 24 h floor.
     renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
-      now: "2026-08-08T23:05:00.000Z",
+      now: "2026-08-09T06:59:59.000Z",
     });
 
     await screen.findByRole("dialog");
-    expect(await headline()).toHaveTextContent("00:00");
+    expect(screen.getByRole("button", { name: /At its scheduled time/ })).toBeInTheDocument();
+  });
+
+  it("withdraws yesterday's scheduled row the instant a full 24 h have passed", async () => {
+    // 08:00:01 on 9 Aug — one second past 24 h since the 08:00 occurrence on
+    // 8 Aug: its due time is now below the floor, so offering it as a
+    // one-tap row would offer a value `canConfirm` refuses.
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
+      now: "2026-08-09T07:00:01.000Z",
+    });
+
+    await screen.findByRole("dialog");
     expect(screen.queryByRole("button", { name: /At its scheduled time/ })).not.toBeInTheDocument();
   });
 
-  it("re-clamps a chosen time that midnight has left behind, instead of dead-ending the footer", async () => {
+  it("re-clamps a chosen time the rolling floor has left behind, instead of dead-ending the footer", async () => {
     // Fake timers so `useNow`'s 30 s `setTimeout` actually fires inside this
     // sub-second test — the same pattern (and the same `shouldAdvanceTime`
     // caveat) as `HistoryPage.test.tsx`'s own clock-tick test.
@@ -686,7 +726,7 @@ describe("LogAtTimeSheet", () => {
       // A clock whose `now()` reads a mutable `iso`, so a later mutation is
       // visible to the `now()` call made from inside `useNow`'s already-
       // scheduled timeout.
-      let iso = "2026-08-08T22:50:00.000Z"; // 23:50 local
+      let iso = "2026-08-08T13:00:00.000Z"; // 14:00 local
       const advanceable = { now: () => new Date(iso) };
       setClock(advanceable);
 
@@ -695,19 +735,21 @@ describe("LogAtTimeSheet", () => {
       // it renders, so the advanceable one is re-asserted after the mount.
       setClock(advanceable);
 
-      expect(await headline()).toHaveTextContent("23:20");
-      expect(screen.getByRole("button", { name: "Log at 23:20" })).toBeEnabled();
+      expect(await headline()).toHaveTextContent("13:30");
+      expect(screen.getByRole("button", { name: "Log at 13:30" })).toBeEnabled();
 
       await act(async () => {
-        iso = "2026-08-08T23:05:00.000Z"; // 00:05 local, the next day
+        // 23 h 31 min later: one minute past the point the rolling 24 h
+        // floor reaches the chosen 13:30.
+        iso = "2026-08-09T12:31:00.000Z";
         vi.advanceTimersByTime(30_001);
       });
 
-      // 23:20 belongs to a day this sheet can no longer log into, so the
-      // value moves to the new floor in plain sight — headline and footer
-      // both — rather than sitting there un-confirmable with no explanation.
-      expect(await headline()).toHaveTextContent("00:00");
-      expect(screen.getByRole("button", { name: "Log at 00:00" })).toBeEnabled();
+      // 13:30 (8 Aug) is now more than 24 h old, so the value moves to the
+      // new floor in plain sight — headline and footer both — rather than
+      // sitting there un-confirmable with no explanation.
+      expect(await headline()).toHaveTextContent("13:31");
+      expect(screen.getByRole("button", { name: "Log at 13:31" })).toBeEnabled();
     } finally {
       vi.useRealTimers();
     }

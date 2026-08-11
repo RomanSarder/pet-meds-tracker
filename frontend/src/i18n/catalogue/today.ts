@@ -125,7 +125,7 @@ export interface TodayMessages {
   "today.logAtTime.helper.future": () => string;
   /** Helper line more than 12 h before the scheduled time — is this today's dose? */
   "today.logAtTime.helper.dayCheck": (p: { hours: number }) => string;
-  /** Default helper line: the entry range is midnight-today onward. */
+  /** Default helper line: the entry range is a rolling last 24 hours. */
   "today.logAtTime.helper.range": () => string;
   /**
    * Just the chosen time — composed into `next.stays` in both languages.
@@ -331,7 +331,7 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.logAtTime.helper.dayCheck": (p) =>
     `That's more than ${p.hours} h before the scheduled time — is this today's dose?`,
   "today.logAtTime.helper.range": () =>
-    "Anything from midnight today. Earlier doses are added from history.",
+    "Anything from the last 24 h. Earlier doses are added from history.",
   // Time first, day qualifier after — "08:00 tomorrow" / "14:30 on Sat 15
   // Aug" — so `next.*`'s own trailing "at"/"to" is the only preposition;
   // "stays at tomorrow at 08:00" was the double-preposition bug this avoids.
@@ -470,7 +470,7 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.logAtTime.helper.dayCheck": (p) =>
     `Це більш ніж за ${p.hours} год до запланованого часу — це сьогоднішня доза?`,
   "today.logAtTime.helper.range": () =>
-    "Будь-який час від опівночі сьогодні. Раніші дози додаються через історію.",
+    "Будь-який час за останні 24 год. Раніші дози додаються через історію.",
   // Bare EN time reads fine after "to"/"at"; Ukrainian needs its own
   // preposition here too — but only for `next.stays` (`залишається`), which
   // takes the punctual-locative "о" the same way `today.nextDose.today`

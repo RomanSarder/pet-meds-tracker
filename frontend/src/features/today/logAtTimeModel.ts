@@ -16,31 +16,26 @@
 // minutes-since-midnight; that representation does not survive the port,
 // because on a DST-shift day "midnight + N minutes" and "N minutes ago" are
 // different quantities. So the chosen time is always a `Date`, and the only
-// integer anywhere is a DURATION in minutes. Two kinds of instant, two
-// constructions, exactly as the repo already draws the line:
+// integer anywhere is a DURATION in minutes.
 //
-//   - The floor is a WALL-CLOCK instant: local midnight today, via
-//     `startOfLocalDay`, which goes through the `new Date(y, m, d)`
-//     constructor. `LogAtTimeDialog.tsx` made the same point about
-//     `atLocalTime` — that constructor is what makes SPEC §3d's "on DST
-//     shifts, `fixedTimes` keeps the wall-clock time" true for free. It is the
-//     only way midnight is computed in this file; no boundary is ever built by
-//     hand, and nothing here parses a string into an instant (the old dialog's
-//     `atLocalTime`/`parseHHMM` path is gone — there is no time field to parse).
+// Every bound, offset and stepper move is ELAPSED MILLISECONDS off an
+// existing instant — `now − minutes * 60_000` — never a wall-clock
+// reconstruction. That includes the FLOOR: the window is a rolling 24 h, so
+// `boundsFor` computes it as `now − 24h`, the same arithmetic `atOffset` and
+// `stepBy` already use for every other bound — there is no wall-clock
+// construction left anywhere in this file (an earlier version anchored the
+// floor at local midnight via `startOfLocalDay`; SPEC §4 no longer does).
+// `occurrences.ts` states the identical rule for `fromLastDose`
+// ("elapsed-millisecond arithmetic, never wall-clock reconstruction"), and for
+// the same reason: "24 hours ago" means 24 real hours, including on the day
+// the clocks move.
 //
-//   - Every offset and every stepper move is ELAPSED MILLISECONDS off an
-//     existing instant — `now − minutes * 60_000` — never a wall-clock
-//     reconstruction. `occurrences.ts` states the same rule for `fromLastDose`
-//     ("elapsed-millisecond arithmetic, never wall-clock reconstruction"), and
-//     for the same reason: "30 minutes ago" means 30 real minutes, including on
-//     the day the clocks move.
-//
-// The two meet only at the clamp, which compares instants — so on the
-// spring-forward day the window [midnight, now] is genuinely one hour shorter
-// in elapsed time than the wall clock suggests, and the clamp is what keeps
-// every offset inside it.
+// The floor and the ceiling meet only at the clamp, which compares instants —
+// so the window is always exactly 24 real hours wide, on every day including
+// the two DST transitions, even though the WALL-CLOCK gap between `floor` and
+// `ceiling` reads as 23 h or 25 h on those two days.
 import type { Course, CourseEvent, DoseEvent } from "@/domain";
-import { localDayKey, occurrenceKeyFor, startOfLocalDay } from "@/domain";
+import { localDayKey, occurrenceKeyFor } from "@/domain";
 import type { Occurrence } from "@/engine";
 import { nextDueAt } from "@/engine";
 
@@ -71,16 +66,16 @@ const MS_PER_MIN = 60_000;
 const MS_PER_HOUR = 3_600_000;
 
 /**
- * SPEC §4, "scope of a corrected `givenAt`: the current day only" — `givenAt`
- * is constrained to `[00:00 today, now]`. There is no date field and no
- * Today/Yesterday toggle; a dose remembered after midnight is corrected from
- * history instead.
+ * SPEC §4, "scope of a corrected `givenAt`: the last 24 hours only" —
+ * `givenAt` is constrained to `[now − 24 h, now]`. There is no date field and
+ * no Today/Yesterday toggle; a dose remembered more than 24 hours ago is
+ * corrected from history instead.
  *
  * Both ends are fresh `Date`s: `now` belongs to the caller and is never
  * aliased into a value the sheet might hold across a re-render.
  */
 export function boundsFor(now: Date): { floor: Date; ceiling: Date } {
-  return { floor: startOfLocalDay(now), ceiling: new Date(now.getTime()) };
+  return { floor: new Date(now.getTime() - 24 * MS_PER_HOUR), ceiling: new Date(now.getTime()) };
 }
 
 function clamp(candidate: number, now: Date): Date {
@@ -90,12 +85,12 @@ function clamp(candidate: number, now: Date): Date {
   return new Date(candidate);
 }
 
-/** `minutes` ago, clamped into `[midnight today, now]`. `0` is *Just now*. */
+/** `minutes` ago, clamped into `[now − 24 h, now]`. `0` is *Just now*. */
 export function atOffset(minutes: number, now: Date): Date {
   return clamp(now.getTime() - minutes * MS_PER_MIN, now);
 }
 
-/** One stepper press: `current ± deltaMin`, clamped into `[midnight today, now]`. */
+/** One stepper press: `current ± deltaMin`, clamped into `[now − 24 h, now]`. */
 export function stepBy(current: Date, deltaMin: number, now: Date): Date {
   return clamp(current.getTime() + deltaMin * MS_PER_MIN, now);
 }
@@ -110,8 +105,8 @@ export function stepBy(current: Date, deltaMin: number, now: Date): Date {
  * the future" and the footer is "disabled for a future time". Clamping here
  * would make both of those behaviours unreachable. `canConfirm` is the single
  * gate that upholds SPEC §12's "the corrected-time picker cannot produce a
- * `givenAt` in the future or before 00:00 today" — this function is a value,
- * not a gate.
+ * `givenAt` in the future or more than 24 hours in the past" — this function
+ * is a value, not a gate.
  *
  * `null` in two cases:
  *   - `dueAt === null`: an unanchored `fromLastDose` chain with no
@@ -133,9 +128,12 @@ export function stepBy(current: Date, deltaMin: number, now: Date): Date {
  * `occurrence.day` is "the day being viewed", not always "the day `dueAt` is
  * scheduled for" now that the two can differ — but every row this sheet can
  * be opened from is still on `occurrence.day === today` in practice (SPEC
- * §5.1's Today dashboard is the only caller), so `localDayKey` of that day is
- * still the same instant `boundsFor(now).floor` returns; the signature needs
- * no `now` to make the check for exactly that reason.
+ * §5.1's Today dashboard is the only caller). The check itself is a pure
+ * calendar-day comparison — `localDayKey(dueAt)` against `occurrence.day` —
+ * with no clock read anywhere in it, which is why the signature needs no
+ * `now`. (It is NOT the same test `boundsFor`'s rolling 24 h floor makes:
+ * withdrawing a scheduled time the floor has since passed is `isBelowFloor`'s
+ * job, done separately by the caller with a fresh `now`.)
  */
 export function scheduledChoice(occurrence: Occurrence): Date | null {
   const dueAt = occurrence.dueAt;
@@ -153,15 +151,15 @@ export function canStepLater(current: Date, now: Date): boolean {
 }
 
 /**
- * `candidate` sits before today's floor — i.e. it belongs to a day this sheet
- * cannot log into (SPEC §4, "the current day only").
+ * `candidate` sits before the rolling 24 h floor — i.e. it is more than a day
+ * old, which this sheet cannot log into (SPEC §4, "the last 24 hours only").
  *
- * Exists because the floor MOVES while the sheet is open: a sheet left up
- * across local midnight sees `boundsFor(now).floor` advance a whole day while
- * `chosen` — and the occurrence's own `dueAt` — stay where they were. The view
- * needs to detect exactly that, and detecting it by comparing instants in the
- * view would put scheduling arithmetic back into the component. Note this is
- * NOT the negation of `canConfirm`: a FUTURE value is un-confirmable but not
+ * Exists because the floor MOVES continuously while the sheet is open: left
+ * up long enough, `boundsFor(now).floor` slides forward while `chosen` — and
+ * the occurrence's own `dueAt` — stay where they were. The view needs to
+ * detect exactly that, and detecting it by comparing instants in the view
+ * would put scheduling arithmetic back into the component. Note this is NOT
+ * the negation of `canConfirm`: a FUTURE value is un-confirmable but not
  * below the floor, and the sheet treats those two cases differently (the
  * future one is offered with a berry headline; this one is withdrawn).
  */
@@ -169,7 +167,7 @@ export function isBelowFloor(candidate: Date, now: Date): boolean {
   return candidate.getTime() < boundsFor(now).floor.getTime();
 }
 
-/** SPEC §12's invariant, as one predicate: `00:00 today <= chosen <= now`. */
+/** SPEC §12's invariant, as one predicate: `now − 24 h <= chosen <= now`. */
 export function canConfirm(chosen: Date, now: Date): boolean {
   const { floor, ceiling } = boundsFor(now);
   const t = chosen.getTime();
@@ -194,7 +192,7 @@ export function elapsedSince(chosen: Date, now: Date): { hours: number; minutes:
  *
  *   1. `futureCap`  — "A dose cannot be logged in the future."
  *   2. `dayCheck`   — the "did you mean yesterday?" warning
- *   3. `range`      — "Anything from midnight today. Earlier doses are added
+ *   3. `range`      — "Anything from the last 24 h. Earlier doses are added
  *                     from history."
  *
  * `dayCheck` needs a STRICTLY greater gap than `DAY_CHECK_HOURS`: exactly 12 h
