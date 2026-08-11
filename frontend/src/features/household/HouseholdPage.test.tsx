@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
+import type { HouseholdStateDto } from "@pet-tracker/shared";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { DoseEvent, Household, JoinCode, User } from "@/domain";
@@ -299,5 +300,94 @@ describe("HouseholdPage", () => {
     await waitFor(async () => {
       expect(await repo.listUsers()).toHaveLength(0);
     });
+  });
+});
+
+// The reported defect: someone redeems a join code, the server records them,
+// and the inviter's People list stays at one person forever. `users` is not a
+// synced table (`packages/shared/src/sync.ts` carries six, none of them
+// users), so `GET /household` is the only way a second member reaches this
+// device at all.
+describe("HouseholdPage — members the server knows about", () => {
+  function mockHouseholdState(state: HouseholdStateDto) {
+    mockApiClient.mockImplementation(async (path: string) => {
+      if (path !== "/household") {
+        return Promise.reject(new Error("no session"));
+      }
+      return state as unknown as never;
+    });
+  }
+
+  it("shows a member who exists only on the server, and counts them", async () => {
+    const self = user({ id: "u-self", displayName: "Roman" });
+    const repo = repoWith({ users: [self] });
+    mockHouseholdState({
+      household: { id: HOUSEHOLD.id, name: "Home", createdAt: HOUSEHOLD.createdAt },
+      members: [
+        { id: "srv-self", householdId: HOUSEHOLD.id, displayName: "Roman", tint: 1, joinedAt: "2026-06-12T09:00:00.000Z" },
+        { id: "srv-marta", householdId: HOUSEHOLD.id, displayName: "Marta", tint: 2, joinedAt: "2026-08-01T09:00:00.000Z" },
+      ],
+      self: {
+        id: "srv-self",
+        householdId: HOUSEHOLD.id,
+        displayName: "Roman",
+        tint: 1,
+        joinedAt: "2026-06-12T09:00:00.000Z",
+        email: "roman@example.com",
+      },
+    });
+
+    renderWithProviders(<HouseholdPage />, { repo });
+
+    expect(await screen.findByText("Marta")).toBeInTheDocument();
+    expect(await screen.findByText("2 people · everyone can log and edit")).toBeInTheDocument();
+
+    // Mirrored into the local store, so every other screen's local read of
+    // `listUsers()` resolves the name too.
+    await waitFor(async () => {
+      expect((await repo.listUsers()).map((u) => u.displayName).sort()).toEqual(["Marta", "Roman"]);
+    });
+  });
+
+  it("does not render self twice when the server's user id differs from the local one", async () => {
+    // `users.id` server-side is the auth identity; the local self row is a
+    // device-minted uuid. Mirroring the server's row for self verbatim would
+    // add a second "Roman" rather than reconcile anything.
+    const self = user({ id: "local-self-uuid", displayName: "Roman" });
+    const repo = repoWith({ users: [self] });
+    mockHouseholdState({
+      household: { id: HOUSEHOLD.id, name: "Home", createdAt: HOUSEHOLD.createdAt },
+      members: [
+        { id: "srv-self", householdId: HOUSEHOLD.id, displayName: "Roman", tint: 1, joinedAt: "2026-06-12T09:00:00.000Z" },
+      ],
+      self: {
+        id: "srv-self",
+        householdId: HOUSEHOLD.id,
+        displayName: "Roman",
+        tint: 1,
+        joinedAt: "2026-06-12T09:00:00.000Z",
+        email: "roman@example.com",
+      },
+    });
+
+    renderWithProviders(<HouseholdPage />, { repo });
+
+    expect(await screen.findByText("1 person · everyone can log and edit")).toBeInTheDocument();
+    await waitFor(() => expect(mockApiClient).toHaveBeenCalledWith("/household"));
+    expect(await repo.listUsers()).toHaveLength(1);
+    expect(screen.getByText("1 person · everyone can log and edit")).toBeInTheDocument();
+  });
+
+  it("keeps rendering the local roster when the refresh fails (offline)", async () => {
+    // `beforeEach` already rejects every call — the local store is the read
+    // source, so a failed refresh must leave the screen exactly as it was.
+    const self = user({ id: "u-self", displayName: "Roman" });
+    const marta = user({ id: "u-marta", displayName: "Marta", isSelf: false, tint: 2 });
+    const repo = repoWith({ users: [self, marta] });
+
+    renderWithProviders(<HouseholdPage />, { repo });
+
+    expect(await screen.findByText("Marta")).toBeInTheDocument();
+    expect(screen.getByText("2 people · everyone can log and edit")).toBeInTheDocument();
   });
 });

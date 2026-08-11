@@ -6,6 +6,7 @@
 // SPEC §9 / COMMON-W2 §3: the local store is the source of truth for reads. The
 // backend endpoints in `backend/src/household/` are the same contract on the
 // server side; wiring the background push/pull between them is slice 9's job.
+import { useEffect } from "react";
 import {
   useMutation,
   useQuery,
@@ -33,6 +34,9 @@ const QUERY_OPTS = { staleTime: 0, retry: false, refetchOnWindowFocus: true } as
 // included, which is why those two prefixes are here.
 const PREFIX = {
   household: qk.household(),
+  // Narrower than `household` on purpose — `useRefreshMembers` invalidates
+  // this one and must not invalidate the roster query it is itself driven by.
+  members: qk.householdMembers().slice(0, 2),
   events: qk.events({}).slice(0, 1),
   today: qk.today("1970-01-01").slice(0, 1),
 } as const;
@@ -52,6 +56,11 @@ export function useHousehold(): UseQueryResult<Household, Error> {
  * Live members. Removed members are excluded here — SPEC §5 keeps their history
  * but they are no longer in the household. History resolves their name through
  * `useAllMembers()` instead.
+ *
+ * Stays a pure local read (SPEC §9, and the no-network-on-render invariant
+ * `sync/__tests__/offlineRender.test.tsx` pins). Members reach this store from
+ * the server through `useRefreshMembers` below, never by this hook awaiting a
+ * round trip on the render path.
  */
 export function useMembers(): UseQueryResult<User[], Error> {
   return useQuery({
@@ -72,6 +81,122 @@ export function useAllMembers(): UseQueryResult<User[], Error> {
     queryFn: () => getRepo().listUsers({ includeRemoved: true }),
     ...QUERY_OPTS,
   });
+}
+
+/**
+ * Members are the one part of the household this device cannot learn on its
+ * own. `SyncPayload` carries six tables and `users` is not among them (see
+ * `packages/shared/src/sync.ts`), so nobody who joins ever reaches this
+ * device's local store through the sync cycle — which is why the People list
+ * sat at one person forever no matter who redeemed a code.
+ *
+ * This closes that gap the narrow way: the screen whose subject IS the roster
+ * mounts this, the server's list is mirrored into the local store, and the
+ * member queries above are invalidated only when something actually changed.
+ * The read source stays local, so nothing here can blank a screen that was
+ * already rendering — a failed refresh leaves the previous roster standing.
+ *
+ * The durable fix is `users` becoming a synced table like the other six, which
+ * needs a `sync_seq` column on `users` and a soft-delete flag; until then this
+ * is the only path by which a second member exists on this device at all.
+ */
+export function useRefreshMembers(): void {
+  const queryClient = useQueryClient();
+  const { data: changed } = useQuery({
+    queryKey: qk.householdRoster(),
+    queryFn: refreshMembersFromServer,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+
+  useEffect(() => {
+    if (changed) {
+      // Deliberately the members prefix and not `PREFIX.household`, which
+      // covers this very query — invalidating that would refetch the roster,
+      // which would invalidate again.
+      queryClient.invalidateQueries({ queryKey: PREFIX.members });
+    }
+  }, [changed, queryClient]);
+}
+
+/** Resolves to true when the local store gained or changed a member row. */
+async function refreshMembersFromServer(): Promise<boolean> {
+  let state: HouseholdStateDto;
+  try {
+    state = await apiClient<HouseholdStateDto>("/household");
+  } catch {
+    // Offline, no session yet, or no server-side household at all (the
+    // first-run window before `POST /household`). None of those are worth
+    // surfacing — the local roster is still the right thing to show.
+    return false;
+  }
+  return mirrorMembers(state);
+}
+
+/**
+ * Writes `state.members` into the local user store.
+ *
+ * Skips the member row that IS this device. `users.id` on the server is the
+ * auth identity minted against an email address, while the local self row is a
+ * device-minted uuid (see `idbRepo`'s `currentActorId`) — and it is the local
+ * one every `actorId` in the ledger points at. Mirroring the server's row for
+ * self would show you twice rather than reconciling anything.
+ *
+ * Additive only. A member missing from the server list is left alone rather
+ * than soft-deleted: removal has its own explicit path (`useRemoveMember`), and
+ * a local row the server does not know is just as likely to be a name restored
+ * from a backup, which SPEC §12 needs kept so their past events still render a
+ * name.
+ */
+async function mirrorMembers(state: HouseholdStateDto): Promise<boolean> {
+  // The DTO is defensively shape-checked rather than trusted: this runs on a
+  // response that may be a 200 from something other than this endpoint (a
+  // captive-portal login page, a stale service worker), and a roster that
+  // throws here would take the People list down with it.
+  if (!state || !Array.isArray(state.members)) {
+    return false;
+  }
+
+  const repo = getRepo();
+  const householdId = await repo.currentHouseholdId();
+  const self = await repo.getCurrentUser();
+  const existing = await repo.listUsers({ includeRemoved: true });
+  const byId = new Map(existing.map((u) => [u.id, u]));
+  const ts = now().toISOString();
+  let changed = false;
+
+  for (const member of state.members) {
+    if (member.id === state.self?.id || member.id === self.id) {
+      continue;
+    }
+    const local = byId.get(member.id);
+    if (local?.isSelf) {
+      continue;
+    }
+    // Skip the write when nothing the server owns has changed, so a poll on
+    // every window focus does not churn `updatedAt` on untouched rows — and,
+    // more importantly, does not report a change that would re-invalidate the
+    // member queries on every focus forever.
+    if (local && local.displayName === member.displayName && local.tint === member.tint) {
+      continue;
+    }
+    await repo.upsertUser({
+      id: member.id,
+      householdId,
+      email: null,
+      displayName: member.displayName,
+      tint: member.tint,
+      isSelf: false,
+      joinedAt: member.joinedAt,
+      createdAt: local?.createdAt ?? member.joinedAt,
+      updatedAt: ts,
+      deletedAt: local?.deletedAt ?? null,
+    });
+    changed = true;
+  }
+
+  return changed;
 }
 
 /** The signed-in user's own member row. Never null — the repo mints one on demand. */
@@ -263,6 +388,7 @@ async function adoptJoinedHousehold(state: HouseholdStateDto, displayName?: stri
     if (nextDisplayName !== self.displayName) {
       await repo.updateUser(self.id, { displayName: nextDisplayName });
     }
+    await mirrorMembers(state);
     return;
   }
 
@@ -289,14 +415,34 @@ async function adoptJoinedHousehold(state: HouseholdStateDto, displayName?: stri
     repo.listCourseEvents({}),
     repo.listStockAdjustments(),
   ]);
-  const otherUsers = users.filter((u) => u.id !== self.id);
+  // The people already in the household this device is joining. `state.members`
+  // is the only place they are ever named — without this the joiner adopts the
+  // household and still sees a roster of one, the mirror image of the inviter's
+  // side. Self is excluded for the same identity reason as `mirrorMembers`: the
+  // server's row for this device is the auth user, not the local actor.
+  const serverMembers: User[] = state.members
+    .filter((m) => m.id !== state.self.id && m.id !== self.id)
+    .map((m) => ({
+      id: m.id,
+      householdId: household.id,
+      email: null,
+      displayName: m.displayName,
+      tint: m.tint,
+      isSelf: false,
+      joinedAt: m.joinedAt,
+      createdAt: m.joinedAt,
+      updatedAt: ts,
+      deletedAt: null,
+    }));
+  const serverMemberIds = new Set(serverMembers.map((u) => u.id));
+  const otherUsers = users.filter((u) => u.id !== self.id && !serverMemberIds.has(u.id));
 
   await repo.importHousehold(
     {
       schemaVersion: (await repo.getMeta("schemaVersion")) ?? 2,
       exportedAt: ts,
       households: [household],
-      users: [updatedSelf, ...otherUsers],
+      users: [updatedSelf, ...serverMembers, ...otherUsers],
       pets,
       medications,
       courses,
