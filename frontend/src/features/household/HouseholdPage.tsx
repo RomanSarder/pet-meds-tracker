@@ -18,6 +18,7 @@ import {
   useLeaveHousehold,
   useLiveJoinCode,
   useMembers,
+  useRefreshMembers,
   useRemoveMember,
   useSelf,
 } from "./hooks";
@@ -180,6 +181,11 @@ export function HouseholdPage(): ReactElement {
   const toast = useToast();
   const tr = useTranslator();
   const { t } = tr;
+
+  // Pulls the server's roster into the local store before the People list is
+  // read out of it — members are the one thing the sync cycle does not carry,
+  // so without this a person who redeemed a join code never appears here.
+  useRefreshMembers();
 
   const membersQuery = useMembers();
   const selfQuery = useSelf();

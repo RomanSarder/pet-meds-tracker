@@ -221,6 +221,31 @@ describe("JoinHouseholdPage", () => {
     expect((await repo.getCurrentUser()).householdId).toBe("hh-server");
   });
 
+  it("keeps the people already in the household the join response named", async () => {
+    // The mirror image of the inviter's defect: the response carries the
+    // household's existing members, and adopting it used to rebuild the local
+    // user store from this device's own rows alone — so the joiner landed in a
+    // shared household and still saw a roster of one.
+    const self = user({ id: "u-self", householdId: HOUSEHOLD.id });
+    const repo = repoWith({ users: [self] });
+    mockJoin(() => householdStateDto());
+    renderJoin({ repo });
+
+    const user2 = userEvent.setup();
+    await typeCode(user2, "ABCDEF");
+    await user2.click(screen.getByRole("button", { name: "Join household" }));
+
+    await waitFor(() => expect(screen.getByTestId("pathname")).toHaveTextContent("/today"));
+
+    await waitFor(async () => {
+      const names = (await repo.listUsers()).map((u) => u.displayName).sort();
+      expect(names).toEqual(["Marta", "Roman"]);
+    });
+    const marta = (await repo.listUsers()).find((u) => u.displayName === "Marta")!;
+    expect(marta.isSelf).toBe(false);
+    expect(marta.householdId).toBe("hh-server");
+  });
+
   it("refuses a code that was already used, with the used-code message, stays on the screen, and does not join locally", async () => {
     const self = user({ id: "u-self" });
     const repo = repoWith({ users: [self] });

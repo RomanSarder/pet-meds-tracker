@@ -36,6 +36,8 @@ export const qk = {
   householdMembers: (opts?: { includeRemoved?: boolean }) =>
     ["household", "members", opts] as const,
   householdSelf: () => ["household", "self"] as const,
+  /** The server-side roster refresh (`useRefreshMembers`), not a member list itself. */
+  householdRoster: () => ["household", "roster"] as const,
   householdLiveCode: () => ["household", "liveCode"] as const,
   householdJoinPreview: (code: string) => ["household", "joinPreview", code] as const,
 };
