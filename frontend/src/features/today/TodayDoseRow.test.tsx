@@ -196,7 +196,16 @@ describe("TodayDoseRow", () => {
     expect(await screen.findByText("3 of 3 max")).toBeInTheDocument();
     expect(screen.queryByText("3 of 5 doses")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Give anyway" }));
+    // Defect 2: the ghost action REPLACES the primary Give button on a
+    // capped row — only one give control is ever offered.
+    expect(screen.queryByRole("button", { name: "Give" })).not.toBeInTheDocument();
+
+    // Defect 4: the ghost action's accessible name includes the medication,
+    // even though its visible text stays the shared "Give anyway".
+    const giveAnyway = screen.getByRole("button", { name: "Give Metacam anyway" });
+    expect(giveAnyway).toHaveTextContent("Give anyway");
+
+    await user.click(giveAnyway);
     expect(onGiveAnyway).toHaveBeenCalledTimes(1);
     expect(props.onGive).not.toHaveBeenCalled();
   });

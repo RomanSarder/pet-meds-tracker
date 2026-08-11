@@ -848,6 +848,163 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     });
   });
 
+  // --- Defect 1 (SPEC §3b-i): "Give anyway" past the cap must ALWAYS
+  // succeed, immediately, with no confirmation able to refuse it — a
+  // live-tested regression. A capped occurrence's own key is frozen (pushed
+  // to 00:00 tomorrow by `fromLastDoseDueAt`), so the very next "Give
+  // anyway" tap lands seconds after the capping dose: well inside BOTH the
+  // `EARLY_GIVE_FLOOR_MIN` floor and the course's grace window. Before this
+  // fix, `logDose` treated `overMax` as an ordinary write and both
+  // course-wide guards refused it outright — reproducing exactly what the
+  // live UI test found ("Already given" / "wait a little", on every path:
+  // ghost Give anyway, the primary Give, and "log at a different time").
+  describe("logDose overMax (SPEC §3b-i cap) — Defect 1 regression", () => {
+    async function setupCappedCourse(repo: Repo): Promise<{ courseId: string }> {
+      const pet = await repo.createPet({ name: "Otis", species: "cat" });
+      const medication = await repo.createMedication({ name: "Meloxicam", form: "liquid", unit: "ml" });
+      const course = await repo.createCourse({
+        petId: pet.id,
+        medicationId: medication.id,
+        doseAmount: 0.4,
+        doseUnit: "ml",
+        instructions: null,
+        // maxPerDay: 2 on a 2h interval, exactly the reported reproduction.
+        schedule: { kind: "fromLastDose", intervalHours: 2, maxPerDay: 2 },
+        startDate: "2026-08-01",
+        endDate: null,
+        notes: null,
+      });
+      return { courseId: course.id };
+    }
+
+    it("succeeds 30 seconds after the capping dose — inside both the floor and the grace window, where the unfixed guards refused it", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCappedCourse(repo);
+
+      // Reach the cap: two given doses, 2h apart (maxPerDay: 2).
+      await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: null,
+        amount: 0.4,
+        givenAt: "2026-08-08T18:00:00.000Z",
+      });
+      await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: "2026-08-08T20:00:00.000Z",
+        amount: 0.4,
+        givenAt: "2026-08-08T20:00:00.000Z",
+      });
+
+      // The frozen, pushed-to-midnight capped occurrence's own key — what
+      // `TodayPage.tsx`'s `identityOf` actually reads off the row.
+      const cappedScheduledFor = "2026-08-09T00:00:00.000Z";
+      // 30 seconds after the capping dose: the exact reproduction — inside
+      // EARLY_GIVE_FLOOR_MIN (10 min) and the grace window alike.
+      const overMaxEvent = await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: cappedScheduledFor,
+        amount: 0.4,
+        overMax: true,
+        givenAt: "2026-08-08T20:00:30.000Z",
+      });
+
+      expect(overMaxEvent.overMax).toBe(true);
+      expect(overMaxEvent.status).toBe("given");
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(3);
+    });
+
+    it("two carers double-tapping Give anyway on the SAME capped occurrence within the grace window still collapse to one event (SPEC §5)", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCappedCourse(repo);
+      const cappedScheduledFor = "2026-08-09T00:00:00.000Z";
+
+      await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: cappedScheduledFor,
+        amount: 0.4,
+        overMax: true,
+        givenAt: "2026-08-08T20:00:30.000Z",
+      });
+
+      // A second tap, moments later, for the SAME capped row — both carers'
+      // clients compute the identical (frozen) key, so this must collapse
+      // exactly like any other same-occurrence duplicate, never write twice.
+      await expect(
+        repo.logDose({
+          courseId,
+          status: "given",
+          scheduledFor: cappedScheduledFor,
+          amount: 0.4,
+          overMax: true,
+          givenAt: "2026-08-08T20:00:45.000Z",
+        }),
+      ).rejects.toBeInstanceOf(DuplicateDoseError);
+
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
+    });
+
+    it("does not weaken SPEC §5 for a real occurrence: once the cap resets, a legitimate dose at the SAME key an earlier overMax event used is not treated as a duplicate", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCappedCourse(repo);
+      const key = "2026-08-09T00:00:00.000Z";
+
+      await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: key,
+        amount: 0.4,
+        overMax: true,
+        givenAt: "2026-08-08T23:59:50.000Z",
+      });
+
+      // A full day later, the SAME `scheduledFor` is now a genuinely due,
+      // non-`overMax` occurrence (the frozen key becomes real once the day
+      // rolls over and the cap resets) — it must log normally, never
+      // collide with yesterday's deliberate extra dose.
+      const real = await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: key,
+        amount: 0.4,
+        givenAt: "2026-08-10T00:00:05.000Z",
+      });
+
+      expect(real.overMax).toBeUndefined();
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(2);
+    });
+
+    it("the early-dose floor still applies to a genuine (non-overMax) early give on this same course — the overMax bypass is not a general loosening", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCappedCourse(repo);
+
+      await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: null,
+        amount: 0.4,
+        givenAt: "2026-08-08T18:00:00.000Z",
+      });
+
+      // One minute later, a DIFFERENT scheduledFor, no `overMax` — the floor
+      // still refuses it outright, exactly as for any other course.
+      await expect(
+        repo.logDose({
+          courseId,
+          status: "given",
+          scheduledFor: "2026-08-08T21:00:00.000Z",
+          amount: 0.4,
+          givenAt: "2026-08-08T18:01:00.000Z",
+        }),
+      ).rejects.toBeInstanceOf(TooSoonSinceLastDoseError);
+
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
+    });
+  });
+
   // --- 20. displayNameFor end to end -----------------------------------------
 
   it("displayNameFor resolves a real logged actor's name, a second member's name, and 'Someone' for an unknown id", async () => {

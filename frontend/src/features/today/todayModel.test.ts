@@ -487,6 +487,78 @@ describe("buildTodayView — courseCount (row pill, SPEC §4)", () => {
   });
 });
 
+// SPEC §12: "An interval course with no maximum set behaves exactly as
+// before: no pill, no `capped` state, and a fourth dose in one day is logged
+// without comment." The engine-level no-op (no `capped` state, no `overMax`)
+// is already proven in `engine/spec-cases.test.ts`; this covers the UI half —
+// that `toDose` computes no `cap` at all for such an occurrence, so
+// `TodayDoseRow` renders the ordinary `countLabel` pill, never the amber one.
+describe("buildTodayView — cap (SPEC §3b-i)", () => {
+  it("no-op case: an occurrence with no maxPerDay/givenToday computes no cap, and the row stays on the plain pill path", () => {
+    const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(occ.key, "due");
+    // `COURSE_CLOVER_METACAM` is `fixedTimes` and carries no `maxPerDay` —
+    // the engine never attaches these fields to such an occurrence at all.
+    expect(occ.maxPerDay).toBeUndefined();
+    expect(occ.givenToday).toBeUndefined();
+
+    const dose = groupNamed(
+      buildTodayView(snapshotOf([occ]), NOW, EN),
+      "Clover",
+    ).pending.find((d) => d.key === occ.key);
+
+    expect(dose).toBeDefined();
+    expect(dose!.cap).toBeNull();
+    // Ordinary pill data is untouched — nothing about the cap wiring
+    // interferes with the fourth-dose-with-no-comment case.
+    expect(dose!.courseCount).toEqual({ given: 0, total: 1 });
+  });
+
+  it("computes cap.given/max verbatim from the capped occurrence's own givenToday/maxPerDay, and keeps the row in the pending list rather than dropping it", () => {
+    const course = courseOf(COURSE_CLOVER_METOCLOPRAMIDE);
+    const occ = {
+      ...makeOccurrence(course, {
+        day: DAY,
+        scheduledFor: atLocalTime(DAY, "22:00").toISOString(),
+      }),
+      maxPerDay: 3,
+      givenToday: 3,
+    };
+    setState(occ.key, "capped");
+
+    const group = groupNamed(buildTodayView(snapshotOf([occ]), NOW, EN), "Clover");
+    const dose = group.pending.find((d) => d.key === occ.key);
+
+    // Before the `PENDING_STATES` fix, a `capped` dose matched neither the
+    // pending nor the resolved test and silently vanished from the screen —
+    // this is the regression guard for that, not only for the pill's numbers.
+    expect(dose).toBeDefined();
+    expect(dose!.cap).toEqual({ given: 3, max: 3 });
+    // Still actionable via the ghost Give anyway — must not read as "done".
+    expect(group.done).toBe(false);
+  });
+
+  it("never counts a capped dose as overdue, however far past its (pushed) due instant now already is", () => {
+    const course = courseOf(COURSE_CLOVER_METOCLOPRAMIDE);
+    const occ = {
+      ...makeOccurrence(course, {
+        day: DAY,
+        scheduledFor: atLocalTime(DAY, "00:01").toISOString(),
+      }),
+      maxPerDay: 2,
+      givenToday: 2,
+    };
+    setState(occ.key, "capped");
+
+    const view = buildTodayView(snapshotOf([occ]), NOW, EN);
+    const group = groupNamed(view, "Clover");
+
+    expect(group.hasOverdue).toBe(false);
+    expect(view.overdue.count).toBe(0);
+    expect(view.overdue.earliest).toBeNull();
+  });
+});
+
 describe("buildTodayView — dayProgress (SPEC §6.1)", () => {
   it("sums given and total across every pet, and reports the overdue count", () => {
     const given = occAt(COURSE_CLOVER_METACAM, "08:00");

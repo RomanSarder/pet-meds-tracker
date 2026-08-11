@@ -33,10 +33,13 @@ const ROW_STATE: Record<DoseState, NonNullable<DoseRowProps["state"]>> = {
   later: "later",
   upcoming: "later",
   notStarted: "later",
-  // SPEC §3b-i's `capped` state (amber "N of M max" pill, ghost "Give
-  // anyway") has no DS presentation yet — the DS `DoseRow` component is
-  // frozen to exactly these four variants. Placeholder mapping, same as
-  // `upcoming`/`notStarted` above, until that wiring lands.
+  // SPEC §6.3: Pet detail's Schedule block is READ-ONLY — there is no Give
+  // action here at all, let alone a ghost "Give anyway" one, so there is no
+  // `onGiveAnyway` this file could ever wire a `DoseRowCap` to (contrast
+  // `features/today/TodayDoseRow.tsx`, which does own that action). `later`
+  // is therefore the final button-state mapping for `capped`, not a
+  // placeholder awaiting a later phase — same reasoning as `upcoming`/
+  // `notStarted` above: nothing here is "due" in the filled-button sense.
   capped: "later",
 };
 

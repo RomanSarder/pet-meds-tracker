@@ -72,13 +72,13 @@ export interface TodayDoseRowProps {
    */
   giving?: boolean;
   /**
-   * SPEC §3b-i's engine `capped` state. NOT wired on this branch — no caller
-   * in this codebase computes or passes it yet (a concurrent agent owns the
-   * engine's `capped`/`overMax`/`maxPerDay` plumbing); this prop exists so a
-   * later phase can thread the real numbers in without touching this file
-   * again. When present, it replaces the row's plain `today.pill.count` pill
-   * with an amber `today.pill.cap` one and reveals a ghost **Give anyway**
-   * action wired to `onGiveAnyway`.
+   * SPEC §3b-i's `capped` state, wired from `dose.cap` by `TodayPage`'s
+   * `renderCard` (via `todayModel.ts`'s `toDose`). When present, it replaces
+   * the row's plain `today.pill.count` pill with an amber `today.pill.cap`
+   * one and reveals a ghost **Give anyway** action wired to `onGiveAnyway` —
+   * which `TodayPage` points at the SAME `give(dose)` callback the primary
+   * button uses, so either control writes the identical `overMax`-flagged
+   * event (see `TodayPage.tsx`'s `give`).
    */
   cap?: {
     given: number;
@@ -246,6 +246,13 @@ export function TodayDoseRow({
     ? {
         label: t("today.pill.cap", { given: cap.given, max: cap.max }),
         giveAnywayLabel: t("today.pill.giveAnyway"),
+        // Defect 4: the visible label stays the short "Give anyway" every
+        // capped row shares, but the accessible name folds in the
+        // medication so a screen-reader user with several capped courses
+        // can tell the rows apart.
+        giveAnywayAriaLabel: t("today.pill.giveAnyway.aria", {
+          medicationName: dose.medicationName,
+        }),
         onGiveAnyway: cap.onGiveAnyway,
       }
     : undefined;
@@ -311,12 +318,16 @@ export function TodayDoseRow({
       <DoseRow
         medication={dose.title}
         detail={dose.detail}
-        // TODO(max-per-day wiring): SPEC §3b-i's `capped` state (amber "N of
-        // M max" pill, ghost "Give anyway") has no presentation here yet —
-        // this line is a compile-only placeholder (same fallback already
-        // used for `upcoming`) added solely to keep `npm run typecheck`
-        // green after `DoseState` gained the `capped` member; it is not the
-        // real wiring, which is a separate, later change to this file.
+        // The DS `DoseRow` is frozen to four button states (SPEC §4's table
+        // has no filled/"due" treatment for `capped` — nothing is actually
+        // due once a course is capped, by definition). `later`'s outlined
+        // Give is the nearest honest match, the same one `upcoming` already
+        // uses for the identical reason ("not the thing to do right now").
+        // The row's real capped affordance is the amber pill and ghost
+        // **Give anyway** (`cap` below), not this button's own styling —
+        // and both write the identical `overMax` event (see `cap` prop's
+        // doc comment above), so which one the user taps makes no
+        // difference to what gets logged.
         state={dose.state === "upcoming" || dose.state === "capped" ? "later" : dose.state}
         onGive={onGive}
         // SPEC §5.1's one-tap control. The DS default is the English "Give";

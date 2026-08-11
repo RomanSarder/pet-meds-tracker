@@ -31,6 +31,12 @@
   --alert-line: #E9CDD1;
 
   --warn: #C2872F;
+  /* Text-on-tint variant, same pattern as --alert-deep: --warn itself is
+     2.68:1 on --warn-tint at 12px/600 (Badge's "low" tone, e.g. the
+     maxPerDay cap pill), well under WCAG AA's 4.5:1 for text that size.
+     --warn-deep is the same hue, scaled toward black, measured 4.96:1 on
+     --warn-tint — used for TEXT on the tint, never as a fill/border. */
+  --warn-deep: #885E21;
   --warn-tint: #F7EEDC;
 
   --ok: #5E8A63;

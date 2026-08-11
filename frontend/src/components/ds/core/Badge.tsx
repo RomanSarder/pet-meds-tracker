@@ -4,7 +4,11 @@ const TONES = {
   neutral: { bg: "var(--surface-sunk)", fg: "var(--ink-2)" },
   accent: { bg: "var(--accent-tint)", fg: "var(--accent-ink)" },
   overdue: { bg: "var(--alert-tint)", fg: "var(--alert-deep)" },
-  low: { bg: "var(--warn-tint)", fg: "var(--warn)" },
+  // --warn itself measures 2.68:1 on --warn-tint at this badge's 12px/600 —
+  // under WCAG AA's 4.5:1. --warn-deep is the same amber hue, darkened for
+  // the text/foreground role (4.96:1), mirroring the --alert / --alert-deep
+  // split "overdue" already uses below.
+  low: { bg: "var(--warn-tint)", fg: "var(--warn-deep)" },
   good: { bg: "var(--ok-tint)", fg: "var(--ok)" },
 } as const;
 

@@ -612,40 +612,73 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     // `scheduledFor` specifically that made the code not match its own stated
     // invariant (unreached in production only because a null `scheduledFor`
     // never coincides with `earlyGive` today).
-    const sameOccurrence = liveEvents.find((e) => e.scheduledFor === input.scheduledFor);
+    //
+    // SPEC §3b-i's Defect 1 fix: an `overMax` write's `scheduledFor` is the
+    // CAPPED occurrence's own (pushed-to-midnight) key — the same key that
+    // occurrence legitimately owns again once the calendar day rolls over and
+    // the cap resets (`fromLastDoseDueAt` can recompute that very same
+    // instant for a genuinely due, non-`overMax` dose the next day). So a
+    // live `overMax` event must NOT stand in the way of a LATER real give at
+    // that same key — `(input.overMax || !e.overMax)` only lets an incoming
+    // write collide with a prior `overMax` row when it is itself `overMax`.
+    // Two carers double-tapping "Give anyway" on the SAME capped row within
+    // the grace window still collapse to one event: both compute the
+    // identical (frozen, not-yet-written) capped key, so the second tap's
+    // `overMax` write matches the first's `overMax` row here exactly as any
+    // other same-occurrence duplicate would. This never loosens the guard for
+    // two ordinary (non-`overMax`) gives of the same real occurrence — the
+    // `!e.overMax` half only ever excludes a row a real give could not have
+    // written in the first place.
+    const sameOccurrence = liveEvents.find(
+      (e) => e.scheduledFor === input.scheduledFor && (input.overMax || !e.overMax),
+    );
     if (sameOccurrence) {
       throw new DuplicateDoseError(sameOccurrence);
     }
 
-    // F1: the hard floor beneath `allowWithinGrace` — a confirmed early give
-    // must still not double-log within `EARLY_GIVE_FLOOR_MIN` minutes of ANY
-    // live dose already on this course. Checked unconditionally, ahead of the
-    // bypassable grace-window heuristic below, so no caller can route around
-    // it — see `errors.ts`'s `TooSoonSinceLastDoseError`.
-    // Strictly LESS than the floor — "under EARLY_GIVE_FLOOR_MIN minutes" is
-    // refused; "at or past" it is documented to behave as already built
-    // (ordinary, bypassable grace-window rules), so the boundary itself
-    // (`gap === floorMs`) must NOT be floor-blocked. `<=` here would make an
-    // exactly-10-minute confirmed retry impossible, contradicting that.
-    const tooSoon = liveEvents.find(
-      (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
-    );
-    if (tooSoon) {
-      throw new TooSoonSinceLastDoseError(
-        Math.round(Math.abs(givenAtMs - new Date(tooSoon.givenAt).getTime()) / 60_000),
+    // SPEC §3b-i: "the cap warns, it does not lock" — an `overMax` give must
+    // ALWAYS succeed immediately, with no confirmation able to refuse it.
+    // Both guards below are course-wide (ANY live dose on the course, not
+    // scoped to one occurrence), which is exactly what makes them wrong for a
+    // deliberate over-cap dose: reaching the cap means a dose was JUST given,
+    // so the very next "Give anyway" tap is almost always inside both the
+    // floor and the grace window of that dose. Unlike `allowWithinGrace`
+    // (which only bypasses the grace heuristic below and still routes
+    // through a confirm dialog the user can decline), `overMax` skips both
+    // guards outright — there is no dialog for this one. The same-occurrence
+    // hard block above is untouched and still the only thing that can reject
+    // an `overMax` write (a genuine duplicate, never a refusal to give).
+    if (!input.overMax) {
+      // F1: the hard floor beneath `allowWithinGrace` — a confirmed early give
+      // must still not double-log within `EARLY_GIVE_FLOOR_MIN` minutes of ANY
+      // live dose already on this course. Checked unconditionally, ahead of the
+      // bypassable grace-window heuristic below, so no caller can route around
+      // it — see `errors.ts`'s `TooSoonSinceLastDoseError`.
+      // Strictly LESS than the floor — "under EARLY_GIVE_FLOOR_MIN minutes" is
+      // refused; "at or past" it is documented to behave as already built
+      // (ordinary, bypassable grace-window rules), so the boundary itself
+      // (`gap === floorMs`) must NOT be floor-blocked. `<=` here would make an
+      // exactly-10-minute confirmed retry impossible, contradicting that.
+      const tooSoon = liveEvents.find(
+        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
       );
-    }
+      if (tooSoon) {
+        throw new TooSoonSinceLastDoseError(
+          Math.round(Math.abs(givenAtMs - new Date(tooSoon.givenAt).getTime()) / 60_000),
+        );
+      }
 
-    // The grace-window heuristic — a collision with a DIFFERENT occurrence
-    // logged recently — is exactly what a confirmed early give (SPEC §3b:
-    // "logging a dose early ... is intended") is allowed to bypass; the two
-    // guards above never are. See `idbRepo.ts`'s identical guard.
-    if (!input.allowWithinGrace) {
-      const duplicate = liveEvents.find(
-        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
-      );
-      if (duplicate) {
-        throw new DuplicateDoseError(duplicate);
+      // The grace-window heuristic — a collision with a DIFFERENT occurrence
+      // logged recently — is exactly what a confirmed early give (SPEC §3b:
+      // "logging a dose early ... is intended") is allowed to bypass; the two
+      // guards above never are. See `idbRepo.ts`'s identical guard.
+      if (!input.allowWithinGrace) {
+        const duplicate = liveEvents.find(
+          (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
+        );
+        if (duplicate) {
+          throw new DuplicateDoseError(duplicate);
+        }
       }
     }
 

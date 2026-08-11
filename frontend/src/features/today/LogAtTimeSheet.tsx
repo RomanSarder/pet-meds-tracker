@@ -204,6 +204,16 @@ export function LogAtTimeSheet({
   const ago = t("today.logAtTime.ago", {
     duration: t("history.detail.lateDuration", elapsedSince(chosen, effectiveNow)),
   });
+  // The rolling 24 h floor (COMMON §6 item 4) means `chosen` can genuinely
+  // fall on the previous LOCAL day, not just be "many hours ago" — compared
+  // by calendar day, never by an hour threshold, so a value one minute past
+  // local midnight still reads "yesterday" and one minute before it still
+  // reads "today".
+  const chosenIsYesterday = localDayKey(chosen) !== localDayKey(effectiveNow);
+  const agoLabel = t(
+    chosenIsYesterday ? "today.logAtTime.yesterdayAgo" : "today.logAtTime.todayAgo",
+    { ago },
+  );
 
   const helper = helperFor(chosen, scheduledAt, effectiveNow);
   const helperText =
@@ -365,7 +375,7 @@ export function LogAtTimeSheet({
                 {formatHHMM(chosen)}
               </div>
               <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink-3)" }}>
-                {t("today.logAtTime.todayAgo", { ago })}
+                {agoLabel}
               </div>
             </div>
 

@@ -65,17 +65,26 @@ export interface TodayMessages {
   "today.pill.count": (p: { given: number; total: number }) => string;
   /**
    * "3 of 3 max" — the amber pill SPEC §3b-i's `capped` state replaces
-   * `today.pill.count` with, never alongside it. NOT wired to the engine on
-   * this branch (a concurrent agent owns `capped`/`overMax`/`maxPerDay`); the
-   * prop this renders from is driven directly by the caller until that lands.
+   * `today.pill.count` with, never alongside it. `given`/`max` come from
+   * `todayModel.ts`'s `toDose`, which reads them off the occurrence's own
+   * `givenToday`/`maxPerDay` verbatim.
    */
   "today.pill.cap": (p: { given: number; max: number }) => string;
   /**
    * The capped row's ghost action (SPEC §3b-i): "the cap warns, it does not
-   * lock". Logs a normal `given` event flagged `overMax` once wired — this
-   * catalogue entry only supplies the label; nothing here writes anything.
+   * lock". `TodayPage.tsx` wires this to the same `give` callback its
+   * primary button uses, which logs a normal `given` event flagged
+   * `overMax` — this catalogue entry only supplies the label.
    */
   "today.pill.giveAnyway": () => string;
+  /**
+   * Defect 4: the ghost action's own accessible name — its visible label
+   * (`today.pill.giveAnyway`) is the bare "Give anyway" on every capped row,
+   * so a screen-reader user with several capped courses hears identical
+   * buttons with no way to tell which medication each belongs to.
+   * `medicationName` is DATA, interpolated verbatim (never translated).
+   */
+  "today.pill.giveAnyway.aria": (p: { medicationName: string }) => string;
 
   // --- empty state --------------------------------------------------------
   "today.emptyTitle": () => string;
@@ -152,6 +161,16 @@ export interface TodayMessages {
   "today.logAtTime.ago": (p: { duration: string }) => string;
   /** "today · <ago>" beside the headline; `ago` is the rendered `today.logAtTime.ago`. */
   "today.logAtTime.todayAgo": (p: { ago: string }) => string;
+  /**
+   * "yesterday · <ago>" — the SAME shape as `today.logAtTime.todayAgo`, for
+   * when `chosen` falls on the previous LOCAL calendar day. Reachable since
+   * the backdate floor widened to a rolling 24 h (COMMON §6 item 4): a
+   * `chosen` instant near the floor can genuinely be yesterday, and
+   * `todayAgo` alone would print a false "today" beside it. `LogAtTimeSheet`
+   * selects between the two by comparing `localDayKey(chosen)` against
+   * `localDayKey(effectiveNow)`, never by how many hours have elapsed.
+   */
+  "today.logAtTime.yesterdayAgo": (p: { ago: string }) => string;
   /** First relative-offset chip. */
   "today.logAtTime.justNow": () => string;
   /** Relative-offset chip: "15 min" / "30 min" — invariant abbreviation, never plural. */
@@ -326,6 +345,7 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.pill.count": (p) => `${p.given} of ${p.total} doses`,
   "today.pill.cap": (p) => `${p.given} of ${p.max} max`,
   "today.pill.giveAnyway": () => "Give anyway",
+  "today.pill.giveAnyway.aria": (p) => `Give ${p.medicationName} anyway`,
 
   "today.emptyTitle": () => "Nothing due today.",
   "today.nextDose.today": (p) => `Next dose at ${p.time}`,
@@ -372,6 +392,7 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.logAtTime.subline": (p) => `${p.petName} · scheduled ${p.time} · ${p.schedule}`,
   "today.logAtTime.ago": (p) => `${p.duration} ago`,
   "today.logAtTime.todayAgo": (p) => `today · ${p.ago}`,
+  "today.logAtTime.yesterdayAgo": (p) => `yesterday · ${p.ago}`,
   "today.logAtTime.justNow": () => "Just now",
   "today.logAtTime.offsetMinutes": (p) => `${p.minutes} min`,
   "today.logAtTime.offsetHours": (p) => `${p.hours} h`,
@@ -476,6 +497,7 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   // "макс." is an invariant abbreviation, the same convention `today.logAtTime.offsetMinutes`/`offsetHours` already use — never declined.
   "today.pill.cap": (p) => `${p.given} з ${p.max} макс.`,
   "today.pill.giveAnyway": () => "Все одно дати",
+  "today.pill.giveAnyway.aria": (p) => `Все одно дати ${p.medicationName}`,
 
   "today.emptyTitle": () => "Сьогодні нічого не заплановано.",
   "today.nextDose.today": (p) => `Наступна доза о ${p.time}`,
@@ -530,6 +552,8 @@ export const ukToday = (f: Formatters): TodayMessages => ({
     `${p.petName} · заплановано на ${p.time} · ${p.schedule}`,
   "today.logAtTime.ago": (p) => `${p.duration} тому`,
   "today.logAtTime.todayAgo": (p) => `сьогодні · ${p.ago}`,
+  // "вчора" — the standard Ukrainian "yesterday", parallel to `сьогодні` above.
+  "today.logAtTime.yesterdayAgo": (p) => `вчора · ${p.ago}`,
   "today.logAtTime.justNow": () => "Щойно",
   // "хв" is the standard invariant abbreviation — never pluralized, same
   // convention as `history.detail.lateDuration`.

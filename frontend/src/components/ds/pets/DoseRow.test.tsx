@@ -85,4 +85,61 @@ describe("DoseRow — cap variant (SPEC §3b-i, not wired to the engine)", () =>
     expect(onGiveAnyway).toHaveBeenCalledTimes(1);
     expect(onCardClick).not.toHaveBeenCalled();
   });
+
+  // Defect 2: a capped row must offer the ghost action ONLY — the ordinary
+  // primary Give button is not rendered alongside it, for any non-given
+  // state the cap can occur in.
+  it("Defect 2: a capped row (state='later' or 'due') offers the ghost action only, never a second Give button", () => {
+    for (const state of ["later", "due", "overdue"] as const) {
+      const { unmount } = render(
+        <DoseRow
+          medication="Metacam"
+          state={state}
+          cap={{ label: "3 of 3 max", giveAnywayLabel: "Give anyway", onGiveAnyway: vi.fn() }}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Give anyway" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Give" })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  // Other (non-capped) states are unaffected: the primary button still
+  // renders alone, with no ghost action.
+  it("a non-capped row still renders the primary Give button alone", () => {
+    render(<DoseRow medication="Metacam" state="later" countLabel="1 of 2 doses" />);
+    expect(screen.getByRole("button", { name: "Give" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Give anyway" })).not.toBeInTheDocument();
+  });
+
+  // Defect 4: the ghost action's accessible name folds in the medication
+  // (via `giveAnywayAriaLabel`) so several capped rows are distinguishable
+  // to a screen reader, while the visible label stays the short shared text.
+  it("Defect 4: giveAnywayAriaLabel names the medication; the visible label stays 'Give anyway'", () => {
+    render(
+      <DoseRow
+        medication="Metacam"
+        state="later"
+        cap={{
+          label: "3 of 3 max",
+          giveAnywayLabel: "Give anyway",
+          giveAnywayAriaLabel: "Give Metacam anyway",
+          onGiveAnyway: vi.fn(),
+        }}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Give Metacam anyway" });
+    expect(button).toHaveTextContent("Give anyway");
+  });
+
+  it("falls back to giveAnywayLabel as the accessible name when giveAnywayAriaLabel is omitted", () => {
+    render(
+      <DoseRow
+        medication="Metacam"
+        state="later"
+        cap={{ label: "3 of 3 max", giveAnywayLabel: "Give anyway", onGiveAnyway: vi.fn() }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Give anyway" })).toBeInTheDocument();
+  });
 });
