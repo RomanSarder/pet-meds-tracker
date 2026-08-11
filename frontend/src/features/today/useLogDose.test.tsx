@@ -102,6 +102,7 @@ async function seed(): Promise<Fixture> {
       scheduledFor: SCHEDULED_FOR,
       amount: course.doseAmount,
       status: "given",
+      medicationName: "Metacam",
       toastMessage: "Metacam logged",
     },
   };

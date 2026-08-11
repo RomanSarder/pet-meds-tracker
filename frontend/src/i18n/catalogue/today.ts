@@ -197,6 +197,18 @@ export interface TodayMessages {
   "today.toast.duplicateSkipped": (p: { name: string; time: string }) => string;
   /** Any other `logDose` failure that isn't the duplicate guard — a plain factual toast rather than silence. */
   "today.toast.logFailed": () => string;
+
+  // --- early-give confirm (SPEC §3b: "allow, but confirm when early") -----
+  /**
+   * `EarlyGiveConfirmDialog`'s title, reached only when a give collides with
+   * the grace window on a dose that was not yet due. `medicationName` is
+   * DATA (SPEC §10a), interpolated verbatim.
+   */
+  "today.earlyGive.title": (p: { medicationName: string }) => string;
+  /** Footer's negative action. Withdraws — logs nothing. */
+  "today.earlyGive.cancel": () => string;
+  /** Footer's positive action — logs the dose now and re-anchors the chain (SPEC §3b). */
+  "today.earlyGive.confirm": () => string;
 }
 
 export const enToday = (f: Formatters): TodayMessages => ({
@@ -304,6 +316,10 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.toast.duplicateGiven": (p) => `Already given by ${p.name} at ${p.time}`,
   "today.toast.duplicateSkipped": (p) => `Already skipped by ${p.name} at ${p.time}`,
   "today.toast.logFailed": () => "Could not log the dose",
+
+  "today.earlyGive.title": (p) => `Give ${p.medicationName} early?`,
+  "today.earlyGive.cancel": () => "Cancel",
+  "today.earlyGive.confirm": () => "Give anyway",
 });
 
 export const ukToday = (f: Formatters): TodayMessages => ({
@@ -441,4 +457,10 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.toast.duplicateGiven": (p) => `Вже дано: ${p.name}, о ${p.time}`,
   "today.toast.duplicateSkipped": (p) => `Вже пропущено: ${p.name}, о ${p.time}`,
   "today.toast.logFailed": () => "Не вдалося записати дозу",
+
+  // `medicationName` stays nominative and undeclined — DATA (SPEC §10a),
+  // same rule `today.toast.duplicateGiven`'s `name` follows above.
+  "today.earlyGive.title": (p) => `Дати ${p.medicationName} раніше?`,
+  "today.earlyGive.cancel": () => "Скасувати",
+  "today.earlyGive.confirm": () => "Все одно дати",
 });

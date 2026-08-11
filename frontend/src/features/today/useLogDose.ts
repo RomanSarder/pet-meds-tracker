@@ -17,7 +17,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import type { DoseEvent, IsoDateTime, LocalDate } from "@/domain";
+import type { DoseEvent, DoseEventStatus, IsoDateTime, LocalDate } from "@/domain";
 import { UNDO_WINDOW_MS, displayNameFor, formatHHMM, now, occurrenceKeyFor, qk } from "@/domain";
 import { DuplicateDoseError, getRepo, RetractWindowExpiredError } from "@/data";
 import { useMembers } from "@/features/household/hooks";
@@ -31,6 +31,8 @@ export interface LogDoseVars {
   scheduledFor: IsoDateTime | null;
   amount: number;
   status: "given" | "skipped";
+  /** Short medication name alone — DATA, never translated. Titles the early-give confirm dialog. */
+  medicationName: string;
   /** Omitted → the repo stamps the current time. Set for "log at a different time". */
   givenAt?: IsoDateTime;
   /**
@@ -39,6 +41,27 @@ export interface LogDoseVars {
    * so this hook never words anything about a medication itself.
    */
   toastMessage: string;
+  /**
+   * Set by the caller when the occurrence being logged is NOT yet due (SPEC
+   * §3b: `dose.state` is `"later"` or `"upcoming"`) — the one condition under
+   * which a grace-window collision means "give this early?" rather than
+   * "someone already gave this". Absent (or false) everywhere else, so a
+   * collision on an already-due dose keeps rejecting flat, exactly as before.
+   */
+  earlyGive?: boolean;
+  /** User-confirmed retry after an `earlyGive` conflict — forwarded to the repo verbatim. */
+  allowWithinGrace?: boolean;
+}
+
+/** What an early-give collision hands the caller, to render the confirm dialog. */
+export interface EarlyGiveConflict {
+  vars: LogDoseVars;
+  /** The prior dose's actor, already resolved to a display name. */
+  name: string;
+  /** The prior dose's `givenAt`, already formatted HH:MM. */
+  time: string;
+  /** Whether the prior dose was given or skipped — the dialog words each differently. */
+  status: DoseEventStatus;
 }
 
 interface LogDoseContext {
@@ -110,7 +133,19 @@ export function useUndoDose(day: LocalDate): (eventId: string) => Promise<void> 
   );
 }
 
-export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, LogDoseVars> {
+export interface UseLogDoseOptions {
+  /**
+   * A collision falling under `earlyGive` reaches here instead of the flat
+   * duplicate toast — the caller (`TodayPage`) owns the confirm dialog; this
+   * hook only decides WHICH doses are eligible to ask, never how to ask.
+   */
+  onEarlyGiveConflict?: (conflict: EarlyGiveConflict) => void;
+}
+
+export function useLogDose(
+  day: LocalDate,
+  opts?: UseLogDoseOptions,
+): UseMutationResult<DoseEvent, Error, LogDoseVars> {
   const queryClient = useQueryClient();
   const { show } = useToast();
   const t = useT();
@@ -128,6 +163,7 @@ export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, 
         scheduledFor: vars.scheduledFor,
         givenAt: vars.givenAt,
         amount: vars.amount,
+        allowWithinGrace: vars.allowWithinGrace,
       }),
 
     onMutate: async (vars): Promise<LogDoseContext> => {
@@ -153,7 +189,7 @@ export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, 
       return { previous };
     },
 
-    onError: (error, _vars, context) => {
+    onError: (error, vars, context) => {
       if (context?.previous !== undefined) {
         queryClient.setQueryData<TodaySnapshot>(qk.today(day), context.previous);
       }
@@ -167,6 +203,16 @@ export function useLogDose(day: LocalDate): UseMutationResult<DoseEvent, Error, 
       if (error instanceof DuplicateDoseError) {
         const name = displayNameFor(error.actorId, membersQuery.data ?? []);
         const time = formatHHMM(new Date(error.givenAt));
+        // `earlyGive` (SPEC §3b, "allow, but confirm when early"): the
+        // occurrence being logged was not yet due, so a collision here means
+        // "give this early anyway?", not "someone already gave this" — the
+        // page decides how to ask, this hook only routes the decision.
+        // Everything else (a normal on-time or overdue give, Skip, "log at a
+        // different time") keeps the flat rejection below unconditionally.
+        if (vars.earlyGive && opts?.onEarlyGiveConflict) {
+          opts.onEarlyGiveConflict({ vars, name, time, status: error.status });
+          return;
+        }
         show({
           message:
             error.status === "skipped"

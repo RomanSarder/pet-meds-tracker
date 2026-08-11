@@ -104,6 +104,16 @@ export function PetDetailView({ petId }: { petId: string }) {
     courseEvents: courseEvents.data ?? [],
   }).filter((o) => o.petId === petId);
 
+  // `pets.schedule.countToday` promises a count of TODAY's doses. An anchored
+  // `fromLastDose` chain's next dose can now appear here a day or more before
+  // it is actually due (SPEC §3b) — still shown below, read-only, so the
+  // early-reachable dose stays visible from Pet detail too, but it must not
+  // inflate a badge that specifically claims "today". Mirrors
+  // `today/todayModel.ts`'s `isDueToday`.
+  const countedToday = scheduleLoading
+    ? 0
+    : occurrences.filter((o) => getDoseState(o, nowDate) !== "upcoming").length;
+
   function medicationName(medicationId: string): string {
     return medicationList.find((m) => m.id === medicationId)?.name ?? "";
   }
@@ -236,7 +246,7 @@ export function PetDetailView({ petId }: { petId: string }) {
           gap: 14,
         }}
       >
-        <SectionLabel trailing={tr.t("pets.schedule.countToday", { count: occurrences.length })}>
+        <SectionLabel trailing={tr.t("pets.schedule.countToday", { count: countedToday })}>
           {tr.t("pets.schedule")}
         </SectionLabel>
         {/*
@@ -259,6 +269,7 @@ export function PetDetailView({ petId }: { petId: string }) {
                   medicationName: medicationName(o.medicationId),
                   instructions: o.instructions,
                   progress: course ? renderCourseProgress(courseProgress(course, today), tr) : "",
+                  today,
                   tr,
                 });
                 // Read-only (SPEC §5.3): no `onGive`, and never the DS

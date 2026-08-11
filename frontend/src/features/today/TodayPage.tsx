@@ -27,11 +27,12 @@ import { describeSchedule } from "@/engine";
 import { useNow } from "@/app/useNow";
 import { useTranslator } from "@/i18n";
 import { renderSchedule } from "@/i18n/schedule";
+import { EarlyGiveConfirmDialog } from "./EarlyGiveConfirmDialog";
 import { TodayDoseRow } from "./TodayDoseRow";
 import { buildTodayView, greetingFor, scheduledForOf } from "./todayModel";
 import type { LogAtTimeContext, TodayDose, TodayPetGroup } from "./types";
 import { useDailySweep } from "./useDailySweep";
-import { useLogDose, type LogDoseVars } from "./useLogDose";
+import { useLogDose, type EarlyGiveConflict, type LogDoseVars } from "./useLogDose";
 import { useTodayQuery } from "./useTodayData";
 
 const SCREEN_STYLE = {
@@ -70,13 +71,14 @@ const COMING_UP_STYLE = {
  */
 function identityOf(dose: TodayDose): Pick<
   LogDoseVars,
-  "occurrenceKey" | "courseId" | "amount" | "scheduledFor"
+  "occurrenceKey" | "courseId" | "amount" | "scheduledFor" | "medicationName"
 > {
   return {
     occurrenceKey: dose.key,
     courseId: dose.courseId,
     amount: dose.occurrence.doseAmount,
     scheduledFor: scheduledForOf(dose.occurrence),
+    medicationName: dose.medicationName,
   };
 }
 
@@ -91,7 +93,13 @@ export function TodayPage(): ReactElement {
 
   useDailySweep(now);
   const { data: snapshot, isPending } = useTodayQuery(day);
-  const logDose = useLogDose(day);
+
+  // SPEC §3b: "Allow, but confirm when early." A give that collides with the
+  // grace window AND was not yet due (`earlyGive`, set below) lands here
+  // instead of the flat duplicate toast — `EarlyGiveConfirmDialog` below is
+  // the single instance for the whole page, not one per row.
+  const [earlyGiveConflict, setEarlyGiveConflict] = useState<EarlyGiveConflict | null>(null);
+  const logDose = useLogDose(day, { onEarlyGiveConflict: setEarlyGiveConflict });
 
   // Occurrence keys resolved while this screen has been mounted. Only ever
   // added to: an undone dose loses its event and comes back as pending on its
@@ -134,9 +142,21 @@ export function TodayPage(): ReactElement {
         toastMessage: t("today.toast.logged", {
           medicationName: dose.medicationName,
         }),
+        // SPEC §3b: only a dose that is not yet due (`later`/`upcoming`) is
+        // eligible for the early-give confirm dialog on a grace-window
+        // collision — an on-time or overdue collision is a genuine "someone
+        // already gave this" and keeps the flat rejection (`useLogDose.ts`).
+        earlyGive: dose.state === "later" || dose.state === "upcoming",
       }),
     [log, t],
   );
+
+  const confirmEarlyGive = useCallback(() => {
+    if (!earlyGiveConflict) return;
+    const { vars } = earlyGiveConflict;
+    setEarlyGiveConflict(null);
+    log({ ...vars, allowWithinGrace: true });
+  }, [earlyGiveConflict, log]);
 
   const skip = useCallback(
     (dose: TodayDose) =>
@@ -358,6 +378,14 @@ export function TodayPage(): ReactElement {
           </Card>
         ) : null}
       </div>
+
+      <EarlyGiveConfirmDialog
+        conflict={earlyGiveConflict}
+        onOpenChange={(open) => {
+          if (!open) setEarlyGiveConflict(null);
+        }}
+        onConfirm={confirmEarlyGive}
+      />
     </div>
   );
 }

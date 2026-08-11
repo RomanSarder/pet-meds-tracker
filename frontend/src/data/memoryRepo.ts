@@ -553,6 +553,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     givenAt?: IsoDateTime;
     amount: number;
     note?: string;
+    allowWithinGrace?: boolean;
   }): Promise<DoseEvent> {
     const course = requireAlive(courses, input.courseId, "Course");
     const actorId = await currentActorId();
@@ -566,6 +567,8 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       if (input.scheduledFor !== null && e.scheduledFor === input.scheduledFor) {
         return true;
       }
+      // See `idbRepo.ts`'s identical guard for why only this half bypasses.
+      if (input.allowWithinGrace) return false;
       return Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs;
     });
     if (duplicate) {

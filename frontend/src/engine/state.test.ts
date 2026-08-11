@@ -186,4 +186,37 @@ describe("summariseDay", () => {
     expect(summary.overdue).toBe(0);
     expect(summary.earliestOverdue).toBeNull();
   });
+
+  // Part 2 consumer fix (SPEC §3b): an anchored `fromLastDose` chain's next
+  // dose stays a live, giveable row before its due instant crosses into a
+  // later local day (`occurrences.ts`'s `fromLastDoseOccurrences`), so it
+  // must count toward "remaining" — otherwise the header reads "0 doses
+  // left" above a card that still has a Give button on it.
+  it("counts an 'upcoming' fromLastDose occurrence toward remaining, never an 'upcoming' fixedTimes one (CRITICAL SCOPE GUARD)", () => {
+    const now = new Date(2026, 7, 10, 10, 0);
+    const upcomingInterval = makeOccurrence({
+      courseId: "c1",
+      kind: "fromLastDose",
+      graceMinutes: GRACE_INTERVAL_MIN,
+      dueAt: new Date(2026, 7, 11, 3, 0), // tomorrow
+    });
+    const upcomingFixed = makeOccurrence({
+      courseId: "c2",
+      kind: "fixedTimes",
+      dueAt: new Date(2026, 7, 12, 8, 0), // two days out — never reachable in
+      // practice for a real fixedTimes occurrence (its dueAt is always
+      // inside the day it was generated for), constructed directly here to
+      // prove the guard itself rather than the invariant that normally
+      // makes it moot.
+    });
+
+    const both = summariseDay([upcomingInterval, upcomingFixed], now);
+    expect(both.remaining).toBe(1);
+
+    const intervalOnly = summariseDay([upcomingInterval], now);
+    expect(intervalOnly.remaining).toBe(1);
+
+    const fixedOnly = summariseDay([upcomingFixed], now);
+    expect(fixedOnly.remaining).toBe(0);
+  });
 });

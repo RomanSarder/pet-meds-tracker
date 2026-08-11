@@ -622,6 +622,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     givenAt?: IsoDateTime;
     amount: number;
     note?: string;
+    allowWithinGrace?: boolean;
   }): Promise<DoseEvent> {
     const actorId = await currentActorId();
     const conn = await db();
@@ -646,6 +647,11 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       if (input.scheduledFor !== null && e.scheduledFor === input.scheduledFor) {
         return true;
       }
+      // The grace-window heuristic — a collision with a DIFFERENT
+      // occurrence logged recently — is exactly what a confirmed early give
+      // (SPEC §3b: "logging a dose early ... is intended") is allowed to
+      // bypass; the exact-`scheduledFor` check above never is.
+      if (input.allowWithinGrace) return false;
       return Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs;
     });
     if (duplicate) {

@@ -140,6 +140,15 @@ export interface Repo {
     givenAt?: IsoDateTime;
     amount: number;
     note?: string;
+    /**
+     * User-confirmed early give (SPEC §3b: "logging a dose early ... is
+     * intended"). Bypasses ONLY the grace-window collision heuristic — a
+     * live event on this course logged within the schedule's grace window —
+     * never the exact-same-occurrence check just above it in the dedup
+     * guard, which stays a hard block regardless: re-logging the identical
+     * `scheduledFor` is always a true duplicate, confirmed or not.
+     */
+    allowWithinGrace?: boolean;
   }): Promise<DoseEvent>;
   correctDose(
     originalId: string,

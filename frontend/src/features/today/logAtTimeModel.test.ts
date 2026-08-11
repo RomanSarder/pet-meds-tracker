@@ -310,6 +310,27 @@ describe("scheduledChoice", () => {
     expect(scheduledChoice(makeOccurrence(course, DAY, dueAt))).toBeNull();
   });
 
+  // Part 2 consumer fix (SPEC §3b): an anchored `fromLastDose` chain's next
+  // dose can now be reachable — and this sheet openable on it — a day before
+  // it is due. The one-sided guard used to only reject a dueAt BEFORE
+  // `occurrence.day`, so a dueAt a day AFTER it (this new case) slipped
+  // through unclamped into `helperFor`, which then computed a ~26h gap and
+  // rendered "did you mean yesterday?" about a dose that has not happened
+  // yet — nonsensical. The guard is now symmetric.
+  it("returns null for an occurrence whose due instant falls a day AFTER the one being viewed, not just before", () => {
+    const dueAt = new Date(2026, 7, 9, 3, 0); // tomorrow, 03:00
+    expect(scheduledChoice(makeOccurrence(course, DAY, dueAt))).toBeNull();
+  });
+
+  it("end-to-end: a null scheduledChoice for a next-day dueAt never lets helperFor render the day-check", () => {
+    const dueAt = new Date(2026, 7, 9, 3, 0); // tomorrow
+    const scheduledAt = scheduledChoice(makeOccurrence(course, DAY, dueAt));
+    expect(scheduledAt).toBeNull();
+    const now = at(23, 30); // late on DAY, close to the real due instant
+    const chosen = atOffset(DEFAULT_OFFSET_MIN, now);
+    expect(helperFor(chosen, scheduledAt, now)).toEqual({ kind: "range" });
+  });
+
   it("uses the same midnight the sheet's floor uses, for an occurrence filed under today", () => {
     const now = at(14, 0);
     expect(new Date(2026, 7, 8, 0, 0).getTime()).toBe(boundsFor(now).floor.getTime());

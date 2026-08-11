@@ -47,10 +47,46 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 3 of 7",
+      today: "2026-08-08",
       tr: enTr,
     });
     expect(props.state).toBe(rowState);
     expect(props.time).toBe(time);
+  });
+
+  // Part 2 consumer fix (SPEC §3b): an anchored `fromLastDose` chain's next
+  // dose can now be `upcoming` on Pet detail's Schedule block too — reachable
+  // a day before it is due. Its bare clock time alone would read as due
+  // TODAY at that hour; the day-word says otherwise.
+  it("upcoming due tomorrow adds a 'tomorrow' day-word to detail, distinct from a same-day upcoming row", () => {
+    const tomorrow = doseRowPropsFor({
+      occurrence: baseOccurrence({
+        kind: "fromLastDose",
+        day: "2026-08-08",
+        dueAt: new Date("2026-08-09T02:00:00.000Z"), // 03:00 BST, next local day
+      }),
+      state: "upcoming",
+      medicationName: "Metoclopramide",
+      instructions: null,
+      progress: "every 8h · from last dose",
+      today: "2026-08-08",
+      tr: enTr,
+    });
+    expect(tomorrow.time).toBe("03:00");
+    expect(tomorrow.detail).toBe("03:00 · tomorrow · every 8h · from last dose");
+
+    // The STATE_TABLE case above pins the opposite: no day-word when the
+    // occurrence's own `dueAt` is still within `today`.
+    const sameDay = doseRowPropsFor({
+      occurrence: baseOccurrence(),
+      state: "upcoming",
+      medicationName: "Metacam",
+      instructions: null,
+      progress: "Day 3 of 7",
+      today: "2026-08-08",
+      tr: enTr,
+    });
+    expect(sameDay.detail).not.toContain("tomorrow");
   });
 
   it("given derives its trailing time from the logged givenAt, not the scheduled dueAt (SPEC §4: 'the logged time')", () => {
@@ -78,6 +114,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Amoxicillin",
       instructions: null,
       progress: "Day 1 of 7",
+      today: "2026-08-08",
       tr: enTr,
     });
 
@@ -95,6 +132,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 3 of 7",
+      today: "2026-08-08",
       tr: enTr,
     });
     expect(props).toMatchObject({ state: "given", time: "Skipped" });
@@ -113,6 +151,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 3 of 7",
+      today: "2026-08-08",
       tr: enTr,
     });
     expect(props.time).toBe("Skipped");
@@ -127,6 +166,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metoclopramide",
       instructions: null,
       progress: "Ongoing — from last dose",
+      today: "2026-08-08",
       tr: enTr,
     });
     expect(props).toMatchObject({ state: "later", time: "Not started" });
@@ -139,6 +179,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: "after food",
       progress: "Day 3 of 7",
+      today: "2026-08-08",
       tr: enTr,
     });
     expect(props.detail).toBe("08:00 · after food · Day 3 of 7");
@@ -151,6 +192,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 3 of 7",
+      today: "2026-08-08",
       tr: enTr,
     });
     expect(props.detail).toBe("08:00 · Day 3 of 7");
@@ -164,6 +206,7 @@ describe("doseRowPropsFor", () => {
       medicationName: "Ivermectin",
       instructions: null,
       progress: "Day 1",
+      today: "2026-08-08",
       tr: enTr,
     });
     expect(props.medication).toBe("Ivermectin 2 drops");
@@ -183,6 +226,7 @@ describe("doseRowPropsFor — Ukrainian", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "день 3 з 7",
+      today: "2026-08-08",
       tr: ukTr,
     });
     expect(props).toMatchObject({ state: "given", time: "Пропущено" });
@@ -201,6 +245,7 @@ describe("doseRowPropsFor — Ukrainian", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "день 3 з 7",
+      today: "2026-08-08",
       tr: ukTr,
     });
     expect(props.time).toBe("Пропущено");
@@ -215,6 +260,7 @@ describe("doseRowPropsFor — Ukrainian", () => {
       medicationName: "Metoclopramide",
       instructions: null,
       progress: "триває",
+      today: "2026-08-08",
       tr: ukTr,
     });
     expect(props).toMatchObject({ state: "later", time: "Не розпочато" });
@@ -227,6 +273,7 @@ describe("doseRowPropsFor — Ukrainian", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "день 3 з 7",
+      today: "2026-08-08",
       tr: ukTr,
     });
     expect(props.medication).toBe("Metacam 0.4 ml");
@@ -239,6 +286,7 @@ describe("doseRowPropsFor — Ukrainian", () => {
       medicationName: "Ivermectin",
       instructions: null,
       progress: "день 1",
+      today: "2026-08-08",
       tr: ukTr,
     });
     expect(props.medication).toBe("Ivermectin 2 drop");

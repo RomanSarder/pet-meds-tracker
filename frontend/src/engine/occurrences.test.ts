@@ -334,6 +334,15 @@ describe("getOccurrences — fromLastDose", () => {
     const onNewDueDay = getOccurrences("2026-08-06", ctx);
     expect(onNewDueDay).toHaveLength(1);
     expect(onNewDueDay[0].dueAt?.toISOString()).toBe("2026-08-06T02:30:00.000Z");
+
+    // And the SAME re-anchored occurrence is already visible on the new
+    // anchor's OWN day (2026-08-05 — the early give itself happened there),
+    // not only once its due day arrives: this is what keeps the chain
+    // giveable early again after an early give, not just reachable once.
+    const onAnchorDay = getOccurrences("2026-08-05", ctx);
+    expect(onAnchorDay).toHaveLength(1);
+    expect(onAnchorDay[0].dueAt?.toISOString()).toBe("2026-08-06T02:30:00.000Z");
+    expect(onAnchorDay[0].key).toBe(onNewDueDay[0].key);
   });
 
   it("anchors from resumedAt when it is later than the last given event", () => {

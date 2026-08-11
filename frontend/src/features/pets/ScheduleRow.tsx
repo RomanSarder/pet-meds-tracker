@@ -15,8 +15,12 @@
 //   due       — its due time
 //   later     — its due time
 //   notStarted— "Not started"
-// `upcoming` cannot occur here in practice (occurrences are generated for
-// `today` only) but maps like `later` for safety.
+// `upcoming` DOES occur here now: an anchored `fromLastDose` chain's next
+// dose can be reachable a day or more before it is actually due (SPEC §3b;
+// `occurrences.ts` emits it starting the anchor's own day, not only the day
+// `dueAt` lands on). It maps like `later` — the DS has no dedicated variant,
+// and `later`'s outlined, not-yet-due presentation is the accurate one; the
+// day-word `doseRowPropsFor` adds to `detail` is what tells the two apart.
 import type { CSSProperties } from "react";
 import type { DoseState } from "@/engine";
 import { useT } from "@/i18n";

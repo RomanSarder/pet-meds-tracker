@@ -215,6 +215,46 @@ describe("buildTodayView — fromLastDose reachable before its dueAt (SPEC §3b)
     expect(group.pending).toHaveLength(0);
     expect(group.body).toHaveLength(0);
   });
+
+  // Part 2 consumer fix: an early-reachable `upcoming` row is dated (it has
+  // a real `dueAt`) but is NOT due today, so it must not inflate `Y` in the
+  // `X of Y today` counter, and it must not permanently block a pet from
+  // reading as `done` — a once-daily interval course given this morning
+  // should read "done" for the rest of today, not perpetually "1 pending".
+  it("an upcoming-only pending dose does not count toward Y and still lets the pet read as done", () => {
+    const course = courseOf(COURSE_CLOVER_METOCLOPRAMIDE);
+    const tomorrow = addLocalDays(DAY, 1);
+    const scheduledFor = atLocalTime(tomorrow, "08:00").toISOString();
+    const occ = makeOccurrence(course, { day: DAY, scheduledFor });
+    setState(occ.key, "upcoming");
+
+    const group = groupNamed(buildTodayView(snapshotOf([occ]), NOW, EN), "Clover");
+
+    // Not "0 of 1 today" — nothing is actually due today.
+    expect(group.counterLabel).toBe("");
+    expect(group.done).toBe(true);
+    // Still shown and actionable — `done` does not hide it.
+    expect(group.pending).toHaveLength(1);
+    expect(group.status).toBe("Next dose tomorrow at 08:00");
+  });
+
+  it("a genuinely due dose keeps the pet not-done even alongside an upcoming early-reachable one", () => {
+    const course = courseOf(COURSE_CLOVER_METOCLOPRAMIDE);
+    const tomorrow = addLocalDays(DAY, 1);
+    const upcoming = makeOccurrence(course, {
+      day: DAY,
+      scheduledFor: atLocalTime(tomorrow, "08:00").toISOString(),
+    });
+    setState(upcoming.key, "upcoming");
+    const due = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(due.key, "due");
+
+    const group = groupNamed(buildTodayView(snapshotOf([upcoming, due]), NOW, EN), "Clover");
+
+    expect(group.done).toBe(false);
+    // `Y` counts the genuinely-due dose but not the early-reachable one.
+    expect(group.counterLabel).toBe("0 of 1 today");
+  });
 });
 
 describe("buildTodayView — grouping and ordering", () => {
@@ -236,7 +276,12 @@ describe("buildTodayView — grouping and ordering", () => {
     ]);
     expect(groupNamed(view, "Clover").status).toBe("Overdue since 08:00");
     expect(groupNamed(view, "Clover").hasOverdue).toBe(true);
-    expect(groupNamed(view, "Nugget").status).toBe("Next at 09:00");
+    // `statusFor`'s "next" clause now reuses `formatNextDose` (SPEC §3b fix:
+    // the same "next due" instant can now fall on a later day, and this
+    // wording already carries the "tomorrow"/date qualifier that case needs),
+    // so the wording is "Next dose at HH:MM", not the bare "Next at HH:MM"
+    // this used to assert.
+    expect(groupNamed(view, "Nugget").status).toBe("Next dose at 09:00");
     const done = groupNamed(view, "Biscuit");
     expect(done.done).toBe(true);
     expect(done.resolved).toHaveLength(1);
