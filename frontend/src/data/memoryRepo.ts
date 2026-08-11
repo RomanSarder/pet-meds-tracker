@@ -32,7 +32,7 @@ import {
   cloneFixtures,
   DEFAULT_SELF_DISPLAY_NAME,
   GRACE_FIXED_MIN,
-  GRACE_INTERVAL_MIN,
+  intervalGraceMinutes,
   localDayKey,
   newId,
   now,
@@ -560,7 +560,10 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     const ts = stamp();
     const givenAt = input.givenAt ?? ts;
 
-    const graceMin = course.schedule.kind === "fixedTimes" ? GRACE_FIXED_MIN : GRACE_INTERVAL_MIN;
+    const graceMin =
+      course.schedule.kind === "fixedTimes"
+        ? GRACE_FIXED_MIN
+        : intervalGraceMinutes(course.schedule.intervalHours);
     const graceMs = graceMin * 60_000;
     const givenAtMs = new Date(givenAt).getTime();
     const duplicate = liveDoseEventsForCourse(input.courseId).find((e) => {

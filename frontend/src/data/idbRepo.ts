@@ -28,7 +28,7 @@ import type {
 import {
   DEFAULT_SELF_DISPLAY_NAME,
   GRACE_FIXED_MIN,
-  GRACE_INTERVAL_MIN,
+  intervalGraceMinutes,
   localDayKey,
   newId,
   now,
@@ -638,7 +638,10 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
 
     const ts = now().toISOString();
     const givenAt = input.givenAt ?? ts;
-    const graceMin = course.schedule.kind === "fixedTimes" ? GRACE_FIXED_MIN : GRACE_INTERVAL_MIN;
+    const graceMin =
+      course.schedule.kind === "fixedTimes"
+        ? GRACE_FIXED_MIN
+        : intervalGraceMinutes(course.schedule.intervalHours);
     const graceMs = graceMin * 60_000;
     const givenAtMs = new Date(givenAt).getTime();
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GRACE_FIXED_MIN, GRACE_INTERVAL_MIN, occurrenceKeyFor } from "@/domain";
+import { GRACE_FIXED_MIN, GRACE_INTERVAL_CAP_MIN, occurrenceKeyFor } from "@/domain";
 import type { DoseEvent } from "@/domain";
 import type { Occurrence } from "./engine.types";
 import { getDoseState, summariseDay } from "./state";
@@ -82,7 +82,7 @@ describe("getDoseState", () => {
       dueAt: seededDueAt,
       key: occurrenceKeyFor(courseId, null), // the "|-" sentinel: chain has not started
       kind: "fromLastDose",
-      graceMinutes: GRACE_INTERVAL_MIN,
+      graceMinutes: GRACE_INTERVAL_CAP_MIN,
     });
     // Even well past the seeded time, this stays notStarted, never overdue.
     expect(getDoseState(occ, new Date(2026, 7, 10, 23, 0))).toBe("notStarted");
@@ -104,15 +104,15 @@ describe("getDoseState", () => {
 
   it("exactly at the fromLastDose grace boundary (90 min) is not yet overdue", () => {
     const dueAt = new Date(2026, 7, 10, 8, 0);
-    const occ = makeOccurrence({ courseId, dueAt, kind: "fromLastDose", graceMinutes: GRACE_INTERVAL_MIN });
-    const now = new Date(dueAt.getTime() + GRACE_INTERVAL_MIN * 60_000);
+    const occ = makeOccurrence({ courseId, dueAt, kind: "fromLastDose", graceMinutes: GRACE_INTERVAL_CAP_MIN });
+    const now = new Date(dueAt.getTime() + GRACE_INTERVAL_CAP_MIN * 60_000);
     expect(getDoseState(occ, now)).toBe("due");
   });
 
   it("one millisecond past the fromLastDose grace boundary (90 min) is overdue", () => {
     const dueAt = new Date(2026, 7, 10, 8, 0);
-    const occ = makeOccurrence({ courseId, dueAt, kind: "fromLastDose", graceMinutes: GRACE_INTERVAL_MIN });
-    const now = new Date(dueAt.getTime() + GRACE_INTERVAL_MIN * 60_000 + 1);
+    const occ = makeOccurrence({ courseId, dueAt, kind: "fromLastDose", graceMinutes: GRACE_INTERVAL_CAP_MIN });
+    const now = new Date(dueAt.getTime() + GRACE_INTERVAL_CAP_MIN * 60_000 + 1);
     expect(getDoseState(occ, now)).toBe("overdue");
   });
 
@@ -197,7 +197,7 @@ describe("summariseDay", () => {
     const upcomingInterval = makeOccurrence({
       courseId: "c1",
       kind: "fromLastDose",
-      graceMinutes: GRACE_INTERVAL_MIN,
+      graceMinutes: GRACE_INTERVAL_CAP_MIN,
       dueAt: new Date(2026, 7, 11, 3, 0), // tomorrow
     });
     const upcomingFixed = makeOccurrence({

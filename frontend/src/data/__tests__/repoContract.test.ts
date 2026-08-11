@@ -25,7 +25,7 @@ import {
   displayNameFor,
   fixedClock,
   GRACE_FIXED_MIN,
-  GRACE_INTERVAL_MIN,
+  GRACE_INTERVAL_CAP_MIN,
   isJoinCodeUsable,
   JOIN_CODE_TTL_MS,
   localDayKey,
@@ -582,7 +582,7 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
       expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
 
       setClock(
-        fixedClock(new Date(new Date(t0).getTime() + (GRACE_INTERVAL_MIN + 1) * 60_000).toISOString()),
+        fixedClock(new Date(new Date(t0).getTime() + (GRACE_INTERVAL_CAP_MIN + 1) * 60_000).toISOString()),
       );
       await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
       expect(await repo.listDoseEvents({ courseId })).toHaveLength(2);
