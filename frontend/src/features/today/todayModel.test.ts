@@ -318,15 +318,18 @@ describe("buildTodayView — grouping and ordering", () => {
 });
 
 describe("buildTodayView — subtitle", () => {
-  it("appends the overdue clause only when there is an overdue dose", () => {
+  // SPEC §6.1: the overdue count moves OUT of the header subtitle entirely —
+  // it lives on the day progress note below (see the "dayProgress" describe
+  // block) — so the subtitle must never mention it, overdue or not.
+  it("never repeats the overdue count in the header subtitle", () => {
     const overdue = occAt(COURSE_CLOVER_METACAM, "08:00");
     const later = occAt(COURSE_NUGGET_VITAMIN_C, "09:00");
     setState(overdue.key, "overdue");
     setState(later.key, "later");
 
-    expect(buildTodayView(snapshotOf([overdue, later]), NOW, EN).subtitle).toBe(
-      "2 doses left today · 1 overdue",
-    );
+    const withOverdue = buildTodayView(snapshotOf([overdue, later]), NOW, EN);
+    expect(withOverdue.subtitle).toBe("2 doses left today");
+    expect(withOverdue.subtitle).not.toContain("overdue");
 
     setState(overdue.key, "later");
     const clear = buildTodayView(snapshotOf([overdue, later]), NOW, EN);
@@ -340,6 +343,22 @@ describe("buildTodayView — subtitle", () => {
 
     expect(buildTodayView(snapshotOf([only]), NOW, EN).subtitle).toBe(
       "1 dose left today",
+    );
+  });
+
+  // SPEC §6.1: "N doses left today, or Everything given today at zero."
+  it("reads 'Everything given today' once nothing remains", () => {
+    const given = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(given.key, "given");
+
+    expect(buildTodayView(snapshotOf([given]), NOW, EN).subtitle).toBe(
+      "Everything given today",
+    );
+  });
+
+  it("also reads 'Everything given today' when nothing was ever scheduled", () => {
+    expect(buildTodayView(snapshotOf([]), NOW, EN).subtitle).toBe(
+      "Everything given today",
     );
   });
 });
@@ -372,6 +391,172 @@ describe("buildTodayView — counterLabel", () => {
       ).counterLabel,
     ).toBe("1 of 2 today");
   });
+});
+
+describe("buildTodayView — courseCount (row pill, SPEC §4)", () => {
+  it("counts given and total across every dose of the SAME course, on every one of its rows", () => {
+    const given = occAt(COURSE_CLOVER_METACAM, "08:00");
+    const pending = occAt(COURSE_CLOVER_METACAM, "20:00");
+    setState(given.key, "given");
+    setState(pending.key, "later");
+
+    const clover = groupNamed(
+      buildTodayView(snapshotOf([given, pending]), NOW, EN),
+      "Clover",
+    );
+    const givenDose = clover.resolved.find((d) => d.key === given.key)!;
+    const pendingDose = clover.pending.find((d) => d.key === pending.key)!;
+
+    // Both rows belong to the same course, so both report the SAME M — the
+    // course's own day total, not something scoped to the individual row.
+    expect(givenDose.courseCount).toEqual({ given: 1, total: 2 });
+    expect(pendingDose.courseCount).toEqual({ given: 1, total: 2 });
+  });
+
+  it("counts only `given` events toward N, never `skipped`", () => {
+    const given = occAt(COURSE_CLOVER_METACAM, "08:00");
+    const skipped = occAt(COURSE_CLOVER_METACAM, "20:00");
+    setState(given.key, "given");
+    setState(skipped.key, "skipped");
+
+    const clover = groupNamed(
+      buildTodayView(snapshotOf([given, skipped]), NOW, EN),
+      "Clover",
+    );
+
+    // M still counts the skipped dose (it is a scheduled occurrence for the
+    // day) — only N (given) excludes it.
+    expect(clover.resolved.find((d) => d.key === given.key)!.courseCount).toEqual({
+      given: 1,
+      total: 2,
+    });
+    expect(clover.resolved.find((d) => d.key === skipped.key)!.courseCount).toEqual({
+      given: 1,
+      total: 2,
+    });
+  });
+
+  it("is null on a notStarted row — nothing rendered to divide by", () => {
+    const none = occNotStarted(COURSE_CLOVER_METOCLOPRAMIDE);
+    setState(none.key, "notStarted");
+
+    const dose = groupNamed(
+      buildTodayView(snapshotOf([none]), NOW, EN),
+      "Clover",
+    ).pending[0];
+
+    expect(dose.courseCount).toBeNull();
+  });
+
+  // SPEC's denominator rule: a `fromLastDose` course's M comes from what is
+  // actually rendered today, never `24 / intervalHours` — at most one
+  // occurrence is ever rendered per `fromLastDose` course per day
+  // (`getOccurrences`), so a single due-today row reports M = 1, not a
+  // schedule-derived guess.
+  it("reports M = 1 for a single rendered fromLastDose occurrence, never a schedule-derived count", () => {
+    const occ = occAt(COURSE_BISCUIT_METOCLOPRAMIDE, "14:00");
+    setState(occ.key, "later");
+
+    const dose = groupNamed(
+      buildTodayView(snapshotOf([occ]), NOW, EN),
+      "Biscuit",
+    ).pending[0];
+
+    expect(dose.courseCount).toEqual({ given: 0, total: 1 });
+  });
+
+  it("keeps two different courses' counts independent even for the same pet", () => {
+    const metacam = occAt(COURSE_CLOVER_METACAM, "08:00");
+    const metoclopramide = occAt(COURSE_CLOVER_METOCLOPRAMIDE, "09:00");
+    setState(metacam.key, "given");
+    setState(metoclopramide.key, "later");
+
+    const clover = groupNamed(
+      buildTodayView(snapshotOf([metacam, metoclopramide]), NOW, EN),
+      "Clover",
+    );
+
+    expect(clover.resolved.find((d) => d.key === metacam.key)!.courseCount).toEqual({
+      given: 1,
+      total: 1,
+    });
+    expect(clover.pending.find((d) => d.key === metoclopramide.key)!.courseCount).toEqual({
+      given: 0,
+      total: 1,
+    });
+  });
+});
+
+describe("buildTodayView — dayProgress (SPEC §6.1)", () => {
+  it("sums given and total across every pet, and reports the overdue count", () => {
+    const given = occAt(COURSE_CLOVER_METACAM, "08:00");
+    const overdue = occAt(COURSE_NUGGET_VITAMIN_C, "07:00");
+    const later = occAt(COURSE_BISCUIT_IVERMECTIN, "20:00");
+    setState(given.key, "given");
+    setState(overdue.key, "overdue");
+    setState(later.key, "later");
+
+    const view = buildTodayView(snapshotOf([given, overdue, later]), NOW, EN);
+
+    expect(view.dayProgress).toEqual({
+      given: 1,
+      total: 3,
+      overdue: 1,
+      headline: "1 of 3 given today",
+      note: "1 overdue",
+      noteIsOverdue: true,
+    });
+  });
+
+  it("names the earliest still-open due time when nothing is overdue", () => {
+    const early = occAt(COURSE_CLOVER_METACAM, "08:00");
+    const late = occAt(COURSE_NUGGET_VITAMIN_C, "09:00");
+    setState(early.key, "later");
+    setState(late.key, "later");
+
+    const view = buildTodayView(snapshotOf([early, late]), NOW, EN);
+
+    expect(view.dayProgress.note).toBe("next 08:00");
+    expect(view.dayProgress.noteIsOverdue).toBe(false);
+  });
+
+  it("reads 'all done' once every dose is resolved", () => {
+    const given = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(given.key, "given");
+
+    const view = buildTodayView(snapshotOf([given]), NOW, EN);
+
+    expect(view.dayProgress).toEqual({
+      given: 1,
+      total: 1,
+      overdue: 0,
+      headline: "1 of 1 given today",
+      note: "all done",
+      noteIsOverdue: false,
+    });
+  });
+
+  it("excludes an archived pet's course from every count, even though the engine still generates its occurrence", () => {
+    const archivedPet = { ...data.pets.find((p) => p.name === "Clover")!, archived: true };
+    const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(occ.key, "later");
+
+    const view = buildTodayView(
+      snapshotOf([occ], { pets: [...data.pets.filter((p) => p.name !== "Clover"), archivedPet] }),
+      NOW,
+      EN,
+    );
+
+    expect(view.dayProgress).toEqual({
+      given: 0,
+      total: 0,
+      overdue: 0,
+      headline: "0 of 0 given today",
+      note: "all done",
+      noteIsOverdue: false,
+    });
+  });
+
 });
 
 describe("buildTodayView — body and keepResolved", () => {
@@ -557,26 +742,39 @@ describe("buildTodayView — Ukrainian", () => {
     expect(UK.t("today.subtitle", { remaining: 21 })).toBe("сьогодні залишилася 21 доза");
   });
 
-  it("appends the overdue clause in the many form", () => {
+  it("never repeats the overdue count in the Ukrainian subtitle either, many form and all", () => {
     const occs = Array.from({ length: 5 }, (_, i) => {
       const occ = occAt(COURSE_CLOVER_METACAM, `0${i}:00` as LocalTime);
       setState(occ.key, "overdue");
       return occ;
     });
 
-    expect(buildTodayView(snapshotOf(occs), NOW, UK).subtitle).toBe(
-      "сьогодні залишилося 5 доз · 5 прострочених",
-    );
+    const subtitle = buildTodayView(snapshotOf(occs), NOW, UK).subtitle;
+    expect(subtitle).toBe("сьогодні залишилося 5 доз");
+    expect(subtitle).not.toContain("прострочен");
   });
 
-  it("drops the overdue clause in Ukrainian too when M = 0, same as English", () => {
+  it("reads the Ukrainian zero-remaining subtitle", () => {
     const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
-    setState(occ.key, "later");
+    setState(occ.key, "given");
 
-    const subtitle = buildTodayView(snapshotOf([occ]), NOW, UK).subtitle;
+    expect(buildTodayView(snapshotOf([occ]), NOW, UK).subtitle).toBe("Сьогодні все дано");
+  });
 
-    expect(subtitle).toBe("сьогодні залишилася 1 доза");
-    expect(subtitle).not.toContain("прострочен");
+  it("mirrors the day progress headline and overdue note in Ukrainian", () => {
+    const overdue = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(overdue.key, "overdue");
+
+    const view = buildTodayView(snapshotOf([overdue]), NOW, UK);
+
+    expect(view.dayProgress.headline).toBe("Дано 0 з 1 сьогодні");
+    expect(view.dayProgress.note).toBe("1 прострочена");
+  });
+
+  it("declines the Ukrainian row pill noun by M (total), not N (given)", () => {
+    expect(UK.t("today.pill.count", { given: 1, total: 1 })).toBe("1 з 1 доза");
+    expect(UK.t("today.pill.count", { given: 0, total: 3 })).toBe("0 з 3 дози");
+    expect(UK.t("today.pill.count", { given: 2, total: 5 })).toBe("2 з 5 доз");
   });
 
   // The overdue banner's own count (`today.banner.overdueCount`), at every

@@ -35,6 +35,7 @@ import type { Translator } from "@/i18n";
 import { renderCourseProgress, renderSchedule } from "@/i18n/schedule";
 import type {
   ComingUp,
+  DayProgressView,
   TodayDose,
   TodayPetGroup,
   TodaySnapshot,
@@ -224,7 +225,41 @@ function toDose(
     medicationName: medication.name,
     detail: detailFor(occ, course, snapshot.day, time, tr),
     time,
+    // Filled in by `attachCourseCounts` once every dose is built — a single
+    // occurrence cannot know its course's day total in isolation.
+    courseCount: null,
   };
+}
+
+/**
+ * The row pill's per-course `N of M doses` (SPEC §4). Mutates `doses` in
+ * place and returns it, purely as a bookkeeping convenience for its one
+ * caller (`buildTodayView`) — every `TodayDose` in the array is already a
+ * fresh object `toDose` built for this render, never a cached/shared one, so
+ * there is nothing else this could alias.
+ *
+ * `total` per course is "resolved ∪ (pending ∩ isDueToday)" — the SAME test
+ * `groupFor`'s own `Y` uses for the pet card counter, so a `fromLastDose`
+ * course's total is exactly what is rendered today, never a schedule-derived
+ * guess (SPEC's denominator rule). `given` counts only `state === "given"`,
+ * never `skipped` — SPEC §4's rationale is literally "how many times have I
+ * given Metacam", not "how many are resolved".
+ */
+function attachCourseCounts(doses: TodayDose[]): TodayDose[] {
+  const totals = new Map<string, { given: number; total: number }>();
+  for (const d of doses) {
+    const counted = RESOLVED_STATES.has(d.state) || (isPendingDose(d) && isDueToday(d));
+    if (!counted) continue;
+    const entry = totals.get(d.courseId) ?? { given: 0, total: 0 };
+    entry.total += 1;
+    if (d.state === "given") entry.given += 1;
+    totals.set(d.courseId, entry);
+  }
+  for (const d of doses) {
+    const entry = totals.get(d.courseId);
+    d.courseCount = entry && entry.total > 0 ? entry : null;
+  }
+  return doses;
 }
 
 function statusFor(
@@ -480,6 +515,59 @@ function comingUpFor(
   return { label: chosen.label, when: whenLabel(chosen.offsetDays, tr) };
 }
 
+/**
+ * SPEC §6.1's day progress block: `<given> of <total> given today`, plus a
+ * trailing note in precedence order (overdue, else next due time today, else
+ * "all done").
+ *
+ * Built entirely from `groups` — i.e. from the pending/resolved lists the pet
+ * cards themselves render — never from `snapshot.occurrences` directly. A
+ * course can generate an occurrence for an archived pet (`isGenerable` only
+ * checks the COURSE's own status, not the pet's), and `groups` already
+ * excludes archived pets, so deriving from it is what keeps this block's
+ * counts "derivable from what is on screen" (SPEC's denominator rule) rather
+ * than silently counting a pet nobody sees a card for.
+ */
+function dayProgressFor(groups: TodayPetGroup[], tr: Translator): DayProgressView {
+  let given = 0;
+  let overdue = 0;
+  let dueTodayPending = 0;
+  let nextDueToday: Date | null = null;
+
+  for (const group of groups) {
+    given += group.resolved.length;
+    for (const dose of group.pending) {
+      if (!isDueToday(dose)) continue;
+      dueTodayPending += 1;
+      if (dose.state === "overdue") {
+        overdue += 1;
+      } else if (
+        dose.occurrence.dueAt !== null &&
+        (nextDueToday === null || dose.occurrence.dueAt.getTime() < nextDueToday.getTime())
+      ) {
+        nextDueToday = dose.occurrence.dueAt;
+      }
+    }
+  }
+
+  const total = given + dueTodayPending;
+  const noteIsOverdue = overdue > 0;
+  const note = noteIsOverdue
+    ? tr.t("today.dayProgress.overdue", { overdue })
+    : nextDueToday !== null
+      ? tr.t("today.dayProgress.next", { time: formatHHMM(nextDueToday) })
+      : tr.t("today.dayProgress.allDone");
+
+  return {
+    given,
+    total,
+    overdue,
+    headline: tr.t("today.dayProgress.headline", { given, total }),
+    note,
+    noteIsOverdue,
+  };
+}
+
 export function buildTodayView(
   snapshot: TodaySnapshot,
   now: Date,
@@ -499,6 +587,7 @@ export function buildTodayView(
     if (!course || !medication) continue;
     doses.push(toDose(occ, course, medication, snapshot, now, tr));
   }
+  attachCourseCounts(doses);
 
   const groups = snapshot.pets
     .filter((pet) => !pet.archived)
@@ -524,15 +613,15 @@ export function buildTodayView(
 
   return {
     greeting: greetingFor(now, tr),
-    // SPEC §6.1 drops the second clause when M = 0. Both clauses pluralise
-    // through `f.plural` inside the catalogue, never by appending a letter.
-    subtitle: [
-      tr.t("today.subtitle", { remaining: summary.remaining }),
-      ...(summary.overdue > 0
-        ? [tr.t("today.subtitle.overdue", { overdue: summary.overdue })]
-        : []),
-    ].join(SEPARATOR),
+    // SPEC §6.1: the header never repeats the overdue count — that moved to
+    // `dayProgress.note` below. At zero remaining the subtitle is its own
+    // whole sentence, not "0 doses left today".
+    subtitle:
+      summary.remaining > 0
+        ? tr.t("today.subtitle", { remaining: summary.remaining })
+        : tr.t("today.subtitle.allDone"),
     groups,
+    dayProgress: dayProgressFor(groups, tr),
     overdue: {
       count: summary.overdue,
       earliest,

@@ -68,6 +68,8 @@ const DAY: LocalDate = "2026-08-08";
 const AT_0800 = "2026-08-08T07:00:00.000Z";
 /** 09:00 BST today — Nugget's Vitamin C dose. */
 const AT_0900 = "2026-08-08T08:00:00.000Z";
+/** 20:00 BST today — Clover's Metacam evening dose (the course is 08:00/20:00 fixedTimes). */
+const AT_2000 = "2026-08-08T19:00:00.000Z";
 /** 07:00 BST today — the Saturday Ivermectin dose the fixtures already logged. */
 const AT_0700 = "2026-08-08T06:00:00.000Z";
 /** 30 minutes before `FIXTURE_NOW` (07:00 UTC = 08:00 BST) — inside the 60-minute fixedTimes grace window. */
@@ -334,7 +336,7 @@ describe("TodayPage", () => {
     });
   }
 
-  it("appends the overdue clause to the subtitle when a dose is overdue", async () => {
+  it("never repeats the overdue count in the header subtitle — it moved to the day progress note", async () => {
     const { data, repo } = household();
     const overdue = makeOccurrence(courseOf(data, "Clover", "Metacam"), {
       day: DAY,
@@ -351,7 +353,10 @@ describe("TodayPage", () => {
     renderToday(repo);
 
     const subtitle = await screen.findByText(/doses? left today/);
-    expect(subtitle).toHaveTextContent("· 1 overdue");
+    expect(subtitle.textContent).toBe("2 doses left today");
+    expect(subtitle).not.toHaveTextContent("overdue");
+    // The overdue count instead names itself on the new day progress note.
+    expect(await screen.findByText("1 overdue")).toBeInTheDocument();
   });
 
   it("drops the overdue clause entirely when nothing is overdue", async () => {
@@ -368,6 +373,65 @@ describe("TodayPage", () => {
     const subtitle = await screen.findByText(/doses? left today/);
     expect(subtitle.textContent).toBe("1 dose left today");
     expect(screen.queryByText(/overdue/i)).toBeNull();
+  });
+
+  it("reads 'Everything given today' once nothing remains", async () => {
+    const { data, repo } = household();
+    const given = makeOccurrence(courseOf(data, "Clover", "Metacam"), {
+      day: DAY,
+      scheduledFor: AT_0800,
+    });
+    await register(repo, [given]);
+    setState(given.key, "given");
+
+    renderToday(repo);
+
+    expect(await screen.findByText("Everything given today")).toBeInTheDocument();
+    expect(screen.queryByText(/doses? left today/)).toBeNull();
+  });
+
+  it("renders the day progress block once per screen, with pips spanning every pet", async () => {
+    const { data, repo } = household();
+    const given = makeOccurrence(courseOf(data, "Clover", "Metacam"), {
+      day: DAY,
+      scheduledFor: AT_0800,
+    });
+    const overdue = makeOccurrence(courseOf(data, "Nugget", "Vitamin C"), {
+      day: DAY,
+      scheduledFor: AT_0900,
+    });
+    await register(repo, [given, overdue]);
+    setState(given.key, "given");
+    setState(overdue.key, "overdue");
+
+    renderToday(repo);
+
+    // SPEC §6.1's household-scope wording — verbally distinct from the pet
+    // card's "N of M today" and the row's "N of M doses".
+    expect(await screen.findByText("1 of 2 given today")).toBeInTheDocument();
+    expect(await screen.findByText("1 overdue")).toBeInTheDocument();
+    // Exactly one day progress block on the whole screen.
+    expect(screen.getAllByText(/of \d+ given today/)).toHaveLength(1);
+  });
+
+  it("carries the SAME per-medication 'N of M doses' pill on every rendered row of a 2×-daily course", async () => {
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const morning = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    const evening = makeOccurrence(course, { day: DAY, scheduledFor: AT_2000 });
+    await register(repo, [morning, evening]);
+    setState(morning.key, "due");
+    setState(evening.key, "later");
+
+    renderToday(repo);
+    const card = await cardFor("Clover");
+
+    // Both rows belong to the same course, so both report the course's own
+    // M with the row's own wording — "doses", never "today" (SPEC §4
+    // reserves that word for the pet card's own "0 of 2 today" counter,
+    // which legitimately renders alongside these for the same numbers here).
+    expect(await within(card).findAllByText("0 of 2 doses")).toHaveLength(2);
+    expect(within(card).getByText("0 of 2 today")).toBeInTheDocument();
   });
 
   it("logs a dose in one tap without leaving the dashboard", async () => {

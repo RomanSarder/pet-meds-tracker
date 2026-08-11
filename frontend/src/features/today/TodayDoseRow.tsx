@@ -71,6 +71,20 @@ export interface TodayDoseRowProps {
    * events for the same give (F2 fix).
    */
   giving?: boolean;
+  /**
+   * SPEC §3b-i's engine `capped` state. NOT wired on this branch — no caller
+   * in this codebase computes or passes it yet (a concurrent agent owns the
+   * engine's `capped`/`overMax`/`maxPerDay` plumbing); this prop exists so a
+   * later phase can thread the real numbers in without touching this file
+   * again. When present, it replaces the row's plain `today.pill.count` pill
+   * with an amber `today.pill.cap` one and reveals a ghost **Give anyway**
+   * action wired to `onGiveAnyway`.
+   */
+  cap?: {
+    given: number;
+    max: number;
+    onGiveAnyway: () => void;
+  };
 }
 
 function prefersReducedMotionNow(): boolean {
@@ -135,6 +149,7 @@ export function TodayDoseRow({
   onOpenCourse,
   onStartCourse,
   giving,
+  cap,
 }: TodayDoseRowProps): ReactElement {
   const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -214,6 +229,27 @@ export function TodayDoseRow({
       : "opacity var(--dur, 200ms) var(--ease, ease)",
   };
 
+  // SPEC §4's row pill — already localized here, never inside the DS
+  // component (I18N-DESIGN.md's PURITY RULE). `null` when the course has
+  // nothing to divide by (`toDose`/`attachCourseCounts` in `todayModel.ts`),
+  // so the row renders no pill at all.
+  const countLabel = dose.courseCount
+    ? t("today.pill.count", {
+        given: dose.courseCount.given,
+        total: dose.courseCount.total,
+      })
+    : undefined;
+  // SPEC §3b-i's `capped` state — NOT wired on this branch (see this file's
+  // `cap` prop doc). `DoseRow` itself decides that `cap` replaces
+  // `countLabel` rather than sitting beside it.
+  const capForRow = cap
+    ? {
+        label: t("today.pill.cap", { given: cap.given, max: cap.max }),
+        giveAnywayLabel: t("today.pill.giveAnyway"),
+        onGiveAnyway: cap.onGiveAnyway,
+      }
+    : undefined;
+
   let body: ReactElement;
   if (dose.state === "notStarted") {
     // Not a `DoseRow`: SPEC §3b wants **Start course** here, and that is a
@@ -265,6 +301,8 @@ export function TodayDoseRow({
         // renders here — passed anyway so neither call site relies on the DS
         // default's English (I18N-DESIGN.md ADDENDUM A1).
         label={t("today.give")}
+        countLabel={countLabel}
+        cap={capForRow}
         style={rowStyle}
       />
     );
@@ -279,6 +317,8 @@ export function TodayDoseRow({
         // this is the translated one (I18N-DESIGN.md ADDENDUM A1).
         label={t("today.give")}
         disabled={giving}
+        countLabel={countLabel}
+        cap={capForRow}
         style={rowStyle}
       />
     );
