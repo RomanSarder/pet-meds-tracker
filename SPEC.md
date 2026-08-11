@@ -148,7 +148,7 @@ Course                          (one pet taking one medication on one schedule)
 
   instructions  string, optional     "after food"
 
-  schedule      Schedule             see §3
+  schedule      Schedule             see §3 — carries the optional maxPerDay (§3b-i)
 
   startDate     date, required
 
@@ -177,6 +177,8 @@ DoseEvent                       (the log; append-only)
   amount        decimal              snapshot of doseAmount at log time
 
   note          string, optional
+
+  overMax       boolean, default false   set only when logged past a course's maxPerDay (§3b-i)
 
 StockAdjustment                 (append-only ledger; never mutate stockUnits directly)
 
@@ -216,7 +218,9 @@ explicitly, not inferred.
 
 ```
 
-{ kind: 'fromLastDose', intervalHours: 4 | 6 | 8 | 12 | 24 | int, anchorTime?: 'HH:MM' }
+{ kind: 'fromLastDose', intervalHours: 4 | 6 | 8 | 12 | 24 | int, anchorTime?: 'HH:MM',
+
+  maxPerDay?: int }
 
 ```
 
@@ -234,6 +238,66 @@ explicitly, not inferred.
 
 - `anchorTime` is optional and only used to seed the first occurrence if the user prefers.
 
+### 3b-i. `maxPerDay` — an optional daily ceiling on an interval course
+
+**`maxPerDay` is optional and unset by default.** A course without it behaves exactly as §3b
+
+describes, with no cap logic anywhere in the pipeline; most courses will never carry one. Treat
+
+the field as absent-or-integer — never default it to a number, and never infer one from the
+
+interval. Everything in this section applies **only** when the user has explicitly set a value.
+
+**Builder checklist for the unset case** — when `maxPerDay` is `null`/absent:
+
+- No `capped` state is ever computed; the §4 precedence table runs unchanged.
+
+- No pill renders on the dose row (`DoseRow`'s `cap` prop is simply not passed).
+
+- The supply forecast uses `24 / intervalHours` doses per day, with no `min()`.
+
+- Notifications follow §3b with no cap suppression.
+
+- No `overMax` flag can ever appear on a DoseEvent for that course.
+
+The common prescription "every 8 hours, maximum 3 per day" is an interval **and** a cap: the
+
+interval sets the earliest the next dose may be given, the cap sets how many the day may hold.
+
+With an 8 h interval a slipping chain can fit four doses into a calendar day, which the cap
+
+exists to prevent. When the user does set one:
+
+- `maxPerDay` counts `given` DoseEvents whose `givenAt` falls in the local calendar day (§3d),
+
+  for that course only. `skipped` and `missed` events do not count.
+
+- While `givenToday < maxPerDay`, scheduling is exactly §3b.
+
+- On reaching the cap the course is **capped** for the rest of the day: no occurrence is due,
+
+  the chain does not advance, and the next dose is due at `00:00 tomorrow + interval` from the
+
+  last dose — whichever is later.
+
+- **The cap warns, it does not lock.** A capped dose row keeps a ghost **Give anyway** action;
+
+  using it writes a normal `given` event flagged `overMax`, which reads "over the daily maximum"
+
+  in history. A carer told by a vet to give a fourth dose must not be blocked by the app, and a
+
+  silent block would be logged as nothing at all — worse than a recorded exception.
+
+- A capped dose is never counted as `overdue`, and never raises the overdue banner.
+
+- `maxPerDay` is offered for `fromLastDose` only. A `fixedTimes` course already states its
+
+  count by listing its times, so a cap there would be a second source of truth.
+
+- Removing the cap later (setting it back to `No maximum`) takes effect immediately and never
+
+  rewrites past events: a dose already flagged `overMax` keeps that flag in history.
+
 ### 3c. Course lifecycle
 
 - `paused` suppresses occurrence generation without deleting history. Resuming a
@@ -245,13 +309,6 @@ explicitly, not inferred.
 - `stopped` is a user action (medication discontinued); it sets `endDate = today`.
 
 - Editing a schedule never rewrites past DoseEvents.
-
-- Editing a schedule is not retroactive. An occurrence is generated from the schedule that was in
-  effect **at that occurrence's own due instant**: a slot whose time today has already passed
-  keeps today's original time, and a slot still ahead of you today moves immediately. Days before
-  the edit therefore keep projecting on the old grid, so already-logged doses stay matched and the
-  missed sweep stays honest. The schedule in effect at an instant is derived from the §6.4
-  CourseEvent ledger, whose `before`/`after` snapshots are the sole record of the change.
 
 ### 3d. Day boundary and time zone
 
@@ -280,6 +337,31 @@ Computed per occurrence, in this precedence order:
 | `skipped` | a `skipped` DoseEvent exists | 55% opacity, "Skipped" in place of the time |
 
 | `overdue` | due time + grace has passed, no event | berry; card header tinted |
+
+| `capped` | course **has** `maxPerDay` set and `givenToday >= maxPerDay` | amber `N of M max` pill on the detail line, ghost **Give anyway** (§3b-i) |
+
+Every dose row carries a quiet **per-medication day count** pill on its detail line —
+`N of M doses`, where M is that course's own scheduled occurrences for the day, so "how many
+times have I given Metacam?" is answerable without opening history. When a course has
+`maxPerDay` set, the `N of M max` pill replaces it rather than sitting beside it: two count
+pills on one row is one number too many.
+
+**Three nested day counts appear on Today, and their wording must keep them apart:**
+
+| Scope | Where | Wording |
+
+| --- | --- | --- |
+
+| One medication | dose row pill | `N of M doses` — never "today" |
+
+| One pet | pet card header | `N of M today` |
+
+| The household | day progress under the header | `N of M given today` (§6.1) |
+
+Each denominator must be derivable from what is on screen: a row's M counts that course's
+occurrences for the day, and a pet card's M counts that pet's occurrences. Do not compute a
+denominator from a course definition the list does not render — a pill claiming an occurrence
+the user cannot see is worse than no pill.
 
 | `due` | within [due − 30 min, due + grace] | filled terracotta **Give** |
 
@@ -423,7 +505,23 @@ added for sharing and history are reached from within them, not by a fourth tab:
 
 - Header: "Good morning / afternoon / evening" (cut at 12:00 and 18:00) with a factual
 
-  subtitle: `N doses left today · M overdue` (drop the second clause when M = 0).
+  subtitle: `N doses left today`, or `Everything given today` at zero. The overdue count moves
+
+  to the day progress line below, so the header never repeats it.
+
+- **Day progress**, directly under the header, is the glanceable answer to "how much of today is
+
+  done": `<given> of <total> given today` set large and tabular, a trailing note (`M overdue`,
+
+  else `next HH:MM`, else `all done`), and a segmented track of one pip per scheduled dose —
+
+  sage for given, berry for the overdue remainder, hairline for the rest. Counts span all pets.
+
+  Pips make the day countable rather than estimated; above 14 doses the track degrades to a
+
+  continuous bar. Exactly one of these per screen — per-pet progress stays in the pet card's
+
+  `N of M today` slot.
 
 - Overdue banner when M &gt; 0: count, plus the single earliest overdue dose, and a **Log**
 
@@ -481,7 +579,7 @@ scheduled time", and an exact time is the fallback.
 
   future." at the cap, a day-check warning more than 12 h before the scheduled time, otherwise
 
-  "Anything from midnight today. Earlier doses are added from history."
+  "Anything from the last 24 h. Earlier doses are added from history."
 
 - **Consequence block**, stated before committing, because the chain shift (§3b) is the one
 
@@ -559,30 +657,6 @@ on today and reads newest first.
 
 - Export the visible range as plain text or CSV for a vet.
 
-- Overflow on a `given` dose row: **Edit time** — the correction path §4 defers to for a dose
-
-  remembered after midnight. It opens a sheet offering offsets from the dose's own recorded
-
-  time and a `− 5 min` / `+ 5 min` stepper, and it writes a correction (§9), never an update.
-
-  - The chosen time is penned strictly between the neighbouring `given` doses of the same
-
-    course, or up to `now` when there is no later one. An edit therefore cannot reorder the
-
-    log, and so cannot change which dose is the newest.
-
-  - **Consequence block**, stated before saving: "Nothing else moves" for every `fixedTimes`
-
-    dose and for any dose that is not the last one; "Next dose moves to HH:MM", with the
-
-    signed shift, for the last dose of a `fromLastDose` course — that dose is the chain's
-
-    anchor (§3b), so the chain follows it.
-
-  - A corrected row shows the new time and carries "time edited from HH:MM". The superseded
-
-    row is never rendered and never counted twice in the summary strip.
-
 **What is logged:** every DoseEvent (given, skipped, missed) and every course lifecycle change
 
 (started, paused, resumed, stopped, schedule or dose edited). Stock updates and household joins
@@ -657,11 +731,21 @@ Single form, in this order:
 
 5. **Interval** (4/6/8/12/24h) or **How often** (once daily, 2×, 3×, weekly) plus the times.
 
+5a. **Daily maximum** — interval courses only, and **optional**: `No maximum` / `2` / `3` /
+
+   `4 per day`, as chips under the interval. **`No maximum` is selected by default** — a cap is
+
+   something the user opts into, never a value the app assumes on their behalf (§3b-i). Hidden
+
+   entirely for `At set times`. The form is savable without touching this control.
+
 6. **For how long** — 7 days / 14 days / Ongoing / custom end date.
 
 7. **Reminders** — for fixed times, the notification times; for interval courses, an
 
-   explanation that the next dose is counted from the moment one is logged.
+   explanation that the next dose is counted from the moment one is logged, and — when a maximum
+
+   is set — that nothing more is due after the cap but a dose can still be given and recorded.
 
 8. **Save medication** (full-width ink bar).
 
@@ -693,7 +777,9 @@ No onboarding carousel, no permission prompts before they are needed.
 
 - `fixedTimes`: one notification per occurrence, at the scheduled time.
 
-- `fromLastDose`: one notification when `lastGivenAt + intervalHours` is reached.
+- `fromLastDose`: one notification when `lastGivenAt + intervalHours` is reached, unless the
+
+  course is capped for the day (§3b-i) — a capped course notifies nothing until tomorrow.
 
 - One re-alert after the grace window, then stop. Never more than two per dose.
 
@@ -711,7 +797,9 @@ For each medication:
 
 dailyUse   = Σ over active courses using it of (doses per day × doseAmount)
 
-             fromLastDose courses count as 24 / intervalHours doses per day
+             fromLastDose courses count as 24 / intervalHours doses per day,
+
+             or min(24 / intervalHours, maxPerDay) when a maximum is set
 
 remaining  = stockUnits
 
@@ -944,6 +1032,20 @@ Each slice is independently assignable and ends in something testable.
 - A medication with only weekly courses reports weeks, not days, of cover.
 
 - Nothing is due for an interval course that has never been started.
+
+- An interval course with **no** maximum set behaves exactly as before: no pill, no `capped`
+
+  state, and a fourth dose in one day is logged without comment.
+
+- An `every 8h, max 3 per day` course logged at 06:00, 14:00 and 22:00 has nothing due at 06:00
+
+  the next morning until the interval from 22:00 has also elapsed.
+
+- **Give anyway** past the cap writes one `given` event flagged `overMax` and does not advance
+
+  the chain past midnight.
+
+- A capped course never appears in the overdue count or the overdue banner.
 
 - Two members logging the same dose within the grace window produce exactly one DoseEvent.
 
