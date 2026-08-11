@@ -3,7 +3,11 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    resolver [fd12::10] ipv6=off valid=30s;
+    # Railway's internal DNS. IPv6 resolution must stay ON: `proxy_pass` with a
+    # variable resolves at request time, and `<service>.railway.internal` has
+    # AAAA records only — `ipv6=off` discards them and the upstream never
+    # resolves. (Public *.up.railway.app names are A-only and unaffected.)
+    resolver [fd12::10] valid=30s;
 
     # SPA fallback — all unmatched routes serve index.html
     location / {

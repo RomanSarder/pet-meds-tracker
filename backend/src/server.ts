@@ -14,8 +14,12 @@ const server = Fastify({
 
 server.register(app);
 
+// Bind "::" (all interfaces, IPv6 + IPv4-mapped), not "0.0.0.0". Railway's
+// private network is IPv6-only: `<service>.railway.internal` publishes AAAA
+// records exclusively, so an IPv4-only bind accepts nothing from a sibling
+// service and every private-network connect hangs until the caller's timeout.
 server.listen(
-  { port: Number(process.env.PORT) || 3000, host: "0.0.0.0" },
+  { port: Number(process.env.PORT) || 3000, host: "::" },
   (err) => {
     if (err) {
       server.log.error(err);
