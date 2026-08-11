@@ -565,6 +565,48 @@ describe("times editor: shifting a preset course's times earlier", () => {
     expect(screen.getByRole("button", { name: "Save medication" })).not.toBeDisabled();
   });
 
+  it("announces the tooSoon warning in the SAME utterance as the time change (a11y: no second live region)", async () => {
+    renderWithProviders(<CourseFormView courseId={COURSE_CLOVER_METACAM.id} />);
+    const user = userEvent.setup();
+
+    await screen.findByText("20:00");
+    await pressEarlierEightTimes(user);
+
+    // The visible warning `Card` and this announcement carry the SAME prose
+    // (`gapWarningMessage`, shared by both) — but only this combined string,
+    // prefixed with the stepper's own confirmation, is what a screen reader
+    // actually hears from a press. Finding: previously nothing warning-shaped
+    // was announced at all.
+    expect(
+      screen.getByText("Dose 2 set to 18:00. Only 10 h since the 08:00 dose (this course is every 12 h)."),
+    ).toBeInTheDocument();
+  });
+
+  it(
+    "the announcement escalates to the tooSoonToLog wording once presses cross under the 60-minute grace window",
+    async () => {
+      renderWithProviders(<CourseFormView courseId={COURSE_CLOVER_METACAM.id} />);
+      const user = userEvent.setup();
+
+      await screen.findByText("20:00");
+      const earlier = screen.getByRole("button", { name: "15 minutes earlier, dose 2" });
+      // 45 presses: 20:00 -> 08:45, a 45-minute gap to the 08:00 dose — inside
+      // `GRACE_FIXED_MIN` (60 min, `@/domain`), the exact spacing at which
+      // `logDose` throws `DuplicateDoseError` for a second dose given that
+      // close to the first. This is the band the softer `tooSoon` wording
+      // must not be used for.
+      for (let i = 0; i < 45; i++) {
+        await user.click(earlier);
+      }
+
+      expect(screen.getByText("08:45")).toBeInTheDocument();
+      expect(
+        screen.getByText("Dose 2 set to 08:45. Doses less than 45 min apart cannot both be logged."),
+      ).toBeInTheDocument();
+    },
+    15000,
+  );
+
   it("persists times: [\"08:00\", \"18:00\"] exactly on save (the round-trip regression)", async () => {
     const repo = createMemoryRepo();
     renderWithProviders(<CourseFormView courseId={COURSE_CLOVER_METACAM.id} />, { repo });

@@ -51,10 +51,42 @@ type FixedTimesSchedule = Extract<Schedule, { kind: "fixedTimes" }>;
 
 /** A whole-minute duration into `{hours, minutes}`, for `history.detail.lateDuration`
  * — same small helper as `features/today/LogAtTimeSheet.tsx` (not exported there,
- * so not importable; duplicated rather than promoted, per that file's own convention). */
+ * so not importable; duplicated rather than promoted, per that file's own convention).
+ * Not hoisted into a shared module either: that file is outside this change's
+ * surface, and a two-line duration split isn't worth a new cross-feature module
+ * for one caller on each side. */
 function toHoursMinutes(totalMinutes: number): { hours: number; minutes: number } {
   const abs = Math.abs(totalMinutes);
   return { hours: Math.floor(abs / 60), minutes: abs % 60 };
+}
+
+/** The `gapWarningFor` result shape, named for reuse below. */
+type GapWarning = NonNullable<ReturnType<typeof gapWarningFor>>;
+
+/**
+ * The gap-warning banner's prose, in exactly one place. Both the visible
+ * `Card` (below) and the single stepper announcement `TimesEditor` folds a
+ * warning into (via `previewWarning` further down) render through this, so
+ * the sighted and screen-reader-only tellings of "why is this flagged" can
+ * never drift apart.
+ */
+function gapWarningMessage(warning: GapWarning, tr: Translator): string {
+  if (warning.kind === "tooSoonToLog") {
+    return tr.t("courses.gapWarning.tooSoonToLog", {
+      gap: tr.t("history.detail.lateDuration", toHoursMinutes(warning.gapMinutes)),
+    });
+  }
+  if (warning.sinceTime !== null) {
+    return tr.t("courses.gapWarning.tooSoon", {
+      gap: tr.t("history.detail.lateDuration", toHoursMinutes(warning.gapMinutes)),
+      time: warning.sinceTime,
+      expected: tr.t("history.detail.lateDuration", toHoursMinutes(warning.expectedMinutes)),
+    });
+  }
+  return tr.t("courses.gapWarning.tooSoonInterval", {
+    gap: tr.t("history.detail.lateDuration", toHoursMinutes(warning.gapMinutes)),
+    expected: tr.t("history.detail.lateDuration", toHoursMinutes(warning.expectedMinutes)),
+  });
 }
 
 /** `CourseStatus` word, shown on the course-lifecycle card. Not exported —
@@ -236,6 +268,27 @@ export function CourseFormView({
     return scheduleForFrequencyChoice(frequency);
   }
 
+  /**
+   * Same derivation as `computeSchedule`'s `customTimes` branch, but for a
+   * `times` array that is not yet in state — used only by `previewWarning`
+   * below, to preview what a stepper press is ABOUT to commit before React
+   * has re-rendered with the new `customTimes`/`customTimesBase`. Resolves
+   * the base the same lazy way the `TimesEditor` `onChange` handler seeds
+   * `customTimesBase` (first custom edit falls back to the current
+   * frequency preset), so the preview and the actual commit can never
+   * disagree about which slots' `daysOfWeek`/`everyNDays` survive.
+   */
+  function scheduleFromTimes(nextTimes: LocalTime[]): Schedule {
+    const base =
+      customTimesBase ??
+      (() => {
+        const preset = scheduleForFrequencyChoice(frequency);
+        return preset.kind === "fixedTimes" ? preset : null;
+      })();
+    if (base !== null) return { ...base, kind: "fixedTimes", times: nextTimes };
+    return scheduleForFrequencyChoice(frequency);
+  }
+
   async function handleSave() {
     if (!validate()) return;
     const schedule = computeSchedule();
@@ -311,6 +364,25 @@ export function CourseFormView({
           now: now(),
         })
       : null;
+
+  /**
+   * a11y fix: passed to `TimesEditor` so its single stepper announcement can
+   * fold the gap warning in, rather than the warning `Card` below needing a
+   * live region of its own (see the comment on that `Card` for why a second
+   * live region is the wrong fix). Guarded the same way `gapWarning` above
+   * is — no "previous" schedule, nothing to preview.
+   */
+  function previewWarning(nextTimes: LocalTime[]): string | null {
+    if (!isEdit || !existingCourse) return null;
+    const warning = gapWarningFor({
+      next: scheduleFromTimes(nextTimes),
+      previous: existingCourse.schedule,
+      events: doseEventsQuery.data ?? [],
+      courseId: existingCourse.id,
+      now: now(),
+    });
+    return warning ? gapWarningMessage(warning, tr) : null;
+  }
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -619,10 +691,31 @@ export function CourseFormView({
                   return preset.kind === "fixedTimes" ? preset : base;
                 });
               }}
+              previewWarning={previewWarning}
             />
           </Card>
         )}
 
+        {/*
+          a11y: this `Card` deliberately carries no `aria-live`/`role="status"`
+          of its own. A screen-reader user already hears this exact prose
+          (via `gapWarningMessage`, shared with the text below) folded into
+          `TimesEditor`'s single stepper announcement the moment a press
+          creates or changes it — see `previewWarning` above and the
+          "INVARIANT HELD HERE" comment in `TimesEditor.tsx`. Giving this
+          `Card` its own live region too would mean two announcements firing
+          for one press (the exact N-live-region problem `TimesEditor`
+          already avoids at the row level), AND it would be the unreliable
+          half of the idiom regardless: this `Card` mounts already carrying
+          its final text (`gapWarning` flips null -> non-null, it never
+          starts empty and gets mutated in place), and a live region that
+          appears in the DOM already populated is not the case that reliably
+          announces — an always-mounted node whose text CHANGES is (see
+          `LogAtTimeSheet.tsx`'s headline comment for the same distinction).
+          Piggybacking on the always-mounted stepper announcement sidesteps
+          that failure mode entirely. The text is still ordinary DOM content,
+          reachable by a screen-reader user reading on past the stepper.
+        */}
         {gapWarning ? (
           <Card
             tone="quiet"
@@ -632,26 +725,7 @@ export function CourseFormView({
               ⚠
             </span>
             <span style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5 }}>
-              {gapWarning.kind === "tooSoonToLog"
-                ? tr.t("courses.gapWarning.tooSoonToLog", {
-                    gap: tr.t("history.detail.lateDuration", toHoursMinutes(gapWarning.gapMinutes)),
-                  })
-                : gapWarning.sinceTime !== null
-                  ? tr.t("courses.gapWarning.tooSoon", {
-                      gap: tr.t("history.detail.lateDuration", toHoursMinutes(gapWarning.gapMinutes)),
-                      time: gapWarning.sinceTime,
-                      expected: tr.t(
-                        "history.detail.lateDuration",
-                        toHoursMinutes(gapWarning.expectedMinutes),
-                      ),
-                    })
-                  : tr.t("courses.gapWarning.tooSoonInterval", {
-                      gap: tr.t("history.detail.lateDuration", toHoursMinutes(gapWarning.gapMinutes)),
-                      expected: tr.t(
-                        "history.detail.lateDuration",
-                        toHoursMinutes(gapWarning.expectedMinutes),
-                      ),
-                    })}
+              {gapWarningMessage(gapWarning, tr)}
             </span>
           </Card>
         ) : null}

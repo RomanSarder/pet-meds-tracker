@@ -59,23 +59,40 @@ function makeEditedEvent(overrides: {
   before: string[];
   after: string[];
 }): CourseEvent {
+  return makeScheduleEvent({
+    courseId: overrides.courseId,
+    at: overrides.at,
+    kind: "edited",
+    before: { kind: "fixedTimes", times: overrides.before },
+    after: { kind: "fixedTimes", times: overrides.after },
+  });
+}
+
+/** General form: any CourseEventKind, with full `before`/`after` `Schedule`s (so daysOfWeek/everyNDays can be set). */
+function makeScheduleEvent(overrides: {
+  courseId: string;
+  at: string;
+  kind: CourseEvent["kind"];
+  before: Schedule;
+  after: Schedule;
+}): CourseEvent {
   courseEventSeq += 1;
   return {
     id: `cev-${courseEventSeq}`,
     courseId: overrides.courseId,
-    kind: "edited",
+    kind: overrides.kind,
     at: overrides.at,
     seq: courseEventSeq,
     actorId: "test-actor-id",
     before: {
-      schedule: { kind: "fixedTimes", times: overrides.before },
+      schedule: overrides.before,
       doseAmount: 1,
       doseUnit: "ml",
       startDate: "2026-08-01",
       endDate: null,
     },
     after: {
-      schedule: { kind: "fixedTimes", times: overrides.after },
+      schedule: overrides.after,
       doseAmount: 1,
       doseUnit: "ml",
       startDate: "2026-08-01",
@@ -85,6 +102,22 @@ function makeEditedEvent(overrides: {
     updatedAt: overrides.at,
     deletedAt: null,
   };
+}
+
+/** A status-only transition (`paused`/`resumed`/`stopped`/`finished`): `before`/`after` snapshots carry the SAME schedule, since a pure status change never touches it. */
+function makeStatusEvent(overrides: {
+  courseId: string;
+  at: string;
+  kind: CourseEvent["kind"];
+  schedule: Schedule;
+}): CourseEvent {
+  return makeScheduleEvent({
+    courseId: overrides.courseId,
+    at: overrides.at,
+    kind: overrides.kind,
+    before: overrides.schedule,
+    after: overrides.schedule,
+  });
 }
 
 describe("isoWeekdayOf", () => {
@@ -519,5 +552,244 @@ describe("getOccurrences — fixedTimes schedule edits are forward-only (SPEC §
     expect(occs.map((o) => o.dueAt?.toISOString())).toEqual(
       ["08:00", "18:00"].map((t) => atLocalTime(day, t).toISOString()),
     );
+  });
+});
+
+// Regression coverage for the "second same-day edit never consulted" bug:
+// `fixedTimesOccurrences` used to pin the whole day on a binary old/new
+// split from only the SINGLE earliest CourseEvent after dayStart. A second
+// edit landing later the same day was silently invisible.
+describe("getOccurrences — fixedTimes, N same-day transitions are all folded in (SPEC §3c)", () => {
+  it("two same-day edits: the evening slot ends up on the SECOND edit's grid, not the first's (reviewer's exact repro)", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["12:00", "21:00"] }, // live = final grid
+      startDate: "2026-08-01",
+    });
+    const edit1 = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "09:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["10:00", "20:00"],
+    });
+    const edit2 = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "11:00").toISOString(),
+      before: ["10:00", "20:00"],
+      after: ["12:00", "21:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edit1, edit2] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(2);
+    const evening = occs.find((o) => o.dueAt!.getHours() >= 18)!;
+    // Before the fix this asserted (and produced) 20:00 — edit2 was never
+    // consulted because `firstCourseEventAfter` only ever returns the
+    // single earliest event after dayStart.
+    expect(evening.dueAt?.toISOString()).toBe(atLocalTime(day, "21:00").toISOString());
+    expect(evening.key).toBe(occurrenceKeyFor(course.id, atLocalTime(day, "21:00").toISOString()));
+  });
+
+  it("three same-day transitions: a single slot walks all three grids in order, not just the first two", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["11:00"] },
+      startDate: "2026-08-01",
+    });
+    const edit1 = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "06:00").toISOString(),
+      before: ["08:00"],
+      after: ["09:00"],
+    });
+    const edit2 = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "07:00").toISOString(),
+      before: ["09:00"],
+      after: ["10:00"],
+    });
+    const edit3 = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "07:30").toISOString(),
+      before: ["10:00"],
+      after: ["11:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edit1, edit2, edit3] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    // A fold stopping after 2 transitions would land on 10:00, not 11:00.
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "11:00").toISOString());
+  });
+
+  it("two edits on DIFFERENT days: each day projects only the transition(s) that actually land within it", () => {
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "16:00"] }, // live = final grid
+      startDate: "2026-08-01",
+    });
+    const edit1 = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-10", "09:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const edit2 = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-12", "09:00").toISOString(),
+      before: ["08:00", "18:00"],
+      after: ["08:00", "16:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edit1, edit2] };
+
+    const before = getOccurrences("2026-08-09", ctx);
+    expect(before.map((o) => o.dueAt?.toISOString()).sort()).toEqual(
+      ["08:00", "20:00"].map((t) => atLocalTime("2026-08-09", t).toISOString()).sort(),
+    );
+
+    const edit1Day = getOccurrences("2026-08-10", ctx);
+    const edit1Evening = edit1Day.find((o) => o.dueAt!.getHours() !== 8)!;
+    expect(edit1Evening.dueAt?.toISOString()).toBe(atLocalTime("2026-08-10", "18:00").toISOString());
+
+    const between = getOccurrences("2026-08-11", ctx);
+    expect(between.map((o) => o.dueAt?.toISOString()).sort()).toEqual(
+      ["08:00", "18:00"].map((t) => atLocalTime("2026-08-11", t).toISOString()).sort(),
+    );
+
+    const edit2Day = getOccurrences("2026-08-12", ctx);
+    const edit2Evening = edit2Day.find((o) => o.dueAt!.getHours() !== 8)!;
+    expect(edit2Evening.dueAt?.toISOString()).toBe(atLocalTime("2026-08-12", "16:00").toISOString());
+
+    const after = getOccurrences("2026-08-13", ctx);
+    expect(after.map((o) => o.dueAt?.toISOString()).sort()).toEqual(
+      ["08:00", "16:00"].map((t) => atLocalTime("2026-08-13", t).toISOString()).sort(),
+    );
+  });
+
+  it("mixed-kind ledger: an edited event followed by paused/resumed still resolves correctly on a day between the latter two", () => {
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] },
+      startDate: "2026-08-01",
+      status: "active", // resumed most recently — SPEC §11: status is live, not day-historical
+    });
+    const schedule: Schedule = { kind: "fixedTimes", times: ["08:00", "18:00"] };
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-10", "09:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const paused = makeStatusEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-12", "10:00").toISOString(),
+      kind: "paused",
+      schedule,
+    });
+    const resumed = makeStatusEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-14", "10:00").toISOString(),
+      kind: "resumed",
+      schedule,
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [],
+      courseEvents: [edited, paused, resumed],
+    };
+
+    // 2026-08-13 falls between `paused` and `resumed` — resolving it requires
+    // walking PAST both non-"edited" events to find the schedule they both
+    // carry, proving the timeline walk isn't quietly `kind === "edited"`-only.
+    const occs = getOccurrences("2026-08-13", ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString()).sort()).toEqual(
+      ["08:00", "18:00"].map((t) => atLocalTime("2026-08-13", t).toISOString()).sort(),
+    );
+  });
+});
+
+// SPEC §3c generalizes to eligibility, not just clock time: a slot's
+// daysOfWeek/everyNDays eligibility is governed by whichever schedule
+// version was in effect at ITS OWN due instant — not by whatever version
+// governed the day as a whole at dayStart. Covers both directions (a same-
+// day edit can make a slot newly eligible, or newly ineligible) for both
+// daysOfWeek and everyNDays.
+describe("getOccurrences — fixedTimes, per-slot eligibility on a same-day transition (SPEC §3c)", () => {
+  it("daysOfWeek: eligible under OLD, ineligible under NEW — only the pre-edit slot survives", () => {
+    const day = "2026-08-10"; // Monday, ISO weekday 1
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"], daysOfWeek: [2] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeScheduleEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "09:00").toISOString(),
+      kind: "edited",
+      before: { kind: "fixedTimes", times: ["08:00", "20:00"], daysOfWeek: [1] }, // Monday: eligible
+      after: { kind: "fixedTimes", times: ["08:00", "18:00"], daysOfWeek: [2] }, // Tuesday only: ineligible
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "08:00").toISOString());
+  });
+
+  it("daysOfWeek: ineligible under OLD, eligible under NEW — only the post-edit slot appears", () => {
+    const day = "2026-08-10"; // Monday, ISO weekday 1
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["10:00", "21:00"], daysOfWeek: [1] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeScheduleEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "09:00").toISOString(),
+      kind: "edited",
+      before: { kind: "fixedTimes", times: ["08:00", "20:00"], daysOfWeek: [2] }, // Tuesday only: ineligible
+      after: { kind: "fixedTimes", times: ["10:00", "21:00"], daysOfWeek: [1] }, // Monday: eligible
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "21:00").toISOString());
+  });
+
+  it("everyNDays: eligible under OLD, ineligible under NEW — only the pre-edit slot survives", () => {
+    const day = "2026-08-04"; // offset 3 from startDate
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"], everyNDays: 2 },
+      startDate: "2026-08-01",
+    });
+    const edited = makeScheduleEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "09:00").toISOString(),
+      kind: "edited",
+      before: { kind: "fixedTimes", times: ["08:00", "20:00"], everyNDays: 3 }, // offset 3 % 3 === 0: eligible
+      after: { kind: "fixedTimes", times: ["08:00", "18:00"], everyNDays: 2 }, // offset 3 % 2 !== 0: ineligible
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "08:00").toISOString());
+  });
+
+  it("everyNDays: ineligible under OLD, eligible under NEW — only the post-edit slot appears", () => {
+    const day = "2026-08-04"; // offset 3 from startDate
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["10:00", "21:00"], everyNDays: 3 },
+      startDate: "2026-08-01",
+    });
+    const edited = makeScheduleEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "09:00").toISOString(),
+      kind: "edited",
+      before: { kind: "fixedTimes", times: ["08:00", "20:00"], everyNDays: 2 }, // offset 3 % 2 !== 0: ineligible
+      after: { kind: "fixedTimes", times: ["10:00", "21:00"], everyNDays: 3 }, // offset 3 % 3 === 0: eligible
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "21:00").toISOString());
   });
 });

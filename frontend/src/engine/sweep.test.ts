@@ -145,23 +145,35 @@ describe("findMissedOccurrences", () => {
     expect(findMissedOccurrences(ctx, now)).toHaveLength(0);
   });
 
-  it("is idempotent: an occurrence that already has a 'missed' DoseEvent is not returned again", () => {
+  it("is idempotent across a 7-day x N-slot matrix: every 'missed' occurrence found in one pass is not found again in the next", () => {
+    // 7 days, 3 slots/day — the regression this guards ("write what the
+    // sweep found, then find it again") is a full week's worth of candidates
+    // at once, not one course / one slot / one day.
     const course = makeCourse({
-      schedule: { kind: "fixedTimes", times: ["08:00"] },
-      startDate: "2026-08-08",
-      endDate: "2026-08-08",
+      schedule: { kind: "fixedTimes", times: ["08:00", "14:00", "20:00"] },
+      startDate: "2026-08-03",
+      endDate: "2026-08-09",
     });
-    const dueAt = new Date(2026, 7, 8, 8, 0);
-    const missedEvent = makeEvent({
-      courseId: course.id,
-      scheduledFor: dueAt.toISOString(),
-      status: "missed",
-      loggedAt: "2026-08-08T20:00:00.000Z",
-      givenAt: "2026-08-08T20:00:00.000Z",
-    });
-    const ctx: EngineContext = { courses: [course], events: [missedEvent], courseEvents: [] };
-    const now = new Date(2026, 7, 10, 10, 0);
-    expect(findMissedOccurrences(ctx, now)).toHaveLength(0);
+    const now = new Date(2026, 7, 10, 10, 0); // well over 12h past every slot in the window
+
+    const ctxBefore: EngineContext = { courses: [course], events: [], courseEvents: [] };
+    const missedBefore = findMissedOccurrences(ctxBefore, now);
+    expect(missedBefore).toHaveLength(7 * 3);
+
+    // Write what the sweep found as `missed` DoseEvents — what `recordMissed`
+    // would do with this pass's output.
+    const missedEvents: DoseEvent[] = missedBefore.map((occ) =>
+      makeEvent({
+        courseId: occ.courseId,
+        scheduledFor: occ.dueAt!.toISOString(),
+        status: "missed",
+        loggedAt: now.toISOString(),
+        givenAt: now.toISOString(),
+      }),
+    );
+
+    const ctxAfter: EngineContext = { courses: [course], events: missedEvents, courseEvents: [] };
+    expect(findMissedOccurrences(ctxAfter, now)).toHaveLength(0);
   });
 
   it("defaults lookbackDays to 7: an occurrence 8 days ago is not found", () => {

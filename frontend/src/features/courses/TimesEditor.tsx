@@ -26,23 +26,61 @@ export interface TimesEditorProps {
    */
   originalTimes: LocalTime[];
   onChange: (next: LocalTime[]) => void;
+  /**
+   * Optional: given the row values a press is ABOUT to commit, returns the
+   * gap-warning prose that would show for them (same text `CourseFormPage`
+   * puts in its warning `Card`), or `null` when none applies. When present,
+   * `step` folds this into the SAME announcement as the time change — see
+   * the comment on `announcement` below for why it must be the same
+   * utterance rather than a second one. `CourseFormPage` is the only owner
+   * of "the previous schedule"/"dose events"/etc a gap warning needs, so
+   * this editor stays a pure view that merely asks for prose, never
+   * computing a warning itself.
+   */
+  previewWarning?: (nextTimes: LocalTime[]) => string | null;
 }
 
-export function TimesEditor({ times, originalTimes, onChange }: TimesEditorProps): ReactElement {
+export function TimesEditor({
+  times,
+  originalTimes,
+  onChange,
+  previewWarning,
+}: TimesEditorProps): ReactElement {
   const { t } = useTranslator();
   // The editor's ONE AND ONLY live region (rendered once, below) — never one
   // per row. N per-row regions would each announce independently, queueing N
   // overlapping utterances for a single tap; see the identical reasoning on
   // `LogAtTimeSheet.tsx`'s headline (~line 341). Every row's press writes
   // through this single piece of state instead.
+  //
+  // INVARIANT HELD HERE: not "one element with aria-live" (that's just how
+  // the invariant is implemented) but ONE UTTERANCE PER INTERACTION — one
+  // `setAnnouncement` call per press, full stop. That is why `step` below
+  // computes a single combined string (time change, plus a gap warning when
+  // one applies) and calls `setAnnouncement` exactly once, rather than
+  // calling it once for the time and again for the warning — two calls
+  // would still be one DOM node, but would still queue two utterances for
+  // one tap, which is the thing actually being avoided.
   const [announcement, setAnnouncement] = useState("");
 
   function step(index: number, deltaMin: number) {
     const current = times[index];
     const nextTime = stepTime(current, deltaMin);
     if (nextTime === current) return; // at a clamp; the button should be disabled already
-    onChange(times.map((value, i) => (i === index ? nextTime : value)));
-    setAnnouncement(t("courses.times.announce", { index: index + 1, time: nextTime }));
+    const nextTimes = times.map((value, i) => (i === index ? nextTime : value));
+    onChange(nextTimes);
+    const timeAnnouncement = t("courses.times.announce", { index: index + 1, time: nextTime });
+    // a11y fix: a screen-reader user pressing a stepper into the too-soon
+    // zone previously heard only the time confirmation, never that a
+    // warning (least of all the `tooSoonToLog` band — "these two doses
+    // cannot both be logged") now applies below. `previewWarning` is asked
+    // about `nextTimes` (the value this press is committing to), not
+    // `times` (the value before it), since the warning always describes
+    // where the press is landing.
+    const warningAnnouncement = previewWarning?.(nextTimes) ?? null;
+    setAnnouncement(
+      warningAnnouncement ? `${timeAnnouncement}. ${warningAnnouncement}` : timeAnnouncement,
+    );
   }
 
   return (

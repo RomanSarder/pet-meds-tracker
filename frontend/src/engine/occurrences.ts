@@ -62,10 +62,12 @@ export function inWindow(day: LocalDate, course: Course): boolean {
  * eligibility test is written so both stay in lockstep.
  *
  * `schedule` is passed in explicitly rather than read off `course.schedule`
- * — SPEC §3c: a schedule edit is forward-only, so `day`'s daysOfWeek/
- * everyNDays checks must run against the version that GOVERNED `day` (the
- * schedule in effect at its start, from `scheduleTimelineFor`), not
- * whatever the live `course.schedule` happens to be today.
+ * — SPEC §3c: a schedule edit is forward-only, so a slot's daysOfWeek/
+ * everyNDays checks must run against the version that GOVERNED that SLOT
+ * (the schedule in effect at its own due instant, from `scheduleTimelineFor`
+ * — see `fixedTimesOccurrences`, which calls this once per candidate slot,
+ * not once for the whole day), not whatever the live `course.schedule`
+ * happens to be today.
  */
 export function fixedTimesDayEligible(day: LocalDate, course: Course, schedule: Schedule): boolean {
   if (schedule.kind !== "fixedTimes") return false;
@@ -86,10 +88,30 @@ function compareCourseEventsAsc(a: CourseEvent, b: CourseEvent): boolean {
 }
 
 /**
+ * Numeric `(at asc, seq asc, id asc)` comparator for `Array#sort` — same
+ * ledger order as `compareCourseEventsAsc`'s single-pair boolean form
+ * (kept separate rather than reused, since `firstCourseEventAfter`'s
+ * running-earliest scan and `Array#sort` want different shapes).
+ */
+function courseEventOrder(a: CourseEvent, b: CourseEvent): number {
+  if (a.at !== b.at) return a.at < b.at ? -1 : 1;
+  if (a.seq !== b.seq) return a.seq - b.seq;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
  * The earliest of this course's CourseEvents with `at` strictly after `t`,
  * or `null` when none exists — i.e. `t` is at or after the course's last
  * recorded change. Ties broken `(at asc, seq asc, id asc)`, matching §6.4's
  * log order.
+ *
+ * Deliberately walks EVERY `CourseEventKind` ("started", "edited", "paused",
+ * "resumed", "stopped", "finished"), not just "edited" — every kind carries
+ * a full `before`/`after` `CourseSnapshot` (schedule included), so a
+ * `paused`/`resumed`/`stopped`/`finished` event pins the schedule timeline
+ * exactly as validly as an `edited` one, even though it doesn't itself
+ * change `schedule`. Filtering to `"edited"` only would make this function
+ * blind to any status-change event sitting between two real edits.
  */
 function firstCourseEventAfter(
   course: Course,
@@ -179,48 +201,46 @@ function buildFixedTimesOccurrence(
 }
 
 /**
- * Pairs `oldTimes[i]` with `newTimes[i]` by ARRAY INDEX — never by sorting,
- * never by matching values. INVARIANT: `times` is never re-sorted here.
- * (Contrast `nextDueAt`, which sorts a *copy* of `course.schedule.times`
- * purely to walk candidates chronologically — that sorted copy must never
- * leak into this positional pairing, or slot i would stop meaning "the same
- * slot before and after the edit".)
+ * One fold step: pairs `times[i]` with `newTimes[i]` by ARRAY INDEX — never
+ * by sorting, never by matching values. INVARIANT: `times` is never
+ * re-sorted, in this step or across the fold that chains these steps
+ * together. (Contrast `nextDueAt`, which sorts a *copy* of
+ * `course.schedule.times` purely to walk candidates chronologically — that
+ * sorted copy must never leak into this positional pairing, or slot i would
+ * stop meaning "the same slot before and after the edit".)
  *
- * Slot i keeps `oldTimes[i]` while that time had not yet arrived at the
- * moment of the edit; it moves to `newTimes[i]` once it had (SPEC §3c: an
+ * Slot i keeps `times[i]` while that time had not yet arrived at the moment
+ * of this transition; it moves to `newTimes[i]` once it had (SPEC §3c: an
  * occurrence is generated from the schedule in effect at its OWN due
  * instant, not the day's). A slot-count change pairs to the shorter array,
  * then a surplus NEW slot appears once due, and a surplus OLD slot keeps
- * firing until the edit.
+ * firing until the transition.
  */
-function pairFixedTimesAcrossEdit(
+function foldFixedTimesStep(
   day: LocalDate,
-  course: Course,
-  events: DoseEvent[],
-  oldTimes: LocalTime[],
+  times: LocalTime[],
   newTimes: LocalTime[],
   changedAt: Date,
-): Occurrence[] {
-  const pairedLength = Math.min(oldTimes.length, newTimes.length);
-  const occurrences: Occurrence[] = [];
+): LocalTime[] {
+  const pairedLength = Math.min(times.length, newTimes.length);
+  const result: LocalTime[] = [];
 
   for (let i = 0; i < pairedLength; i++) {
-    const oldDueAt = atLocalTime(day, oldTimes[i]);
-    const t = oldDueAt.getTime() >= changedAt.getTime() ? newTimes[i] : oldTimes[i];
-    occurrences.push(buildFixedTimesOccurrence(day, course, t, events));
+    const dueAt = atLocalTime(day, times[i]);
+    result.push(dueAt.getTime() >= changedAt.getTime() ? newTimes[i] : times[i]);
   }
   for (let i = pairedLength; i < newTimes.length; i++) {
     if (atLocalTime(day, newTimes[i]).getTime() >= changedAt.getTime()) {
-      occurrences.push(buildFixedTimesOccurrence(day, course, newTimes[i], events));
+      result.push(newTimes[i]);
     }
   }
-  for (let i = pairedLength; i < oldTimes.length; i++) {
-    if (atLocalTime(day, oldTimes[i]).getTime() < changedAt.getTime()) {
-      occurrences.push(buildFixedTimesOccurrence(day, course, oldTimes[i], events));
+  for (let i = pairedLength; i < times.length; i++) {
+    if (atLocalTime(day, times[i]).getTime() < changedAt.getTime()) {
+      result.push(times[i]);
     }
   }
 
-  return occurrences;
+  return result;
 }
 
 function fixedTimesOccurrences(
@@ -236,35 +256,62 @@ function fixedTimesOccurrences(
   const dayStart = atLocalTime(day, "00:00");
   const nextDayStart = atLocalTime(addLocalDays(day, 1), "00:00");
 
-  // The schedule governing `day` is the version in effect at its start
+  // The schedule governing `day`'s start is the version in effect there
   // (SPEC §3c) — not the live `course.schedule`, which may already be a
   // later edit that has not reached `day` yet.
   const scheduleAt = scheduleTimelineFor(course, courseEvents);
   const oldSchedule = scheduleAt(dayStart);
-  const pinning = firstCourseEventAfter(course, courseEvents, dayStart);
-  // Only an edit that lands WITHIN `day` produces a split; one on a later
-  // day leaves the whole of `day` on `oldSchedule`.
-  const changedAt =
-    pinning !== null && new Date(pinning.at).getTime() < nextDayStart.getTime()
-      ? new Date(pinning.at)
-      : null;
-  const newSchedule = changedAt !== null && pinning !== null ? pinning.after.schedule : oldSchedule;
 
-  if (oldSchedule.kind !== "fixedTimes" || newSchedule.kind !== "fixedTimes") {
+  // Every CourseEvent transition landing within [dayStart, nextDayStart) —
+  // not just the single earliest one — must be folded in. A second same-day
+  // edit's schedule would otherwise never be consulted at all. Ledger order:
+  // (at asc, seq asc, id asc).
+  const transitionsInDay = courseEvents
+    .filter((e) => e.courseId === course.id)
+    .filter((e) => {
+      const at = new Date(e.at).getTime();
+      return at >= dayStart.getTime() && at < nextDayStart.getTime();
+    })
+    .sort(courseEventOrder);
+
+  const versions: Schedule[] = [oldSchedule, ...transitionsInDay.map((e) => e.after.schedule)];
+
+  if (versions.some((v) => v.kind !== "fixedTimes")) {
     // Defensive: this feature only ever shifts fixedTimes clock times, so a
     // recorded edit changing `kind` is not expected. If it ever happened,
     // there is no meaningful per-slot pairing — fall back to the live grid.
     if (!fixedTimesDayEligible(day, course, liveSchedule)) return [];
     return liveSchedule.times.map((t) => buildFixedTimesOccurrence(day, course, t, events));
   }
+  const fixedVersions = versions as Extract<Schedule, { kind: "fixedTimes" }>[];
 
-  if (!fixedTimesDayEligible(day, course, oldSchedule)) return [];
-
-  if (changedAt === null) {
-    return oldSchedule.times.map((t) => buildFixedTimesOccurrence(day, course, t, events));
+  // Fold every in-day transition into the slot times one at a time,
+  // threading each step's output into the next. With zero transitions this
+  // is a no-op (`times` stays `oldSchedule.times`); with exactly one it is
+  // exactly the old binary old/new split.
+  let times: LocalTime[] = fixedVersions[0].times;
+  for (let k = 0; k < transitionsInDay.length; k++) {
+    times = foldFixedTimesStep(day, times, fixedVersions[k + 1].times, new Date(transitionsInDay[k].at));
   }
 
-  return pairFixedTimesAcrossEdit(day, course, events, oldSchedule.times, newSchedule.times, changedAt);
+  // Eligibility (window/daysOfWeek/everyNDays) is evaluated PER SLOT, against
+  // the schedule version governing that slot's own due instant — not once
+  // for the whole day against `oldSchedule`. This is the same SPEC §3c
+  // principle already applied to the clock time itself: a day that
+  // daysOfWeek/everyNDays excludes under the version in force at the day's
+  // start can still gain a slot from a later same-day edit that includes it
+  // (and, symmetrically, lose one to an edit that excludes it) — each slot's
+  // eligibility belongs to whichever version was actually in effect when it
+  // was due, not to the day as a whole under a single version.
+  const occurrences: Occurrence[] = [];
+  for (const t of times) {
+    const dueAt = atLocalTime(day, t);
+    const governing = scheduleAt(dueAt);
+    if (governing.kind !== "fixedTimes") continue; // defensive, see guard above
+    if (!fixedTimesDayEligible(day, course, governing)) continue;
+    occurrences.push(buildFixedTimesOccurrence(day, course, t, events));
+  }
+  return occurrences;
 }
 
 function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEvent[]): Occurrence[] {
