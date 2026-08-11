@@ -559,6 +559,73 @@ describe("PetDetailView", () => {
     expect(recentCard.children).toHaveLength(10);
   });
 
+  // Regression: Recent used to render `entry.at` (the day-grouping key,
+  // `scheduledFor ?? givenAt`) instead of `entry.displayAt` (`givenAt`,
+  // the instant actually displayed elsewhere, e.g. History). A dose given
+  // BEFORE its scheduled/due instant — the interval-course "given early"
+  // case — used to show the later due time here, even though History
+  // already showed the true given time. See PetDetailPage.tsx's Recent map.
+  it("shows a Recent dose at the time it was actually GIVEN, not its scheduled/due time", async () => {
+    const custom = cloneFixtures();
+    const pet = custom.pets.find((p) => p.name === "Clover")!;
+    const medicationId = custom.medications[0].id; // Metacam
+
+    const earlyCourseId = "test-course-given-early";
+    const scheduledFor = "2026-08-07T17:54:00.000Z"; // 18:54 BST — the DUE time
+    const givenAt = "2026-08-07T17:42:00.000Z"; // 18:42 BST — actually given 12 min early
+
+    custom.courses = [
+      ...custom.courses,
+      {
+        id: earlyCourseId,
+        petId: pet.id,
+        medicationId,
+        doseAmount: 0.5,
+        doseUnit: "ml",
+        instructions: null,
+        schedule: { kind: "fromLastDose", intervalHours: 12 },
+        startDate: "2026-08-01",
+        endDate: null,
+        status: "active",
+        notes: null,
+        resumedAt: null,
+        createdAt: "2026-08-01T08:00:00.000Z",
+        updatedAt: "2026-08-01T08:00:00.000Z",
+        deletedAt: null,
+      },
+    ];
+    custom.doseEvents = [
+      ...custom.doseEvents,
+      {
+        id: `test-event-${earlyCourseId}`,
+        courseId: earlyCourseId,
+        scheduledFor,
+        status: "given",
+        loggedAt: givenAt,
+        givenAt,
+        amount: 0.5,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(earlyCourseId, scheduledFor),
+        supersedesId: null,
+        actorId: "test-actor-id",
+        createdAt: givenAt,
+        updatedAt: givenAt,
+        deletedAt: null,
+      },
+    ];
+
+    const repo = createMemoryRepo(custom);
+    renderWithProviders(<PetDetailView petId={pet.id} />, { repo });
+
+    const recentLabel = await screen.findByText("Recent");
+    const recentCard = recentLabel.closest("div")!.nextElementSibling as HTMLElement;
+
+    // 18:42 BST is when the dose was actually given; 18:54 BST is merely
+    // when it was due. The row must attribute the GIVEN time.
+    expect(await within(recentCard).findByText(/18:42/)).toBeInTheDocument();
+    expect(within(recentCard).queryByText(/18:54/)).not.toBeInTheDocument();
+  });
+
   it("shows who logged each Recent event, resolved through displayNameFor rather than a raw id", async () => {
     const pet = clover();
     renderWithProviders(<PetDetailView petId={pet.id} />);

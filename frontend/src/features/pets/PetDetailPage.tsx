@@ -389,7 +389,7 @@ export function PetDetailView({ petId }: { petId: string }) {
                 </span>
                 <span style={{ color: "var(--ink-3)", fontSize: 13, marginLeft: "auto" }}>
                   {tr.t("pets.recent.attribution", {
-                    when: eventWhenLabel(new Date(entry.at), today, tr),
+                    when: eventWhenLabel(new Date(entry.displayAt), today, tr),
                     actor: nameFor(entry.actorId),
                   })}
                 </span>
