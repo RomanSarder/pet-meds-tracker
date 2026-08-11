@@ -27,11 +27,12 @@ import { describeSchedule } from "@/engine";
 import { useNow } from "@/app/useNow";
 import { useTranslator } from "@/i18n";
 import { renderSchedule } from "@/i18n/schedule";
+import { EarlyGiveConfirmDialog } from "./EarlyGiveConfirmDialog";
 import { TodayDoseRow } from "./TodayDoseRow";
 import { buildTodayView, greetingFor, scheduledForOf } from "./todayModel";
 import type { LogAtTimeContext, TodayDose, TodayPetGroup } from "./types";
 import { useDailySweep } from "./useDailySweep";
-import { useLogDose, type LogDoseVars } from "./useLogDose";
+import { useLogDose, type EarlyGiveConflict, type LogDoseVars } from "./useLogDose";
 import { useTodayQuery } from "./useTodayData";
 
 const SCREEN_STYLE = {
@@ -70,13 +71,14 @@ const COMING_UP_STYLE = {
  */
 function identityOf(dose: TodayDose): Pick<
   LogDoseVars,
-  "occurrenceKey" | "courseId" | "amount" | "scheduledFor"
+  "occurrenceKey" | "courseId" | "amount" | "scheduledFor" | "medicationName"
 > {
   return {
     occurrenceKey: dose.key,
     courseId: dose.courseId,
     amount: dose.occurrence.doseAmount,
     scheduledFor: scheduledForOf(dose.occurrence),
+    medicationName: dose.medicationName,
   };
 }
 
@@ -91,7 +93,13 @@ export function TodayPage(): ReactElement {
 
   useDailySweep(now);
   const { data: snapshot, isPending } = useTodayQuery(day);
-  const logDose = useLogDose(day);
+
+  // SPEC §3b: "Allow, but confirm when early." A give that collides with the
+  // grace window AND was not yet due (`earlyGive`, set below) lands here
+  // instead of the flat duplicate toast — `EarlyGiveConfirmDialog` below is
+  // the single instance for the whole page, not one per row.
+  const [earlyGiveConflict, setEarlyGiveConflict] = useState<EarlyGiveConflict | null>(null);
+  const logDose = useLogDose(day, { onEarlyGiveConflict: setEarlyGiveConflict });
 
   // Occurrence keys resolved while this screen has been mounted. Only ever
   // added to: an undone dose loses its event and comes back as pending on its
@@ -116,6 +124,15 @@ export function TodayPage(): ReactElement {
 
   const log = useCallback(
     (vars: LogDoseVars) => {
+      // F2: closes the double-tap window `onMutate`'s async prefix
+      // (`cancelQueries` then `currentActorId()`) leaves open — a second tap
+      // landing before the optimistic flip repaints the button used to reach
+      // `logDose.mutate` a second time for the same give, which the
+      // same-occurrence hard block could not always turn into a no-op (see
+      // `useLogDose.ts`'s `onError`). `logDose.isPending` flips true
+      // synchronously the instant `.mutate()` is called, so this closes the
+      // gap without waiting on either async step.
+      if (logDose.isPending) return;
       setKeepResolved((prev) =>
         prev.has(vars.occurrenceKey)
           ? prev
@@ -134,9 +151,41 @@ export function TodayPage(): ReactElement {
         toastMessage: t("today.toast.logged", {
           medicationName: dose.medicationName,
         }),
+        // SPEC §3b: only a dose that is not yet due (`later`/`upcoming`) is
+        // eligible for the early-give confirm dialog on a grace-window
+        // collision — an on-time or overdue collision is a genuine "someone
+        // already gave this" and keeps the flat rejection (`useLogDose.ts`).
+        //
+        // F8 (deliberate, kind-agnostic): this eligibility test does not
+        // branch on `course.schedule.kind`, so a `fixedTimes` course gets the
+        // SAME early-give confirm a `fromLastDose` one does — e.g. a taper
+        // dosed at 08:00/09:00 can confirm the 09:00 dose at 08:05. Kept on
+        // purpose for both kinds, not an oversight the interval feature left
+        // behind: the underlying question ("a dose was just given nearby —
+        // give this one too?") is identical either way, and the
+        // `EARLY_GIVE_FLOOR_MIN` hard floor (`@/domain`, enforced in
+        // `idbRepo.ts`/`memoryRepo.ts`) applies to both kinds equally, so a
+        // fixed-times mis-tap gets the same unconditional protection an
+        // interval one does.
+        earlyGive: dose.state === "later" || dose.state === "upcoming",
       }),
     [log, t],
   );
+
+  const confirmEarlyGive = useCallback(() => {
+    if (!earlyGiveConflict) return;
+    const { vars } = earlyGiveConflict;
+    setEarlyGiveConflict(null);
+    // F2: `earlyGive: false` on the retry — if this confirmed write STILL
+    // collides (e.g. another device's write landed in between), that
+    // collision must fall through to the flat rejection toast
+    // (`useLogDose.ts`'s `onError`), never reopen this same dialog. Nothing
+    // here could offer a meaningfully different confirmation a second time,
+    // and looping it indefinitely with no write and no explanation is
+    // exactly the "someone already gave it, and nothing else happened"
+    // complaint this dialog exists to fix, rebuilt one layer up.
+    log({ ...vars, allowWithinGrace: true, earlyGive: false });
+  }, [earlyGiveConflict, log]);
 
   const skip = useCallback(
     (dose: TodayDose) =>
@@ -279,6 +328,7 @@ export function TodayPage(): ReactElement {
                       });
                     }}
                     onStartCourse={() => startCourse(dose)}
+                    giving={logDose.isPending}
                   />
                 );
               })}
@@ -358,6 +408,14 @@ export function TodayPage(): ReactElement {
           </Card>
         ) : null}
       </div>
+
+      <EarlyGiveConfirmDialog
+        conflict={earlyGiveConflict}
+        onOpenChange={(open) => {
+          if (!open) setEarlyGiveConflict(null);
+        }}
+        onConfirm={confirmEarlyGive}
+      />
     </div>
   );
 }

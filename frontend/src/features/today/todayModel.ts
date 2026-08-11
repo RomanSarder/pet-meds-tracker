@@ -55,6 +55,30 @@ const RESOLVED_STATES: ReadonlySet<DoseState> = new Set<DoseState>([
   "skipped",
 ]);
 
+/**
+ * Whether a dose belongs in the card body's pending list.
+ *
+ * `PENDING_STATES` applies uniformly to every course kind. `upcoming` is
+ * folded in on top of it, but restricted to `fromLastDose` occurrences —
+ * SPEC §3b: an anchored interval chain's next dose must be reachable, and
+ * giveable early, from the moment the chain re-anchors, even when the
+ * computed due instant lands on a later local day than "today"
+ * (`occurrences.ts`'s `fromLastDoseOccurrences` now emits it for every day
+ * from the anchor's own day through the due day, so its state can compute
+ * as `upcoming` on the days before the due day arrives).
+ *
+ * CRITICAL SCOPE GUARD: a `fixedTimes` occurrence's `dueAt` is always inside
+ * the very day `fixedTimesOccurrences` built it for (`atLocalTime(day, t)`),
+ * so `upcoming` structurally cannot arise for one while `day` is the real
+ * "today" `TodayPage` always queries — the `occ.kind` check below is
+ * belt-and-braces, not a live branch today, so a later regression cannot
+ * silently flood the dashboard with tomorrow's (or later) fixed-time doses.
+ */
+function isPendingDose(dose: TodayDose): boolean {
+  if (PENDING_STATES.has(dose.state)) return true;
+  return dose.state === "upcoming" && dose.occurrence.kind === "fromLastDose";
+}
+
 /** The separator every composed clause on this screen is joined with. */
 const SEPARATOR = " · ";
 
@@ -79,6 +103,22 @@ export function greetingFor(now: Date, tr: Translator): string {
  */
 function isDated(dose: TodayDose): boolean {
   return dose.state !== "notStarted";
+}
+
+/**
+ * Whether a dose counts toward TODAY specifically — `isDated` minus
+ * `upcoming`.
+ *
+ * `upcoming` is dated (it has a real `dueAt`) but, by construction, is due on
+ * a LATER local day than the one being viewed — it is only in `pending` at
+ * all so an anchored `fromLastDose` chain's next dose is reachable and
+ * giveable early (SPEC §3b). Counting it as "today" would claim a dose is
+ * scheduled today that is not: `Y` in the `X of Y today` counter would read
+ * one too high, and a pet whose only pending row is this early one would
+ * never register as `done` for today even though nothing is actually due.
+ */
+function isDueToday(dose: TodayDose): boolean {
+  return isDated(dose) && dose.state !== "upcoming";
 }
 
 /**
@@ -118,6 +158,16 @@ function detailFor(
   const parts = [
     // A clock time when there is one — never localized (SPEC §10a).
     time ?? tr.t("today.notStarted"),
+    // A `fromLastDose` occurrence whose computed due instant crosses onto a
+    // LATER local day than the one being viewed (`occurrences.ts` now emits
+    // it starting the anchor's own day, so it stays actionable — and
+    // giveable early — before the interval elapses) must not read as due at
+    // that bare clock time TODAY. `whenLabel` — the same "today"/"tomorrow"/
+    // "in N days" word `comingUpFor` below already uses — says which day it
+    // actually belongs to, reusing existing copy rather than inventing new.
+    occ.kind === "fromLastDose" && occ.dueAt !== null && localDayKey(occ.dueAt) !== day
+      ? whenLabel(differenceInLocalDays(localDayKey(occ.dueAt), day), tr)
+      : "",
     // Instructions are user-entered DATA: interpolated verbatim.
     course.instructions ?? "",
     // SPEC §3b: an interval course's detail line must carry the "from last
@@ -182,12 +232,20 @@ function statusFor(
   resolved: TodayDose[],
   earliestOverdue: TodayDose | null,
   next: Date | null,
+  now: Date,
   tr: Translator,
 ): string {
   if (earliestOverdue !== null && earliestOverdue.time !== null) {
     return tr.t("today.status.overdueSince", { time: earliestOverdue.time });
   }
-  if (next !== null) return tr.t("today.status.nextAt", { time: formatHHMM(next) });
+  // `formatNextDose` (below), not the bare `today.status.nextAt` this used
+  // to call: `next` can now be an anchored `fromLastDose` chain's next dose
+  // reachable a day or more early (SPEC §3b), and a bare "Next at 07:50"
+  // reads as due TODAY at that clock time regardless of which day `next`
+  // actually falls on. `formatNextDose` already carries the "tomorrow"/date
+  // qualifier `emptyDetailFor` below relies on for the exact same reason —
+  // reused rather than re-worded, so the two only ever say this one way.
+  if (next !== null) return formatNextDose(next, now, tr);
   if (pending.length > 0) return tr.t("today.notStarted");
   if (resolved.length > 0) {
     // Last by scheduled due time; the time it reports is the logged one.
@@ -207,9 +265,10 @@ function groupFor(
   pet: Pet,
   doses: TodayDose[],
   keepResolved: ReadonlySet<string> | undefined,
+  now: Date,
   tr: Translator,
 ): TodayPetGroup {
-  const pending = doses.filter((d) => PENDING_STATES.has(d.state)).sort(byDueAt);
+  const pending = doses.filter(isPendingDose).sort(byDueAt);
   const resolved = doses
     .filter((d) => RESOLVED_STATES.has(d.state))
     .sort(byDueAt);
@@ -220,9 +279,13 @@ function groupFor(
       )
     : [...pending];
 
-  // `Y` excludes `notStarted`: for an interval course the day's total is not
-  // knowable in advance (COMMON §6 item 8).
-  const countedPending = pending.filter(isDated).length;
+  // `Y` excludes `notStarted` AND `upcoming` (`isDueToday`, not `isDated`):
+  // for an interval course the day's total is not knowable in advance
+  // (COMMON §6 item 8), and an `upcoming` row's dose is not due today at all
+  // — it is only in `pending` so it stays reachable and giveable early
+  // (SPEC §3b). Counting it would read "1 of 1 today" for a dose actually
+  // due tomorrow.
+  const countedPending = pending.filter(isDueToday).length;
   const total = resolved.length + countedPending;
 
   const overdueDoses = pending.filter((d) => d.state === "overdue");
@@ -236,9 +299,14 @@ function groupFor(
     body,
     counterLabel:
       total === 0 ? "" : tr.t("today.counter", { done: resolved.length, total }),
-    status: statusFor(pending, resolved, overdueDoses[0] ?? null, next ?? null, tr),
+    status: statusFor(pending, resolved, overdueDoses[0] ?? null, next ?? null, now, tr),
     hasOverdue: overdueDoses.length > 0,
-    done: pending.length === 0,
+    // Not simply `pending.length === 0`: a pending row that is purely an
+    // early-reachable `upcoming` dose (SPEC §3b) is not something left to do
+    // TODAY, so it must not keep a pet permanently out of the `done` rank —
+    // `every` is vacuously true on an empty array, so this still covers the
+    // ordinary "nothing pending at all" case exactly as before.
+    done: pending.every((d) => d.state === "upcoming"),
     nextDueAt: next ?? null,
   };
 }
@@ -439,6 +507,7 @@ export function buildTodayView(
         pet,
         doses.filter((d) => d.petId === pet.id),
         opts?.keepResolved,
+        now,
         tr,
       ),
     )

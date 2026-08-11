@@ -1,17 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { differenceInLocalDays, type Schedule } from "@/domain";
+import {
+  differenceInLocalDays,
+  DUE_PRE_WINDOW_MIN,
+  GRACE_INTERVAL_CAP_MIN,
+  intervalGraceMinutes,
+  type Schedule,
+} from "@/domain";
+import { createTranslator } from "@/i18n";
 import {
   FREQUENCY_CHOICES,
   INTERVAL_CHOICES,
   choicesForSchedule,
   endDateForDurationChoice,
+  intervalChoiceHours,
+  intervalChoiceLabel,
   isPresetSchedule,
   scheduleForFrequencyChoice,
   scheduleForIntervalChoice,
 } from "./scheduleChoice";
 
+const en = createTranslator("en");
+const uk = createTranslator("uk");
+
 describe("scheduleForIntervalChoice", () => {
   it.each([
+    ["Every 2h", 2],
     ["Every 4h", 4],
     ["Every 6h", 6],
     ["Every 8h", 8],
@@ -23,6 +36,61 @@ describe("scheduleForIntervalChoice", () => {
     // anchorTime is optional on fromLastDose — assert it is truly absent, not
     // just falsy, per CONTRACT.md's "emit no anchorTime" rule.
     expect(Object.keys(schedule)).not.toContain("anchorTime");
+  });
+});
+
+describe("INTERVAL_CHOICES ordering", () => {
+  it("starts with the shortest interval, Every 2h", () => {
+    expect(INTERVAL_CHOICES[0]).toBe("Every 2h");
+  });
+
+  it("is sorted ascending by hours — protects future additions too, not just this one", () => {
+    const hours = INTERVAL_CHOICES.map(intervalChoiceHours);
+    const sorted = [...hours].sort((a, b) => a - b);
+    expect(hours).toEqual(sorted);
+  });
+});
+
+// Regression guard for a real product bug: a flat 90-minute cross-occurrence
+// grace window made the early-give confirm fire on EVERY early give for a
+// 2h-interval course, because 90 exactly equalled that course's whole
+// not-yet-due window (120min interval - 30min DUE_PRE_WINDOW_MIN = 90). The
+// fix scales the grace window to `intervalGraceMinutes` (half the interval,
+// capped at GRACE_INTERVAL_CAP_MIN) — this table proves the fix clears the
+// collision for EVERY interval this app currently offers, and will keep
+// proving it for any interval added to INTERVAL_CHOICES later: a future
+// short interval that reintroduces the collision fails this test without
+// anyone having to remember why the cap exists.
+describe("intervalGraceMinutes vs the not-yet-due window, for every offered INTERVAL_CHOICES entry", () => {
+  it.each(INTERVAL_CHOICES.map((choice) => [choice, intervalChoiceHours(choice)] as const))(
+    "%s: the grace window stays strictly below the not-yet-due window",
+    (_choice, hours) => {
+      const notYetDueMin = hours * 60 - DUE_PRE_WINDOW_MIN;
+      const grace = intervalGraceMinutes(hours);
+      expect(grace).toBeLessThan(notYetDueMin);
+    },
+  );
+
+  it("Every 2h is the one interval actually reduced below the cap: half its interval, 60 minutes", () => {
+    expect(intervalGraceMinutes(intervalChoiceHours("Every 2h"))).toBe(60);
+  });
+
+  it.each(
+    INTERVAL_CHOICES.filter((choice) => intervalChoiceHours(choice) >= 4).map(
+      (choice) => [choice, intervalChoiceHours(choice)] as const,
+    ),
+  )("%s: unchanged from the pre-scaling flat grace — still GRACE_INTERVAL_CAP_MIN", (_choice, hours) => {
+    expect(intervalGraceMinutes(hours)).toBe(GRACE_INTERVAL_CAP_MIN);
+  });
+});
+
+describe("intervalChoiceLabel — Every 2h resolves to a real translation, not a missing-key fallback", () => {
+  it("English", () => {
+    expect(intervalChoiceLabel("Every 2h", en)).toBe("Every 2h");
+  });
+
+  it("Ukrainian", () => {
+    expect(intervalChoiceLabel("Every 2h", uk)).toBe("Кожні 2 год");
   });
 });
 

@@ -328,10 +328,16 @@ describe("startNotifications — Fix 4: the permission gate requires expressed i
       expect(requestPermission).not.toHaveBeenCalled();
 
       // The actor logs their own first dose against the existing course.
+      // `scheduledFor` distinct from `otherActorsDoseEvent()`'s own (also
+      // `null`) — the dedup guard now keys on `scheduledFor` unconditionally
+      // including `null`, so two `null` events on the same course would
+      // otherwise collide as the same occurrence regardless of `givenAt`.
+      // Irrelevant to what this test actually checks (permission-prompt
+      // timing), so any distinct value does.
       await fix4RepoInstance.logDose({
         courseId: "c-fix4",
         status: "given",
-        scheduledFor: null,
+        scheduledFor: "2026-08-08T07:00:00.000Z",
         amount: 1,
       });
 

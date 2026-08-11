@@ -27,8 +27,9 @@ import type {
 } from "@/domain";
 import {
   DEFAULT_SELF_DISPLAY_NAME,
+  EARLY_GIVE_FLOOR_MIN,
   GRACE_FIXED_MIN,
-  GRACE_INTERVAL_MIN,
+  intervalGraceMinutes,
   localDayKey,
   newId,
   now,
@@ -37,7 +38,7 @@ import {
   TINT_COUNT,
   UNDO_WINDOW_MS,
 } from "@/domain";
-import { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
+import { DuplicateDoseError, RetractWindowExpiredError, TooSoonSinceLastDoseError } from "./errors";
 import { DB_NAME, openPetMedsDb, type PetMedsDB, type StoredMedication } from "./db";
 import type { ApplyReport, RemoteChanges, Repo } from "./repo.types";
 
@@ -664,6 +665,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     givenAt?: IsoDateTime;
     amount: number;
     note?: string;
+    allowWithinGrace?: boolean;
   }): Promise<DoseEvent> {
     const actorId = await currentActorId();
     const conn = await db();
@@ -679,19 +681,51 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
 
     const ts = now().toISOString();
     const givenAt = input.givenAt ?? ts;
-    const graceMin = course.schedule.kind === "fixedTimes" ? GRACE_FIXED_MIN : GRACE_INTERVAL_MIN;
+    const graceMin =
+      course.schedule.kind === "fixedTimes"
+        ? GRACE_FIXED_MIN
+        : intervalGraceMinutes(course.schedule.intervalHours);
     const graceMs = graceMin * 60_000;
+    const floorMs = EARLY_GIVE_FLOOR_MIN * 60_000;
     const givenAtMs = new Date(givenAt).getTime();
 
     const courseEvents = await store.index("by_courseId").getAll(input.courseId);
-    const duplicate = liveDoseEventsForCourse(courseEvents).find((e) => {
-      if (input.scheduledFor !== null && e.scheduledFor === input.scheduledFor) {
-        return true;
+    const liveEvents = liveDoseEventsForCourse(courseEvents);
+
+    // Same-occurrence hard block (SPEC §5) — unconditional, never bypassed by
+    // `allowWithinGrace`, and keyed on `scheduledFor` alone, INCLUDING when it
+    // is `null` (the "chain never started" sentinel): a course cannot be
+    // started twice from that sentinel either. See `memoryRepo.ts`'s
+    // identical guard for the full reasoning.
+    const sameOccurrence = liveEvents.find((e) => e.scheduledFor === input.scheduledFor);
+    if (sameOccurrence) {
+      throw new DuplicateDoseError(sameOccurrence);
+    }
+
+    // F1: the hard floor beneath `allowWithinGrace` — see `memoryRepo.ts`'s
+    // identical guard and `errors.ts`'s `TooSoonSinceLastDoseError`.
+    // Strictly LESS than the floor — see `memoryRepo.ts`'s identical guard
+    // for why the boundary itself must not be floor-blocked.
+    const tooSoon = liveEvents.find(
+      (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
+    );
+    if (tooSoon) {
+      throw new TooSoonSinceLastDoseError(
+        Math.round(Math.abs(givenAtMs - new Date(tooSoon.givenAt).getTime()) / 60_000),
+      );
+    }
+
+    // The grace-window heuristic — a collision with a DIFFERENT occurrence
+    // logged recently — is exactly what a confirmed early give (SPEC §3b:
+    // "logging a dose early ... is intended") is allowed to bypass; the two
+    // guards above never are.
+    if (!input.allowWithinGrace) {
+      const duplicate = liveEvents.find(
+        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
+      );
+      if (duplicate) {
+        throw new DuplicateDoseError(duplicate);
       }
-      return Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs;
-    });
-    if (duplicate) {
-      throw new DuplicateDoseError(duplicate);
     }
 
     const event: DoseEvent = {

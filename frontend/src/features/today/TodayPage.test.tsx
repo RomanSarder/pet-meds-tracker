@@ -72,6 +72,17 @@ const AT_0900 = "2026-08-08T08:00:00.000Z";
 const AT_0700 = "2026-08-08T06:00:00.000Z";
 /** 30 minutes before `FIXTURE_NOW` (07:00 UTC = 08:00 BST) — inside the 60-minute fixedTimes grace window. */
 const CONFLICTING_GIVEN_AT = "2026-08-08T06:30:00.000Z";
+/**
+ * 45 minutes after `FIXTURE_NOW` (07:45 UTC = 08:45 BST), same local day as
+ * `DAY`. F7: `AT_0800` literally EQUALS `FIXTURE_NOW`, so a `later`-state
+ * occurrence built on it is a state the REAL engine could never produce for
+ * that `scheduledFor` — `getDoseState` would call it `due` (`now >= dueAt`).
+ * This constant sits far enough past `DUE_PRE_WINDOW_MIN` (30 min) that the
+ * real engine genuinely classifies it `later`: the early-give dialog tests
+ * below use this instead of `AT_0800`, so their hand-fed `setState(...,
+ * "later")` matches what real classification would actually produce.
+ */
+const LATER_TODAY = "2026-08-08T07:45:00.000Z";
 
 // --- household helpers -----------------------------------------------------
 // Everything is looked up by shape (pet name, medication name, course status)
@@ -117,6 +128,13 @@ function martaOf(data: FixtureData): { id: string } {
   const marta = data.users.find((u) => u.displayName === "Marta");
   if (!marta) throw new Error("fixture drift: no Marta member");
   return marta;
+}
+
+/** THIS device's own member — picked by `isSelf`, not by name (the fixture's self user is "Roman"). */
+function selfOf(data: FixtureData): { id: string } {
+  const self = data.users.find((u) => u.isSelf);
+  if (!self) throw new Error("fixture drift: no isSelf member");
+  return self;
 }
 
 /**
@@ -276,7 +294,7 @@ describe("TodayPage", () => {
     // SPEC §9: the overdue card carries the word, not merely the tint.
     expect(within(cards[0]).getByText("Overdue since 08:00")).toBeInTheDocument();
     expect(within(cards[0]).getByRole("button", { name: "Give" })).toBeInTheDocument();
-    expect(within(cards[1]).getByText("Next at 09:00")).toBeInTheDocument();
+    expect(within(cards[1]).getByText("Next dose at 09:00")).toBeInTheDocument();
 
     // The collapsed, greyed variant: a status line and a check, no dose rows.
     const biscuit = cards[2];
@@ -416,16 +434,76 @@ describe("TodayPage", () => {
     expect(pathname()).toBe("/today");
   });
 
-  // SPEC §5: "Two people logging the same dose within the grace window
-  // produce one DoseEvent; the second log is rejected client-side with
-  // 'Already given by Marta at 07:12'." This is the exact repro from the
-  // bug report: a `later` dose's Give must stay actionable and must not
-  // silently no-op.
-  it("rejects a duplicate Give on a later dose, naming who logged it and when, and never leaves Today", async () => {
+  // UI-WIRING COVERAGE ONLY — NOT proof of the occurrence-generation fix.
+  // This file `vi.mock`s `@/engine` (see the top of the file): `getOccurrences`
+  // here is `testEngine.ts`'s lookup table, driven entirely by
+  // `setOccurrences`/`setState` below. Reverting `occurrences.ts` wholesale
+  // would leave this test green, because the "upcoming" occurrence and its
+  // state are handed in by the test, not produced by the real engine. What
+  // this test DOES prove, for real: given an "upcoming" `fromLastDose` dose
+  // in the snapshot, the screen renders it correctly (day-qualified, not as
+  // due now) AND its Give button actually writes — SPEC §5.1's real
+  // `logDose` call, real toast, real event, `givenAt` at "now" (which is what
+  // re-anchors the chain from the actual given time, SPEC §3b). The claim
+  // that the engine itself emits this occurrence early is `occurrences.ts`'s
+  // — see `engine/occurrences.test.ts`'s "SPEC §3b" cases, which run against
+  // the real, unmocked `getOccurrences`/`anchorFor`.
+  it("UI wiring: an 'upcoming' fromLastDose dose renders day-qualified and its Give button logs it", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metoclopramide");
+    const tomorrow = "2026-08-09";
+    const occurrence = makeOccurrence(course, {
+      day: DAY,
+      scheduledFor: `${tomorrow}T02:00:00.000Z`,
+    });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "upcoming");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    // Reachable: the row exists and reads as due tomorrow, not now — both in
+    // the card's status line and the row's own detail line. (02:00 UTC = 03:00 BST.)
+    expect(within(card).getByText("Next dose tomorrow at 03:00")).toBeInTheDocument();
+    expect(within(card).getByText(/^03:00 · tomorrow · /)).toBeInTheDocument();
+    const giveButton = within(card).getByRole("button", { name: "Give" });
+    expect(giveButton).toBeInTheDocument();
+
+    await user.click(giveButton);
+
+    const toast = await screen.findByRole("status");
+    expect(toast).toHaveTextContent("Metoclopramide logged");
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+    const created = newEvents(before, await repo.listDoseEvents({}));
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("given");
+    // Given early: logged at "now" (SPEC §5.1), not at the planned due
+    // instant — which is exactly what re-anchors the chain from the actual
+    // given time (SPEC §3b), not the original schedule.
+    expect(created[0].givenAt).toBe(FIXTURE_NOW);
+
+    expect(pathname()).toBe("/today");
+  });
+
+  // SPEC §5 / §3b: "Two people logging the same dose within the grace window
+  // produce one DoseEvent" used to be a FLAT rejection for every collision,
+  // including this one — the exact repro from the bug report ("a little
+  // popup said someone already gave it... nothing else happened"). The
+  // product decision is "allow, but confirm when early": a dose that is not
+  // yet due (`later`/`upcoming`) now asks for confirmation instead, naming
+  // who logged the prior dose and when. It must stay actionable either way —
+  // never a silent no-op, and never a silent write either.
+  it("offers an early-give confirm dialog on a duplicate Give for a later (not-yet-due) dose, and cancelling changes nothing", async () => {
     const user = userEvent.setup();
     const { data, repo } = household();
     const course = courseOf(data, "Clover", "Metacam");
-    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: LATER_TODAY });
     await register(repo, [occurrence]);
     setState(occurrence.key, "later");
 
@@ -443,14 +521,237 @@ describe("TodayPage", () => {
 
     await user.click(within(card).getByRole("button", { name: "Give" }));
 
-    // 06:30 UTC = 07:30 local (Europe/London, BST).
-    expect(await screen.findByText("Already given by Marta at 07:30")).toBeInTheDocument();
+    // F4: dedicated dialog copy, not the flat-rejection toast's "Already
+    // given..." reused verbatim — states the gap since the last dose
+    // (FIXTURE_NOW 07:00 minus CONFLICTING_GIVEN_AT 06:30 = 30 min) and how
+    // far ahead of due this give would land (LATER_TODAY 07:45 minus
+    // FIXTURE_NOW 07:00 = 45 min), not a wall-clock time to subtract.
+    expect(await screen.findByText("Give Metacam early?")).toBeInTheDocument();
+    expect(
+      screen.getByText("Marta gave the last dose 30 min ago. This one isn't due for another 45 min."),
+    ).toBeInTheDocument();
+    expect(await repo.listDoseEvents({})).toEqual(before);
 
-    // Rejected, not silently dropped: no second event, the row rolls back to
-    // its actionable `later` presentation, and the tap never left Today.
+    // Cancelling logs nothing: no event written, the dialog withdraws, the
+    // row stays actionable, and the tap never left Today.
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Give Metacam early?")).not.toBeInTheDocument();
+    });
     expect(await repo.listDoseEvents({})).toEqual(before);
     expect(within(card).getByRole("button", { name: "Give" })).toBeInTheDocument();
     expect(pathname()).toBe("/today");
+  });
+
+  it("offers the early-give confirm dialog for a fromLastDose (interval) course too, not only fixedTimes (F8)", async () => {
+    // F8: the eligibility test in `TodayPage.tsx`'s `give` callback is
+    // deliberately kind-agnostic — this is the interval-schedule path
+    // through the dialog every OTHER dialog test in this file leaves
+    // uncovered (they all use Clover's `fixedTimes` Metacam course).
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metoclopramide"); // fromLastDose, intervalHours: 8
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: LATER_TODAY });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+
+    const marta = martaOf(data);
+    // 30 min before FIXTURE_NOW — inside this 8h course's 90-minute
+    // (capped, unscaled) `intervalGraceMinutes` window and past the
+    // 10-minute `EARLY_GIVE_FLOOR_MIN` floor, so it collides via the
+    // (bypassable) grace heuristic, not the floor.
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+
+    expect(await screen.findByText("Give Metoclopramide early?")).toBeInTheDocument();
+    expect(
+      screen.getByText("Marta gave the last dose 30 min ago. This one isn't due for another 45 min."),
+    ).toBeInTheDocument();
+    expect(await repo.listDoseEvents({})).toEqual(before);
+  });
+
+  it("confirming the early-give dialog logs the dose at the current time, past the grace-window collision", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: LATER_TODAY });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+    await screen.findByText("Give Metacam early?");
+
+    await user.click(screen.getByRole("button", { name: "Give anyway" }));
+
+    const toast = await screen.findByRole("status");
+    expect(toast).toHaveTextContent("Metacam logged");
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+    const created = newEvents(before, await repo.listDoseEvents({}));
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("given");
+    // Logged at "now" (SPEC §5.1's Give rule), past the grace window the
+    // first attempt collided with — the confirmed retry actually bypassed it.
+    expect(created[0].givenAt).toBe(FIXTURE_NOW);
+    expect(pathname()).toBe("/today");
+  });
+
+  // F2 regression: a collision on the SAME occurrence (not a different one)
+  // must NEVER reach the early-give dialog, even though the dose is not yet
+  // due — that hard block is unconditional and never bypassable, so a
+  // dialog offering "Give anyway" over it could only ever loop or no-op.
+  // `seedConflictingEvent`'s `givenAt` doubles as the conflicting event's
+  // OWN `scheduledFor` (see the helper), so seeding it at the occurrence's
+  // own `scheduledFor` deterministically reproduces what an async double-tap
+  // does non-deterministically: tap 2 collides on the IDENTICAL occurrence,
+  // not a nearby one.
+  it("a duplicate collision on the SAME occurrence never opens the early-give dialog, even though the dose is not yet due", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: LATER_TODAY });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: LATER_TODAY, // the occurrence's OWN scheduledFor — same occurrence, not a different one
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+
+    // The flat rejection, worded exactly like SPEC §5's ordinary duplicate
+    // toast (07:45 UTC = 08:45 BST) — never the early-give dialog's title.
+    expect(await screen.findByText("Already given by Marta at 08:45")).toBeInTheDocument();
+    expect(screen.queryByText(/early\?$/)).not.toBeInTheDocument();
+    expect(await repo.listDoseEvents({})).toEqual(before);
+  });
+
+  // Live-UI regression: the dialog's Ukrainian body read "...(You)." — the
+  // English word untranslated inside otherwise-Ukrainian prose — whenever the
+  // colliding dose's actor was THIS device's own. Root cause: `displayNameFor`
+  // returns a self-user's raw, stored `displayName` VERBATIM (SPEC §10a),
+  // and an un-renamed self-user's stored name literally IS the English
+  // "You" (`DEFAULT_SELF_DISPLAY_NAME`). Fixed the same way
+  // `household.memberLine.you` already handles the self ROW in the member
+  // list: `isSelf`, not the raw name, decides — the fixture's self user is
+  // named "Roman" (`selfOf`, picked by `isSelf`, not by name), so this test
+  // would still see "Roman" leak through untranslated if the fix ever
+  // regressed to keying off the literal string "You" instead of `isSelf`.
+  it("localises the actor token inside the Ukrainian early-give dialog when the colliding dose was logged by THIS device", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: LATER_TODAY });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+
+    const self = selfOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: self.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    renderWithProviders(
+      <>
+        <TodayPage />
+        <LocationProbe />
+      </>,
+      { repo, route: "/today", locale: "uk" },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Дати" }));
+
+    expect(await screen.findByText("Дати Metacam раніше?")).toBeInTheDocument();
+    // "Ви" (SPEC-consistent with `household.memberLine.you`'s self-row
+    // wording), never the raw stored "You" or the self user's real name
+    // ("Roman") that `displayNameFor` would otherwise have surfaced.
+    const description = await screen.findByText(
+      "Попередню дозу дано 30 хв тому (Ви). Ця доза знадобиться ще через 45 хв.",
+    );
+    expect(description).toBeInTheDocument();
+    expect(description).not.toHaveTextContent(/\bYou\b/);
+    expect(description).not.toHaveTextContent("Roman");
+  });
+
+  it("keeps the portalled early-give confirm dialog inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {
+    // `Dialog.Portal` moves the popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root` (`components/ds/tokens/colors.css`), so
+    // a popup that lands outside one paints `var(--surface)`/`var(--line-quiet)`
+    // as nothing — the exact class of bug commit 866a4b1 fixed for
+    // `LogAtTimeSheet.tsx` and every other portalled menu/dialog in this app.
+    //
+    // F5: `dialog.closest(".ds-root")` alone is vacuous — `className="ds-root"`
+    // is on `Dialog.Popup` itself, and `Element.closest()` includes the start
+    // element, so it would pass even if the popup were never portalled at
+    // all (matching an ordinary ancestor instead) or even if it were
+    // portalled with NO class of its own (matching nothing and returning
+    // null either way is indistinguishable from "matched itself"). The
+    // genuine claim has two parts, both asserted below: the popup really did
+    // escape the app's own `DsRoot` subtree (`toContainElement` is false),
+    // AND it independently re-establishes the token scope on itself
+    // (`toHaveClass`, plus a real SECOND `.ds-root` node existing in the
+    // document body, distinct from the app's own).
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: LATER_TODAY });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const { container } = renderToday(repo);
+    const card = await cardFor("Clover");
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Give Metacam early?" });
+    const appRoot = container.querySelector(".ds-root");
+    expect(appRoot).not.toBeNull();
+    // The dialog is NOT inside the app's own DsRoot subtree — proof the
+    // portal genuinely moved it, not merely a structural assumption.
+    expect(appRoot).not.toContainElement(dialog);
+    // The dialog re-establishes the token scope on ITSELF.
+    expect(dialog).toHaveClass("ds-root");
+    // Two DISTINCT `.ds-root` nodes now exist in `document.body`: the app's
+    // own, and the dialog's. If `className="ds-root"` were ever removed from
+    // `Dialog.Popup`, this count drops to 1 and the test fails — the
+    // assertion `.closest()` alone could never make.
+    expect(document.querySelectorAll(".ds-root")).toHaveLength(2);
   });
 
   it("leaves dose history and stock exactly as they were after log-then-undo", async () => {
@@ -701,7 +1002,7 @@ describe("TodayPage", () => {
   // "do not add a guard in the UI for this" — the sheet closes on confirm
   // (TodayDoseRow.tsx wraps `onConfirm` to close it before logging) and
   // `useLogDose.onError` is what surfaces the rejection.
-  it("rejects a sheet confirmation landing inside another live event's grace window, leaving the ledger unchanged", async () => {
+  it("rejects a sheet confirmation landing on the SAME instant as another live event (F1's floor, below the grace window), leaving the ledger unchanged", async () => {
     const user = userEvent.setup();
     const { data, repo } = household();
     const course = courseOf(data, "Clover", "Metacam");
@@ -726,12 +1027,16 @@ describe("TodayPage", () => {
     await screen.findByRole("dialog");
 
     // The sheet's default 30-minutes-ago offset (07:30 local) lands exactly on
-    // `CONFLICTING_GIVEN_AT` (06:30 UTC = 07:30 local) — well inside the
-    // 60-minute fixedTimes grace window, with no chip or stepper interaction
-    // needed to reach it.
+    // `CONFLICTING_GIVEN_AT` (06:30 UTC = 07:30 local) — a ZERO-minute gap, so
+    // this trips `EARLY_GIVE_FLOOR_MIN` (F1's hard floor, 10 min), not merely
+    // the 60-minute fixedTimes grace window it is also well inside. The floor
+    // is checked first and is never bypassable, so the flat rejection here is
+    // the floor's message, not the generic duplicate one.
     await user.click(screen.getByRole("button", { name: "Log at 07:30" }));
 
-    expect(await screen.findByText("Already given by Marta at 07:30")).toBeInTheDocument();
+    expect(
+      await screen.findByText("A dose was logged for this course 0 min ago — wait a little before logging another"),
+    ).toBeInTheDocument();
 
     expect(await repo.listDoseEvents({})).toEqual(before);
     expect(pathname()).toBe("/today");

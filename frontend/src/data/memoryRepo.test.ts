@@ -266,7 +266,7 @@ describe("createMemoryRepo — logDose concurrent-log dedup guard", () => {
     expect(events.filter((e) => e.scheduledFor === scheduledFor)).toHaveLength(1);
   });
 
-  it("fromLastDose: rejects within the grace window, accepts once the grace window has passed", async () => {
+  it("fromLastDose: a distinct scheduledFor rejects within the grace window, accepts once the grace window has passed", async () => {
     setClock(fixedClock("2026-08-08T07:00:00.000Z"));
     const repo = createMemoryRepo();
     // A fromLastDose course with no fixture doseEvents at all, so the test
@@ -282,10 +282,15 @@ describe("createMemoryRepo — logDose concurrent-log dedup guard", () => {
       amount: 1,
     });
 
-    // 10 minutes later — inside the 90-minute fromLastDose grace window.
-    setClock(fixedClock("2026-08-08T07:10:00.000Z"));
+    // A DIFFERENT (non-null) scheduledFor, 30 minutes later — past the
+    // 10-minute `EARLY_GIVE_FLOOR_MIN` floor (F1) but still inside the
+    // 90-minute fromLastDose grace window, so it collides with `first` via
+    // the (bypassable) grace-window heuristic, not the floor and not the
+    // same-occurrence block (which `scheduledFor: null` alone would trip
+    // regardless of timing — see the dedicated test below for that).
+    setClock(fixedClock("2026-08-08T07:30:00.000Z"));
     await expect(
-      repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1 }),
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: "2026-08-08T15:00:00.000Z", amount: 1 }),
     ).rejects.toBeInstanceOf(DuplicateDoseError);
 
     // 91 minutes after the FIRST log — outside the grace window.
@@ -293,13 +298,39 @@ describe("createMemoryRepo — logDose concurrent-log dedup guard", () => {
     const second = await repo.logDose({
       courseId: course.id,
       status: "given",
-      scheduledFor: null,
+      scheduledFor: "2026-08-08T15:00:00.000Z",
       amount: 1,
     });
     expect(second.id).not.toBe(first.id);
 
     const events = await repo.listDoseEvents({ courseId: course.id });
     expect(events).toHaveLength(2);
+  });
+
+  // Latent fix: the same-occurrence hard block now keys on `scheduledFor`
+  // unconditionally, including `null` (the "chain never started" sentinel)
+  // — `repo.types.ts`'s doc always said `allowWithinGrace` never bypasses
+  // it, but the guard used to carve `null` out of it silently.
+  it("fromLastDose: scheduledFor: null is the SAME occurrence every time — rejected at any gap, even with allowWithinGrace", async () => {
+    setClock(fixedClock("2026-08-08T07:00:00.000Z"));
+    const repo = createMemoryRepo();
+    const course = fixtures.courses.find(
+      (c) => c.schedule.kind === "fromLastDose" && !fixtures.doseEvents.some((e) => e.courseId === c.id),
+    )!;
+
+    await repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1 });
+
+    // Well past the 90-minute grace window — under the OLD, null-guarded
+    // check this would have been accepted as a different occurrence.
+    setClock(fixedClock("2026-08-09T07:00:00.000Z"));
+    await expect(
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1 }),
+    ).rejects.toBeInstanceOf(DuplicateDoseError);
+    await expect(
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1, allowWithinGrace: true }),
+    ).rejects.toBeInstanceOf(DuplicateDoseError);
+
+    expect(await repo.listDoseEvents({ courseId: course.id })).toHaveLength(1);
   });
 
   it("does not block correctDose (a superseding row is still written)", async () => {
