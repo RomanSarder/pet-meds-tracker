@@ -5,6 +5,7 @@ import type { SessionUser } from "@pet-tracker/shared";
 import { qk } from "@/domain";
 import { apiClient } from "@/shared/api";
 import { clearSessionEstablished, setStoreOwner } from "@/shared/session";
+import { stopBackgroundSync } from "@/sync";
 import { getRepo } from "@/data";
 import { downloadBackup } from "@/data/backupFile";
 import { Button, Card, ScreenHeader } from "@/components/ds";
@@ -69,6 +70,7 @@ export function AccountSwitchPage() {
       // exports, never resets.
     }
     clearSessionEstablished();
+    stopBackgroundSync();
     queryClient.clear();
     navigate({ to: "/sign-in" });
   };

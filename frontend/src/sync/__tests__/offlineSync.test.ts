@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRepo } from "@/data";
 import { createMemoryRepo } from "@/data/memoryRepo";
+import { clearSessionEstablished, markSessionEstablished } from "@/shared/session";
 import { createSyncEngine } from "../engine";
 import { createSyncScheduler } from "../scheduler";
 import type { SyncEngine, SyncTransport, Timers } from "../types";
@@ -61,6 +62,7 @@ describe("offline sync (D8 regression lock)", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.useRealTimers();
+    clearSessionEstablished();
   });
 
   it("syncOnce() rejects honestly when push/pull fail offline — the engine reports failure rather than swallowing it", async () => {
@@ -111,6 +113,10 @@ describe("offline sync (D8 regression lock)", () => {
   it("startBackgroundSync() — the one export main.tsx calls — never throws synchronously and never surfaces an offline rejection", async () => {
     vi.useFakeTimers();
     setRepo(createMemoryRepo());
+    // Background sync only runs for an established session; without this the
+    // start below would return before building an engine and this test would
+    // assert nothing about the offline chain it exists to lock in.
+    markSessionEstablished();
     // Every fetch fails the way it would offline: apiClient wraps this in a
     // NetworkError, httpTransport's push/pull reject, and syncOnce rejects —
     // exactly the chain the rest of this file locks in as swallowed.
