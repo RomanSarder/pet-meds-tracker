@@ -379,13 +379,13 @@ the user cannot see is worse than no pill.
 
 - The user can always log a past dose with a corrected `givenAt` ("log it late", §6.1a).
 
-- **Scope of a corrected `givenAt`: the current day only.** The picker offers no date field and
+- **Scope of a corrected `givenAt`: the last 24 hours only.** The picker offers no date field and
 
-  no Today/Yesterday toggle; `givenAt` is constrained to `[00:00 today, now]`. A dose remembered
+  no Today/Yesterday toggle; `givenAt` is constrained to `[now − 24 h, now]`. A dose remembered
 
-  after midnight is corrected from history instead. Rationale: nearly every late entry is
+  more than 24 hours ago is corrected from history instead. Rationale: nearly every late entry is
 
-  same-day ("I gave it an hour ago and forgot to tap"); a date control would tax all of those
+  recent ("I gave it an hour ago and forgot to tap"); a date control would tax all of those
 
   to serve a rare case.
 
@@ -1017,7 +1017,7 @@ Each slice is independently assignable and ends in something testable.
 
   `fromLastDose` chain stays on its planned grid and the event reads as on time.
 
-- The corrected-time picker cannot produce a `givenAt` in the future or before 00:00 today.
+- The corrected-time picker cannot produce a `givenAt` in the future or more than 24 hours in the past.
 
 - A dose scheduled 23:00 and logged 00:20 counts against the previous day.
 

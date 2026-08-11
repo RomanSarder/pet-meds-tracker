@@ -11,7 +11,7 @@
 // 2026-10-25 (02:00 → 01:00, a 25-hour day).
 import { describe, expect, it } from "vitest";
 import type { Course, CourseEvent, DoseEvent, LocalDate, Medication, Schedule } from "@/domain";
-import { FIXTURE_NOW, occurrenceKeyFor, startOfLocalDay } from "@/domain";
+import { FIXTURE_NOW, occurrenceKeyFor } from "@/domain";
 import type { Occurrence } from "@/engine";
 // The one cross-feature import in this file, and a deliberate one: the sheet's
 // "History will read …" promise is only meaningful if it is checked against
@@ -118,11 +118,11 @@ function utc(month: number, day: number, hours: number, minutes = 0): Date {
 }
 
 describe("boundsFor", () => {
-  it("floors at local midnight of now's day and ceilings at now", () => {
+  it("floors exactly 24 elapsed hours before now and ceilings at now", () => {
     const now = new Date(2026, 7, 8, 14, 37, 12, 345);
     const { floor, ceiling } = boundsFor(now);
-    expect(floor.getTime()).toBe(new Date(2026, 7, 8, 0, 0, 0, 0).getTime());
-    expect(floor.getTime()).toBe(startOfLocalDay(now).getTime());
+    expect(floor.getTime()).toBe(now.getTime() - 24 * HOUR);
+    expect(floor.getTime()).toBe(new Date(2026, 7, 7, 14, 37, 12, 345).getTime());
     expect(ceiling.getTime()).toBe(now.getTime());
   });
 
@@ -136,9 +136,9 @@ describe("boundsFor", () => {
 
 describe("the SPEC §12 clamp invariant", () => {
   // "The corrected-time picker cannot produce a `givenAt` in the future or
-  // before 00:00 today." Every value the sheet can reach — every chip, and
-  // every stepper walk from every chip, in both directions — is generated and
-  // checked, rather than sampled by hand.
+  // more than 24 hours in the past." Every value the sheet can reach — every
+  // chip, and every stepper walk from every chip, in both directions — is
+  // generated and checked, rather than sampled by hand.
   const nows: Array<[string, Date]> = [
     ["FIXTURE_NOW (08:00 BST)", new Date(FIXTURE_NOW)],
     ["00:02 local", new Date(2026, 7, 8, 0, 2)],
@@ -167,9 +167,18 @@ describe("the SPEC §12 clamp invariant", () => {
 });
 
 describe("clamping and the stepper", () => {
-  it("clamps a 2 h offset to exactly midnight when now is 00:30", () => {
+  it("does NOT clamp a 2 h offset to a calendar boundary — the floor is rolling, not midnight", () => {
+    // Carried over from the old midnight-floor test, which asserted this
+    // exact case clamped to 00:00. It no longer does: 2 h before 00:30 is
+    // 22:30 the PREVIOUS day, still comfortably inside the rolling 24 h floor.
     const now = at(0, 30);
-    expect(atOffset(120, now).getTime()).toBe(at(0, 0).getTime());
+    expect(atOffset(120, now).getTime()).toBe(new Date(2026, 7, 7, 22, 30).getTime());
+  });
+
+  it("clamps an offset beyond 24 h back to the rolling floor", () => {
+    const now = at(14, 0);
+    const { floor } = boundsFor(now);
+    expect(atOffset(25 * 60, now).getTime()).toBe(floor.getTime());
   });
 
   it("clamps a step past now back to now, rather than overshooting", () => {
@@ -178,7 +187,7 @@ describe("clamping and the stepper", () => {
     expect(stepBy(current, STEP_MIN, now).getTime()).toBe(now.getTime());
   });
 
-  it("cannot step later at exactly now, or earlier at exactly midnight", () => {
+  it("cannot step later at exactly now, or earlier at exactly the 24 h floor", () => {
     const now = at(14, 0);
     const { floor } = boundsFor(now);
     expect(canStepLater(now, now)).toBe(false);
@@ -187,13 +196,27 @@ describe("clamping and the stepper", () => {
     expect(canStepEarlier(new Date(floor.getTime() + 1), now)).toBe(true);
   });
 
-  it("refuses to confirm one millisecond past now or one before midnight", () => {
+  it("refuses to confirm one millisecond past now or one before the 24 h floor", () => {
     const now = at(14, 0);
     const { floor } = boundsFor(now);
     expect(canConfirm(new Date(now.getTime() + 1), now)).toBe(false);
     expect(canConfirm(new Date(now.getTime()), now)).toBe(true);
     expect(canConfirm(new Date(floor.getTime() - 1), now)).toBe(false);
     expect(canConfirm(floor, now)).toBe(true);
+  });
+
+  it("accepts a time that is yesterday but still within the last 24 h", () => {
+    const now = at(14, 0);
+    const yesterday = new Date(2026, 7, 7, 15, 0); // 23 h before now
+    expect(canConfirm(yesterday, now)).toBe(true);
+    expect(isBelowFloor(yesterday, now)).toBe(false);
+  });
+
+  it("rejects a time just past the 24 h floor", () => {
+    const now = at(14, 0);
+    const justPast = new Date(now.getTime() - 24 * HOUR - 1); // 24 h + 1 ms ago
+    expect(canConfirm(justPast, now)).toBe(false);
+    expect(isBelowFloor(justPast, now)).toBe(true);
   });
 
   it("defaults to 30 minutes ago, which is one of the offered chips", () => {
@@ -267,14 +290,17 @@ describe("DST — the exact instant, not merely one inside the bounds", () => {
     expect(stepped.getMinutes()).toBe(55);
   });
 
-  it("keeps the floor a WALL-CLOCK midnight on both transition days", () => {
-    // The other half of the file header's rule: offsets are elapsed ms, but
-    // the floor goes through `new Date(y, m, d)`. On the 23-hour day midnight
-    // is 00:00Z; on the 25-hour day it is still BST, so 23:00Z the day before.
-    expect(boundsFor(new Date(2026, 2, 29, 3, 30)).floor.getTime()).toBe(utc(2, 29, 0, 0).getTime());
-    expect(boundsFor(new Date(2026, 9, 25, 2, 30)).floor.getTime()).toBe(
-      utc(9, 24, 23, 0).getTime(),
-    );
+  it("keeps the floor exactly 24 elapsed hours before now on both transition days", () => {
+    // The other half of the file header's rule: the floor is now elapsed ms
+    // too, just like every offset. On the 23-hour spring-forward day and the
+    // 25-hour fall-back day alike, the floor is `now − 86_400_000 ms` to the
+    // millisecond — never a wall-clock day subtraction, which would land an
+    // hour off on either transition.
+    const spring = new Date(2026, 2, 29, 3, 30);
+    expect(boundsFor(spring).floor.getTime()).toBe(spring.getTime() - 24 * HOUR);
+
+    const fall = new Date(2026, 9, 25, 2, 30);
+    expect(boundsFor(fall).floor.getTime()).toBe(fall.getTime() - 24 * HOUR);
   });
 });
 
@@ -331,11 +357,6 @@ describe("scheduledChoice", () => {
     expect(helperFor(chosen, scheduledAt, now)).toEqual({ kind: "range" });
   });
 
-  it("uses the same midnight the sheet's floor uses, for an occurrence filed under today", () => {
-    const now = at(14, 0);
-    expect(new Date(2026, 7, 8, 0, 0).getTime()).toBe(boundsFor(now).floor.getTime());
-  });
-
   it("carries dueAt through the AMBIGUOUS repeated hour on 2026-10-25 without losing which pass it was", () => {
     // The identity assertion above runs on a non-DST date, where a
     // derived-but-lossless reconstruction of `dueAt` from its local fields
@@ -378,10 +399,15 @@ describe("isBelowFloor", () => {
     expect(canConfirm(future, now)).toBe(false);
   });
 
-  it("turns yesterday's scheduled time below-floor the moment the day rolls over", () => {
-    const scheduled = at(8, 0);
-    expect(isBelowFloor(scheduled, at(23, 59))).toBe(false);
-    expect(isBelowFloor(scheduled, new Date(2026, 7, 9, 0, 1))).toBe(true);
+  it("keeps yesterday's scheduled time in bounds until a full 24 h have elapsed, not merely until the day rolls over", () => {
+    const scheduled = at(8, 0); // Aug 8, 08:00
+    // Aug 9, 00:01 — the day has rolled over, but only 16 h 01 min has
+    // elapsed, well inside the rolling 24 h floor.
+    expect(isBelowFloor(scheduled, new Date(2026, 7, 9, 0, 1))).toBe(false);
+    // Exactly 24 h later, the scheduled instant IS the floor — inclusive.
+    expect(isBelowFloor(scheduled, new Date(2026, 7, 9, 8, 0))).toBe(false);
+    // One millisecond past 24 h, it drops below.
+    expect(isBelowFloor(scheduled, new Date(2026, 7, 9, 8, 0, 0, 1))).toBe(true);
   });
 });
 

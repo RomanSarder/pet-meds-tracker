@@ -91,8 +91,8 @@ export function LogAtTimeSheet({
   onSkipInstead,
 }: LogAtTimeSheetProps): ReactElement {
   const { t, fmt } = useTranslator();
-  // Ticks so "today · N ago" advances and a sheet left open across midnight
-  // sees the floor move (SPEC §9). Event handlers below read `now()` fresh
+  // Ticks so "today · N ago" advances and a sheet left open long enough
+  // sees the rolling 24 h floor move (SPEC §9). Event handlers below read `now()` fresh
   // instead of closing over this value — see `readNow` for why.
   const nowTick = useNow();
   // The latest instant any handler has actually observed. See `effectiveNow`.
@@ -143,23 +143,25 @@ export function LogAtTimeSheet({
     setSource({ kind: "offset", minutes: DEFAULT_OFFSET_MIN });
   }, [open]);
 
-  // The floor MOVES under an open sheet (SPEC §9): left up across local
-  // midnight, `boundsFor(...).floor` advances a whole day and yesterday's
-  // `chosen` falls out of range. `canConfirm` refuses it correctly, but with
-  // no explanation the user is left staring at a dead footer under a value
-  // this very sheet offered. Re-clamping to the new floor keeps the sheet in a
-  // confirmable state and SHOWS the change: the headline, the "N ago" label
-  // and the Confirm button all read the new time before anything is written.
+  // The floor MOVES continuously under an open sheet (SPEC §9, now a rolling
+  // 24 h window rather than a local-midnight jump): left up long enough,
+  // `boundsFor(...).floor` slides forward and an old `chosen` eventually falls
+  // out of range. `canConfirm` refuses it correctly, but with no explanation
+  // the user is left staring at a dead footer under a value this very sheet
+  // offered. Re-clamping to the new floor keeps the sheet in a confirmable
+  // state and SHOWS the change: the headline, the "N ago" label and the
+  // Confirm button all read the new time before anything is written.
   useEffect(() => {
     if (!open) return;
     setChosen((current) => (current.getTime() < floorMs ? new Date(floorMs) : current));
   }, [open, floorMs]);
 
-  // Withdrawn once it falls before the floor, for the same rollover reason:
-  // `scheduledChoice` floors on the occurrence's OWN day, so after midnight it
-  // keeps happily offering yesterday's scheduled time as a one-tap row that
-  // could only ever be re-clamped away. A FUTURE `scheduledAt` is still
-  // offered untouched — that berry-headline case is deliberate (SPEC §6.1a).
+  // Withdrawn once it falls before the floor, for the same reason:
+  // `scheduledChoice` only checks the occurrence's OWN day, so once the
+  // rolling 24 h floor has passed a stale `dueAt` it would keep happily
+  // offering it as a one-tap row that could only ever be re-clamped away. A
+  // FUTURE `scheduledAt` is still offered untouched — that berry-headline
+  // case is deliberate (SPEC §6.1a).
   const rawScheduledAt = scheduledChoice(dose.occurrence);
   const scheduledAt =
     rawScheduledAt !== null && !isBelowFloor(rawScheduledAt, effectiveNow) ? rawScheduledAt : null;
