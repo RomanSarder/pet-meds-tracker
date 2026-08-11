@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { differenceInLocalDays, type Schedule } from "@/domain";
+import {
+  differenceInLocalDays,
+  DUE_PRE_WINDOW_MIN,
+  GRACE_INTERVAL_CAP_MIN,
+  intervalGraceMinutes,
+  type Schedule,
+} from "@/domain";
 import { createTranslator } from "@/i18n";
 import {
   FREQUENCY_CHOICES,
@@ -42,6 +48,39 @@ describe("INTERVAL_CHOICES ordering", () => {
     const hours = INTERVAL_CHOICES.map(intervalChoiceHours);
     const sorted = [...hours].sort((a, b) => a - b);
     expect(hours).toEqual(sorted);
+  });
+});
+
+// Regression guard for a real product bug: a flat 90-minute cross-occurrence
+// grace window made the early-give confirm fire on EVERY early give for a
+// 2h-interval course, because 90 exactly equalled that course's whole
+// not-yet-due window (120min interval - 30min DUE_PRE_WINDOW_MIN = 90). The
+// fix scales the grace window to `intervalGraceMinutes` (half the interval,
+// capped at GRACE_INTERVAL_CAP_MIN) — this table proves the fix clears the
+// collision for EVERY interval this app currently offers, and will keep
+// proving it for any interval added to INTERVAL_CHOICES later: a future
+// short interval that reintroduces the collision fails this test without
+// anyone having to remember why the cap exists.
+describe("intervalGraceMinutes vs the not-yet-due window, for every offered INTERVAL_CHOICES entry", () => {
+  it.each(INTERVAL_CHOICES.map((choice) => [choice, intervalChoiceHours(choice)] as const))(
+    "%s: the grace window stays strictly below the not-yet-due window",
+    (_choice, hours) => {
+      const notYetDueMin = hours * 60 - DUE_PRE_WINDOW_MIN;
+      const grace = intervalGraceMinutes(hours);
+      expect(grace).toBeLessThan(notYetDueMin);
+    },
+  );
+
+  it("Every 2h is the one interval actually reduced below the cap: half its interval, 60 minutes", () => {
+    expect(intervalGraceMinutes(intervalChoiceHours("Every 2h"))).toBe(60);
+  });
+
+  it.each(
+    INTERVAL_CHOICES.filter((choice) => intervalChoiceHours(choice) >= 4).map(
+      (choice) => [choice, intervalChoiceHours(choice)] as const,
+    ),
+  )("%s: unchanged from the pre-scaling flat grace — still GRACE_INTERVAL_CAP_MIN", (_choice, hours) => {
+    expect(intervalGraceMinutes(hours)).toBe(GRACE_INTERVAL_CAP_MIN);
   });
 });
 

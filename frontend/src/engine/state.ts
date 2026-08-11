@@ -52,6 +52,17 @@ export function summariseDay(
       }
     } else if (state === "due" || state === "later") {
       remaining += 1;
+    } else if (state === "upcoming" && occ.kind === "fromLastDose") {
+      // An anchored `fromLastDose` chain's next dose stays a live, giveable
+      // row before its computed due instant crosses into a later local day
+      // (SPEC §3b; `occurrences.ts`'s `fromLastDoseOccurrences` emits it from
+      // the anchor's own day through the due day) — it must count toward
+      // "remaining", or the header reads "0 doses left" above a card that
+      // still has a Give button on it. `fixedTimes` never reaches `upcoming`
+      // here: its `dueAt` is always inside the very day it was generated for
+      // (`atLocalTime(day, t)`), so this branch is a no-op for it, not a
+      // second, kind-agnostic reading of `upcoming`.
+      remaining += 1;
     }
   }
 

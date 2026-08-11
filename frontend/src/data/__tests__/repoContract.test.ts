@@ -9,7 +9,7 @@
 // counts differ legitimately between the two.
 import { describe, expect, it, afterEach } from "vitest";
 import type { Repo } from "@/data";
-import { createIdbRepo, createMemoryRepo, DuplicateDoseError } from "@/data";
+import { createIdbRepo, createMemoryRepo, DuplicateDoseError, TooSoonSinceLastDoseError } from "@/data";
 import type {
   CourseEvent,
   CourseSnapshot,
@@ -23,9 +23,10 @@ import type {
 } from "@/domain";
 import {
   displayNameFor,
+  EARLY_GIVE_FLOOR_MIN,
   fixedClock,
   GRACE_FIXED_MIN,
-  GRACE_INTERVAL_MIN,
+  GRACE_INTERVAL_CAP_MIN,
   isJoinCodeUsable,
   JOIN_CODE_TTL_MS,
   localDayKey,
@@ -144,11 +145,15 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     // clock past the grace window between iterations so all four are
     // genuinely distinct occurrences and the guard has nothing to reject —
     // keeping this test's actual intent (stockUnits is untouched by logging)
-    // free of an incidental collision with the dedup guard.
+    // free of an incidental collision with the dedup guard. `scheduledFor`
+    // is each iteration's own clock reading, not `null`: the same-occurrence
+    // guard now keys on `scheduledFor` unconditionally including `null`, so
+    // four `null` events on one course would collide with EACH OTHER
+    // regardless of spacing.
     let t = new Date("2026-08-08T07:00:00.000Z");
     for (let i = 0; i < 4; i++) {
       setClock(fixedClock(t.toISOString()));
-      await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+      await repo.logDose({ courseId, status: "given", scheduledFor: t.toISOString(), amount: 0.4 });
       t = new Date(t.getTime() + GRACE_FIXED_MIN * 60_000 + 60_000);
     }
 
@@ -567,7 +572,86 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
       expect(dup.message).not.toContain(name);
     });
 
-    it("a fromLastDose course, scheduledFor: null: a second log 10 minutes later is rejected; a log 91 minutes later is accepted", async () => {
+    // F6: the core invariant the whole early-give design rests on, and the
+    // one no test asserted before this fix (`allowWithinGrace` never
+    // appeared in any test file). MUTATION THIS CATCHES: moving the
+    // `allowWithinGrace` bypass above the exact-`scheduledFor` check would
+    // make a confirmed early give able to double-log the IDENTICAL
+    // occurrence — this fails on exactly that reordering, whatever shape the
+    // guard's internals take.
+    it("the same-occurrence hard block survives allowWithinGrace: true — a confirmed early give can never double-log the IDENTICAL occurrence", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo); // fixedTimes
+      const scheduledFor = "2026-08-08T07:00:00.000Z";
+      const t0 = "2026-08-08T07:00:00.000Z";
+
+      setClock(fixedClock(t0));
+      await repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4 });
+
+      // Well past BOTH the floor and the grace window before retrying — so a
+      // same-occurrence guard that (incorrectly) deferred to
+      // `allowWithinGrace` would have NOTHING left to catch this on, and the
+      // write would silently succeed instead of merely throwing a
+      // different error. That is the unambiguous failure mode this isolates.
+      setClock(
+        fixedClock(new Date(new Date(t0).getTime() + (GRACE_FIXED_MIN + 1) * 60_000).toISOString()),
+      );
+      await expect(
+        repo.logDose({ courseId, status: "given", scheduledFor, amount: 0.4, allowWithinGrace: true }),
+      ).rejects.toBeInstanceOf(DuplicateDoseError);
+
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
+    });
+
+    // Same invariant, `fromLastDose` side: a DIFFERENT, non-null
+    // `scheduledFor` collision within the grace window IS bypassable (that
+    // is the feature), but the identical `scheduledFor` never is, confirmed
+    // or not.
+    it("fromLastDose: allowWithinGrace bypasses a DIFFERENT occurrence's grace-window collision, but never the SAME occurrence's exact match", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupIntervalCourse(repo); // intervalHours: 8
+      const t0 = "2026-08-08T07:00:00.000Z";
+      setClock(fixedClock(t0));
+      const first = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
+
+      // 30 min later — past the 10-min floor, inside the 90-min grace
+      // window, and a DIFFERENT (real) scheduledFor: allowWithinGrace
+      // legitimately bypasses this one.
+      setClock(fixedClock(new Date(new Date(t0).getTime() + 30 * 60_000).toISOString()));
+      const second = await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: "2026-08-08T15:00:00.000Z",
+        amount: 0.5,
+        allowWithinGrace: true,
+      });
+      expect(second.id).not.toBe(first.id);
+
+      // Retrying the SAME `scheduledFor` `second` just wrote, even with
+      // allowWithinGrace, is the exact-match hard block — never bypassed.
+      await expect(
+        repo.logDose({
+          courseId,
+          status: "given",
+          scheduledFor: "2026-08-08T15:00:00.000Z",
+          amount: 0.5,
+          allowWithinGrace: true,
+        }),
+      ).rejects.toBeInstanceOf(DuplicateDoseError);
+
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(2);
+    });
+
+    // Latent fix: `repo.types.ts`'s `logDose` doc states the same-occurrence
+    // hard block applies regardless of `allowWithinGrace` — but the guard
+    // used to be conditioned on `input.scheduledFor !== null`, a silent
+    // exception the doc never mentioned. `scheduledFor: null` is the "chain
+    // never started" sentinel, and it is ONE occurrence like any other: two
+    // logs against it are the SAME occurrence no matter the gap between
+    // them, exactly like two logs against the same real `scheduledFor`
+    // would be — this proves the guard now matches its own documented
+    // invariant instead of quietly carving null out of it.
+    it("a fromLastDose course, scheduledFor: null is the SAME occurrence every time — rejected at any gap, even past the grace window and even with allowWithinGrace", async () => {
       const repo = makeRepo();
       const { courseId } = await setupIntervalCourse(repo);
       const t0 = "2026-08-08T07:00:00.000Z";
@@ -575,17 +659,114 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
       setClock(fixedClock(t0));
       await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
 
-      setClock(fixedClock(new Date(new Date(t0).getTime() + 10 * 60_000).toISOString()));
+      // Well past the grace window (90 min for this 8h course) — under the
+      // OLD, null-guarded check this second `scheduledFor: null` log would
+      // have been treated as a DIFFERENT occurrence and accepted.
+      setClock(
+        fixedClock(new Date(new Date(t0).getTime() + (GRACE_INTERVAL_CAP_MIN + 1) * 60_000).toISOString()),
+      );
       await expect(
         repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 }),
       ).rejects.toBeInstanceOf(DuplicateDoseError);
+
+      // Not even `allowWithinGrace` reaches it — documented to bypass only
+      // the grace-window heuristic, never the same-occurrence block.
+      await expect(
+        repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5, allowWithinGrace: true }),
+      ).rejects.toBeInstanceOf(DuplicateDoseError);
+
       expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
+    });
+
+    // --- F1: the EARLY_GIVE_FLOOR_MIN hard floor beneath allowWithinGrace ---
+
+    // MUTATION THIS CATCHES: deleting (or short-circuiting) the floor check
+    // — without it, a confirmed early give a minute after the last dose
+    // would succeed instead of being refused.
+    it("a give within EARLY_GIVE_FLOOR_MIN of ANY live dose on the course is refused with TooSoonSinceLastDoseError, even with allowWithinGrace: true", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupIntervalCourse(repo); // intervalHours: 8, grace cap 90 min
+      const t0 = "2026-08-08T07:00:00.000Z";
+      setClock(fixedClock(t0));
+      await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
+
+      // 1 minute later, a DIFFERENT scheduledFor (so this is not the
+      // same-occurrence hard block) and well inside the 90-min grace window
+      // too — the floor is what actually fires, not the (bypassable) grace
+      // heuristic, and `allowWithinGrace: true` does not reach it either.
+      setClock(fixedClock(new Date(new Date(t0).getTime() + 60_000).toISOString()));
+      let caught: unknown;
+      try {
+        await repo.logDose({
+          courseId,
+          status: "given",
+          scheduledFor: "2026-08-08T15:00:00.000Z",
+          amount: 0.5,
+          allowWithinGrace: true,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(TooSoonSinceLastDoseError);
+      expect((caught as TooSoonSinceLastDoseError).minutesSinceLast).toBe(1);
+
+      expect(await repo.listDoseEvents({ courseId })).toHaveLength(1);
+    });
+
+    // The floor's own boundary: AT exactly EARLY_GIVE_FLOOR_MIN minutes, the
+    // floor no longer applies and ordinary grace-window behaviour (still
+    // bypassable) takes over — "at or past the floor, the confirmation
+    // behaves as already built" is the product decision this pins.
+    it("a give at EXACTLY EARLY_GIVE_FLOOR_MIN minutes is past the floor — grace-window rules apply instead", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupIntervalCourse(repo);
+      const t0 = "2026-08-08T07:00:00.000Z";
+      setClock(fixedClock(t0));
+      await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
 
       setClock(
-        fixedClock(new Date(new Date(t0).getTime() + (GRACE_INTERVAL_MIN + 1) * 60_000).toISOString()),
+        fixedClock(new Date(new Date(t0).getTime() + EARLY_GIVE_FLOOR_MIN * 60_000).toISOString()),
       );
-      await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.5 });
+      // Still inside the 90-min grace window, so an UNconfirmed attempt at
+      // exactly the floor boundary still collides — via grace, not the
+      // floor (a `DuplicateDoseError`, not a `TooSoonSinceLastDoseError`).
+      await expect(
+        repo.logDose({ courseId, status: "given", scheduledFor: "2026-08-08T15:00:00.000Z", amount: 0.5 }),
+      ).rejects.toBeInstanceOf(DuplicateDoseError);
+
+      // And — unlike a sub-floor gap — allowWithinGrace legitimately
+      // bypasses it at exactly the floor boundary.
+      const confirmed = await repo.logDose({
+        courseId,
+        status: "given",
+        scheduledFor: "2026-08-08T15:00:00.000Z",
+        amount: 0.5,
+        allowWithinGrace: true,
+      });
+      expect(confirmed.status).toBe("given");
       expect(await repo.listDoseEvents({ courseId })).toHaveLength(2);
+    });
+
+    // The floor is unconditional across schedule kinds too (F8): a
+    // fixedTimes course gets the identical protection a fromLastDose one
+    // does, since the floor check does not branch on `schedule.kind`.
+    it("the floor applies to fixedTimes courses too, not only fromLastDose", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo); // fixedTimes
+      const t0 = "2026-08-08T07:00:00.000Z";
+      setClock(fixedClock(t0));
+      await repo.logDose({ courseId, status: "given", scheduledFor: "2026-08-08T08:00:00.000Z", amount: 0.4 });
+
+      setClock(fixedClock(new Date(new Date(t0).getTime() + 5 * 60_000).toISOString()));
+      await expect(
+        repo.logDose({
+          courseId,
+          status: "given",
+          scheduledFor: "2026-08-08T20:00:00.000Z",
+          amount: 0.4,
+          allowWithinGrace: true,
+        }),
+      ).rejects.toBeInstanceOf(TooSoonSinceLastDoseError);
     });
 
     it("correctDose still writes its superseding row and recordMissed still works — the guard applies to logDose only", async () => {

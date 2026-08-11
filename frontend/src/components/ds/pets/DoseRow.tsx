@@ -15,6 +15,8 @@ export interface DoseRowProps {
   divider?: boolean;
   /** Button label. Defaults to "Give". */
   label?: string;
+  /** Disables the Give button — e.g. while a log write for this course is already in flight. */
+  disabled?: boolean;
   style?: CSSProperties;
 }
 
@@ -26,6 +28,7 @@ export function DoseRow({
   onGive,
   divider,
   label,
+  disabled,
   style,
 }: DoseRowProps) {
   const given = state === "given";
@@ -66,6 +69,7 @@ export function DoseRow({
         <Button
           size="sm"
           variant={state === "later" ? "secondary" : "primary"}
+          disabled={disabled}
           onClick={(e) => {
             e.stopPropagation();
             onGive?.(e);

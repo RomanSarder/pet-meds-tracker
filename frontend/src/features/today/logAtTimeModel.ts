@@ -40,7 +40,7 @@
 // in elapsed time than the wall clock suggests, and the clamp is what keeps
 // every offset inside it.
 import type { Course, CourseEvent, DoseEvent } from "@/domain";
-import { occurrenceKeyFor, parseLocalDay, startOfLocalDay } from "@/domain";
+import { localDayKey, occurrenceKeyFor, startOfLocalDay } from "@/domain";
 import type { Occurrence } from "@/engine";
 import { nextDueAt } from "@/engine";
 
@@ -102,29 +102,45 @@ export function stepBy(current: Date, deltaMin: number, now: Date): Date {
 
 /**
  * The "At its scheduled time" row's value (SPEC §6.1a) — the occurrence's due
- * instant, by value and DELIBERATELY UNCLAMPED.
+ * instant, by value and DELIBERATELY UNCLAMPED, PROVIDED it falls inside the
+ * day being viewed.
  *
- * Returning a future `dueAt` untouched is product-approved: §6.1a says the
- * headline "turns berry if the value is in the future" and the footer is
- * "disabled for a future time". Clamping here would make both of those
- * behaviours unreachable. `canConfirm` is the single gate that upholds SPEC
- * §12's "the corrected-time picker cannot produce a `givenAt` in the future or
- * before 00:00 today" — this function is a value, not a gate.
+ * Returning a future `dueAt` untouched is product-approved for a due instant
+ * still WITHIN today: §6.1a says the headline "turns berry if the value is in
+ * the future" and the footer is "disabled for a future time". Clamping here
+ * would make both of those behaviours unreachable. `canConfirm` is the single
+ * gate that upholds SPEC §12's "the corrected-time picker cannot produce a
+ * `givenAt` in the future or before 00:00 today" — this function is a value,
+ * not a gate.
  *
  * `null` in two cases:
  *   - `dueAt === null`: an unanchored `fromLastDose` chain with no
  *     `anchorTime` has no scheduled time to offer.
- *   - `dueAt` before midnight of the occurrence's own local day: a
- *     cross-midnight occurrence, which SPEC §4 pushes to history rather than
- *     this sheet. `occurrence.day` is "the local day it was SCHEDULED FOR", so
- *     for any row this sheet can be opened from it is today, and
- *     `parseLocalDay(occurrence.day)` is the same instant `boundsFor(now).floor`
- *     returns — which is why the signature needs no `now` to make the check.
+ *   - `dueAt`'s local day differs from `occurrence.day` — EITHER direction.
+ *     A `dueAt` before `occurrence.day`'s midnight is a cross-midnight
+ *     occurrence, which SPEC §4 pushes to history rather than this sheet. A
+ *     `dueAt` AFTER `occurrence.day` is the newer case (SPEC §3b): an
+ *     anchored `fromLastDose` chain's next dose is now reachable, and
+ *     giveable early, starting the day it re-anchors — a day or more before
+ *     its own due day (`occurrences.ts`'s `fromLastDoseOccurrences`). Without
+ *     this half of the check, `scheduledAt` handed a `dueAt` a full day (or
+ *     more) ahead of `occurrence.day`, and `helperFor`'s "did you mean
+ *     yesterday?" day-check fired on a dose that has not happened yet —
+ *     nonsensical in that direction. Both directions collapse to one
+ *     `localDayKey` equality check rather than two one-sided comparisons, so
+ *     there is exactly one place this rule can drift.
+ *
+ * `occurrence.day` is "the day being viewed", not always "the day `dueAt` is
+ * scheduled for" now that the two can differ — but every row this sheet can
+ * be opened from is still on `occurrence.day === today` in practice (SPEC
+ * §5.1's Today dashboard is the only caller), so `localDayKey` of that day is
+ * still the same instant `boundsFor(now).floor` returns; the signature needs
+ * no `now` to make the check for exactly that reason.
  */
 export function scheduledChoice(occurrence: Occurrence): Date | null {
   const dueAt = occurrence.dueAt;
   if (dueAt === null) return null;
-  if (dueAt.getTime() < parseLocalDay(occurrence.day).getTime()) return null;
+  if (localDayKey(dueAt) !== occurrence.day) return null;
   return new Date(dueAt.getTime());
 }
 

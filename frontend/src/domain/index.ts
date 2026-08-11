@@ -44,12 +44,15 @@ export { newId } from "./ids";
 
 export { occurrenceKeyFor } from "./keys";
 
+export { intervalGraceMinutes } from "./grace";
+
 export {
   TINT_COUNT,
   UNDO_WINDOW_MS,
   RETRACT_GRACE_MS,
   GRACE_FIXED_MIN,
-  GRACE_INTERVAL_MIN,
+  GRACE_INTERVAL_CAP_MIN,
+  EARLY_GIVE_FLOOR_MIN,
   DUE_PRE_WINDOW_MIN,
   MISSED_AFTER_HOURS,
   UNKNOWN_ACTOR_NAME,

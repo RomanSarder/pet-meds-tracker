@@ -31,8 +31,9 @@ import type {
 import {
   cloneFixtures,
   DEFAULT_SELF_DISPLAY_NAME,
+  EARLY_GIVE_FLOOR_MIN,
   GRACE_FIXED_MIN,
-  GRACE_INTERVAL_MIN,
+  intervalGraceMinutes,
   localDayKey,
   newId,
   now,
@@ -42,9 +43,9 @@ import {
   RETRACT_GRACE_MS,
 } from "@/domain";
 import type { ApplyReport, RemoteChanges, Repo } from "./repo.types";
-import { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
+import { DuplicateDoseError, RetractWindowExpiredError, TooSoonSinceLastDoseError } from "./errors";
 
-export { DuplicateDoseError, RetractWindowExpiredError } from "./errors";
+export { DuplicateDoseError, RetractWindowExpiredError, TooSoonSinceLastDoseError } from "./errors";
 
 function stamp(): IsoDateTime {
   return now().toISOString();
@@ -553,23 +554,66 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     givenAt?: IsoDateTime;
     amount: number;
     note?: string;
+    allowWithinGrace?: boolean;
   }): Promise<DoseEvent> {
     const course = requireAlive(courses, input.courseId, "Course");
     const actorId = await currentActorId();
     const ts = stamp();
     const givenAt = input.givenAt ?? ts;
 
-    const graceMin = course.schedule.kind === "fixedTimes" ? GRACE_FIXED_MIN : GRACE_INTERVAL_MIN;
+    const graceMin =
+      course.schedule.kind === "fixedTimes"
+        ? GRACE_FIXED_MIN
+        : intervalGraceMinutes(course.schedule.intervalHours);
     const graceMs = graceMin * 60_000;
+    const floorMs = EARLY_GIVE_FLOOR_MIN * 60_000;
     const givenAtMs = new Date(givenAt).getTime();
-    const duplicate = liveDoseEventsForCourse(input.courseId).find((e) => {
-      if (input.scheduledFor !== null && e.scheduledFor === input.scheduledFor) {
-        return true;
+    const liveEvents = liveDoseEventsForCourse(input.courseId);
+
+    // Same-occurrence hard block (SPEC §5) — unconditional, never bypassed by
+    // `allowWithinGrace`, and keyed on `scheduledFor` alone, INCLUDING when it
+    // is `null` (the "chain never started" sentinel): a course cannot be
+    // started twice from that sentinel either. `repo.types.ts`'s `logDose`
+    // doc states this holds regardless of `allowWithinGrace`; it used to be
+    // silently guarded by `input.scheduledFor !== null`, a no-op for a null
+    // `scheduledFor` specifically that made the code not match its own stated
+    // invariant (unreached in production only because a null `scheduledFor`
+    // never coincides with `earlyGive` today).
+    const sameOccurrence = liveEvents.find((e) => e.scheduledFor === input.scheduledFor);
+    if (sameOccurrence) {
+      throw new DuplicateDoseError(sameOccurrence);
+    }
+
+    // F1: the hard floor beneath `allowWithinGrace` — a confirmed early give
+    // must still not double-log within `EARLY_GIVE_FLOOR_MIN` minutes of ANY
+    // live dose already on this course. Checked unconditionally, ahead of the
+    // bypassable grace-window heuristic below, so no caller can route around
+    // it — see `errors.ts`'s `TooSoonSinceLastDoseError`.
+    // Strictly LESS than the floor — "under EARLY_GIVE_FLOOR_MIN minutes" is
+    // refused; "at or past" it is documented to behave as already built
+    // (ordinary, bypassable grace-window rules), so the boundary itself
+    // (`gap === floorMs`) must NOT be floor-blocked. `<=` here would make an
+    // exactly-10-minute confirmed retry impossible, contradicting that.
+    const tooSoon = liveEvents.find(
+      (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
+    );
+    if (tooSoon) {
+      throw new TooSoonSinceLastDoseError(
+        Math.round(Math.abs(givenAtMs - new Date(tooSoon.givenAt).getTime()) / 60_000),
+      );
+    }
+
+    // The grace-window heuristic — a collision with a DIFFERENT occurrence
+    // logged recently — is exactly what a confirmed early give (SPEC §3b:
+    // "logging a dose early ... is intended") is allowed to bypass; the two
+    // guards above never are. See `idbRepo.ts`'s identical guard.
+    if (!input.allowWithinGrace) {
+      const duplicate = liveEvents.find(
+        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
+      );
+      if (duplicate) {
+        throw new DuplicateDoseError(duplicate);
       }
-      return Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs;
-    });
-    if (duplicate) {
-      throw new DuplicateDoseError(duplicate);
     }
 
     const event: DoseEvent = {

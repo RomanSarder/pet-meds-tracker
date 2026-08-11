@@ -91,6 +91,51 @@ describe("PetDetailView", () => {
     expect(within(scheduleCard).getByText("20:00")).toBeInTheDocument();
   });
 
+  // Part 2 consumer fix (SPEC §3b): an anchored `fromLastDose` chain's next
+  // dose can now be reachable — and shown here — a day before it is due.
+  // `getOccurrences` returns it, but it must not inflate `countToday`, and
+  // its clock time must not read as due today.
+  it("shows an early-reachable fromLastDose dose (due tomorrow) without inflating the today count", async () => {
+    const custom = cloneFixtures();
+    const pet = custom.pets.find((p) => p.name === "Clover")!;
+    const interval = custom.courses.find(
+      (c) => c.petId === pet.id && c.schedule.kind === "fromLastDose",
+    )!;
+    // Re-anchor with a 24h interval so the next dose lands tomorrow — well
+    // before the interval elapses, the exact row this fix makes reachable.
+    interval.schedule = { kind: "fromLastDose", intervalHours: 24 };
+    const givenAt = "2026-08-08T06:30:00.000Z"; // 07:30 BST — 30 min before FIXTURE_NOW
+    custom.doseEvents.push({
+      id: "early-reachable-anchor",
+      courseId: interval.id,
+      scheduledFor: null,
+      status: "given",
+      loggedAt: givenAt,
+      givenAt,
+      amount: interval.doseAmount,
+      note: null,
+      occurrenceKey: occurrenceKeyFor(interval.id, null),
+      supersedesId: null,
+      actorId: custom.users[0].id,
+      createdAt: givenAt,
+      updatedAt: givenAt,
+      deletedAt: null,
+    });
+    const repo = createMemoryRepo(custom);
+
+    renderWithProviders(<PetDetailView petId={pet.id} />, { repo });
+
+    const scheduleLabel = await screen.findByText("Schedule");
+    // Metacam's 2 fixedTimes occurrences, unchanged — NOT 3: the early
+    // interval row is genuinely due tomorrow, not today.
+    expect(await screen.findByText("2 today")).toBeInTheDocument();
+    const scheduleCard = scheduleLabel.closest("div")!.nextElementSibling as HTMLElement;
+    // Still shown, read-only, and day-qualified — not a bare "07:30" that
+    // would read as due today at that hour.
+    expect(within(scheduleCard).getByText(/tomorrow/)).toBeInTheDocument();
+    expect(within(scheduleCard).getByText(/^07:30 · tomorrow/)).toBeInTheDocument();
+  });
+
   it("renders every dose state in the Schedule block as read-only text, with no interactive control anywhere in it", async () => {
     // Builds one occurrence of each of the six states Pet detail can show
     // today (given, skipped, overdue, due, later, notStarted) on top of
@@ -412,6 +457,7 @@ describe("PetDetailView", () => {
       medicationName: "Metacam",
       instructions: null,
       progress: "Day 2 of 7",
+      today: TODAY,
       tr: enTr,
     });
 
