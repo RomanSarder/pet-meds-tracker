@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { fixtures } from "@/domain";
 import { getOccurrences, type EngineContext } from "@/engine";
@@ -739,7 +739,75 @@ describe("daily maximum chips (SPEC §3b-i / §6.7 step 5a)", () => {
     const doseInput = await screen.findByLabelText("Dose amount");
     await waitFor(() => expect(doseInput).toHaveValue("0.4"));
 
-    expect(screen.getByRole("button", { name: "4 per day" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "4" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "No maximum" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("selecting '6' saves maxPerDay: 6 — the row reaches past the old ceiling of 4", async () => {
+    const repo = createMemoryRepo();
+    const { repo: usedRepo } = renderWithProviders(<CourseFormView />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("Clover");
+    await selectPet(user, "Clover");
+    await typeMedication(user, "Max Six Course");
+    await typeDose(user, "0.6", "ml");
+
+    await clickChip(user, "6");
+    expect(screen.getByRole("button", { name: "6" })).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByText(
+        /Nothing more is due once 6 doses have been given today — you can still give and record one if needed\./,
+      ),
+    ).toBeInTheDocument();
+
+    await clickSave(user);
+    const created = await waitFor(async () => {
+      const courses = await usedRepo.listCourses({ petId: CLOVER.id });
+      const match = courses.find((c) => c.doseAmount === 0.6 && c.schedule.kind === "fromLastDose");
+      expect(match).toBeDefined();
+      return match!;
+    });
+    expect(created.schedule).toEqual({ kind: "fromLastDose", intervalHours: 8, maxPerDay: 6 });
+  });
+
+  // The regression the old 4-chip row would have caused: `nearestMaxPerDayChoice`
+  // clamped everything above 4 down to "4 per day", so opening a 5-per-day course
+  // and saving it silently rewrote the cap to 4.
+  it("edit mode prefills '5' from a 5-per-day course and saves it back unchanged", async () => {
+    const repo = createMemoryRepo();
+    const existing = await repo.createCourse({
+      petId: CLOVER.id,
+      medicationId: METACAM.id,
+      doseAmount: 0.4,
+      doseUnit: "ml",
+      instructions: null,
+      schedule: { kind: "fromLastDose", intervalHours: 4, maxPerDay: 5 },
+      startDate: "2026-08-01",
+      endDate: null,
+      notes: null,
+    });
+
+    renderWithProviders(<CourseFormView courseId={existing.id} />, { repo });
+    const doseInput = await screen.findByLabelText("Dose amount");
+    await waitFor(() => expect(doseInput).toHaveValue("0.4"));
+
+    expect(screen.getByRole("button", { name: "5" })).toHaveAttribute("aria-pressed", "true");
+
+    const user = userEvent.setup();
+    await clickSave(user);
+    await waitFor(async () => {
+      const reloaded = await repo.getCourse(existing.id);
+      expect(reloaded!.schedule).toEqual({ kind: "fromLastDose", intervalHours: 4, maxPerDay: 5 });
+    });
+  });
+
+  it("groups the maximum chips under their own heading, so a bare numeral has an accessible context", async () => {
+    const repo = createMemoryRepo();
+    renderWithProviders(<CourseFormView />, { repo });
+    await screen.findByText("Clover");
+
+    const group = screen.getByRole("group", { name: "Daily maximum" });
+    expect(within(group).getByRole("button", { name: "No maximum" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "6" })).toBeInTheDocument();
   });
 });

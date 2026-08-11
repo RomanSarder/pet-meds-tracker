@@ -733,7 +733,7 @@ Single form, in this order:
 
 5a. **Daily maximum** — interval courses only, and **optional**: `No maximum` / `2` / `3` /
 
-   `4 per day`, as chips under the interval. **`No maximum` is selected by default** — a cap is
+   `4` / `5` / `6`, as chips under the interval. **`No maximum` is selected by default** — a cap is
 
    something the user opts into, never a value the app assumes on their behalf (§3b-i). Hidden
 

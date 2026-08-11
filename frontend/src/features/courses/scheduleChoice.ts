@@ -25,7 +25,7 @@ export const MODE_CHOICES = ["From last dose", "At set times"] as const;
  * default (§3b-i — a cap is opted into, never assumed). Never shown for
  * `At set times`.
  */
-export const MAX_PER_DAY_CHOICES = ["No maximum", "2", "3", "4 per day"] as const;
+export const MAX_PER_DAY_CHOICES = ["No maximum", "2", "3", "4", "5", "6"] as const;
 
 export type IntervalChoice = (typeof INTERVAL_CHOICES)[number];
 export type FrequencyChoice = (typeof FREQUENCY_CHOICES)[number];
@@ -47,8 +47,15 @@ const MAX_PER_DAY_VALUES: Record<MaxPerDayChoice, number | undefined> = {
   "No maximum": undefined,
   "2": 2,
   "3": 3,
-  "4 per day": 4,
+  "4": 4,
+  "5": 5,
+  "6": 6,
 };
+
+/** The largest cap the chip row can express — the clamp `nearestMaxPerDayChoice` snaps down to. */
+const MAX_PER_DAY_CEILING = 6;
+/** The smallest. A cap of 1 is representable in the data but has no chip; it displays as "2". */
+const MAX_PER_DAY_FLOOR = 2;
 
 /**
  * Weekly's fixed day. ISO numbering, 1 = Monday, so 6 is SATURDAY — NOT JS
@@ -131,8 +138,12 @@ export function maxPerDayChoiceLabel(c: MaxPerDayChoice, tr: Translator): string
       return tr.t("courses.maxPerDay.two");
     case "3":
       return tr.t("courses.maxPerDay.three");
-    case "4 per day":
+    case "4":
       return tr.t("courses.maxPerDay.four");
+    case "5":
+      return tr.t("courses.maxPerDay.five");
+    case "6":
+      return tr.t("courses.maxPerDay.six");
   }
 }
 
@@ -218,11 +229,23 @@ export function endDateForDurationChoice(
  * a sync partner might have set (e.g. a value below 2, or above 4) falls
  * back to the nearest of the three numeric chips rather than throwing.
  */
+/**
+ * Best-effort display lookup, the `maxPerDay` twin of `nearestIntervalChoice`.
+ * Clamped into the chip row's own `[2, 6]` range rather than mapped exactly,
+ * because `Schedule.maxPerDay` is a plain integer and a synced-in course (or
+ * a hand-edited backup) may carry a value no chip can express.
+ *
+ * A clamp is LOSSY on save: a course carrying `maxPerDay: 9` shows "6", and
+ * saving the form then rewrites it to 6. That is the same bargain
+ * `nearestIntervalChoice` already makes for `intervalHours`, and the honest
+ * one for a chip row — the alternative is showing a cap the form cannot
+ * round-trip. Widening the row is the fix if a real out-of-range value ever
+ * shows up, not a silent passthrough the user cannot see or change.
+ */
 function nearestMaxPerDayChoice(n: number | undefined): MaxPerDayChoice {
   if (n === undefined) return "No maximum";
-  if (n <= 2) return "2";
-  if (n === 3) return "3";
-  return "4 per day";
+  const clamped = Math.min(MAX_PER_DAY_CEILING, Math.max(MAX_PER_DAY_FLOOR, Math.round(n)));
+  return String(clamped) as MaxPerDayChoice;
 }
 
 function nearestIntervalChoice(hours: number): IntervalChoice {

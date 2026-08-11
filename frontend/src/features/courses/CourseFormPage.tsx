@@ -657,10 +657,25 @@ export function CourseFormView({
           // `maxPerDayChoice` in that mode, this just keeps the control from
           // being shown for a value it cannot affect.
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
+            <span
+              id="max-per-day-label"
+              style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}
+            >
               {tr.t("courses.maxPerDayLabel")}
             </span>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {/*
+              Grouped and labelled by the heading above: every chip but the
+              first is a bare numeral ("2" … "6"), which on its own tells a
+              screen-reader user nothing about what it caps. The visible
+              heading is the label sighted users read it against, so pointing
+              at it with `aria-labelledby` is the honest equivalent rather
+              than duplicating the words into six `aria-label`s.
+            */}
+            <div
+              role="group"
+              aria-labelledby="max-per-day-label"
+              style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+            >
               {MAX_PER_DAY_CHOICES.map((o) => {
                 const selected = maxPerDayChoice === o;
                 return (

@@ -166,6 +166,8 @@ export interface PetsMessages {
   "courses.maxPerDay.two": () => string;
   "courses.maxPerDay.three": () => string;
   "courses.maxPerDay.four": () => string;
+  "courses.maxPerDay.five": () => string;
+  "courses.maxPerDay.six": () => string;
 
   // --- scheduleEditModel.ts / the times editor (shift-earlier feature) ----
   // `gap`/`expected` are already-rendered durations — the caller resolves
@@ -319,9 +321,15 @@ export const enPets = (f: Formatters): PetsMessages => ({
   "courses.mode.atSetTimes": () => "At set times",
   "courses.maxPerDayLabel": () => "Daily maximum",
   "courses.maxPerDay.noMaximum": () => "No maximum",
+  // Bare numerals, no "per day" suffix on the last chip: the section heading
+  // above them (`courses.maxPerDayLabel`, "Daily maximum") already states the
+  // unit, and with six chips in the row one odd-length label made the wrap
+  // ragged. Same in `uk` below.
   "courses.maxPerDay.two": () => "2",
   "courses.maxPerDay.three": () => "3",
-  "courses.maxPerDay.four": () => "4 per day",
+  "courses.maxPerDay.four": () => "4",
+  "courses.maxPerDay.five": () => "5",
+  "courses.maxPerDay.six": () => "6",
 
   "courses.gapWarning.tooSoon": (p) =>
     `Only ${p.gap} since the ${p.time} dose (this course is every ${p.expected}).`,
@@ -513,7 +521,9 @@ export const ukPets = (f: Formatters): PetsMessages => ({
   "courses.maxPerDay.noMaximum": () => "Без максимуму",
   "courses.maxPerDay.two": () => "2",
   "courses.maxPerDay.three": () => "3",
-  "courses.maxPerDay.four": () => "4 на день",
+  "courses.maxPerDay.four": () => "4",
+  "courses.maxPerDay.five": () => "5",
+  "courses.maxPerDay.six": () => "6",
 
   "courses.gapWarning.tooSoon": (p) =>
     `Лише ${p.gap} після дози о ${p.time} (цей курс — кожні ${p.expected}).`,
