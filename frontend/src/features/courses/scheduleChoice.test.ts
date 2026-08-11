@@ -5,6 +5,7 @@ import {
   INTERVAL_CHOICES,
   choicesForSchedule,
   endDateForDurationChoice,
+  isPresetSchedule,
   scheduleForFrequencyChoice,
   scheduleForIntervalChoice,
 } from "./scheduleChoice";
@@ -120,5 +121,23 @@ describe("choicesForSchedule", () => {
     const schedule: Schedule = { kind: "fixedTimes", times: ["11:11"] };
     expect(() => choicesForSchedule(schedule)).not.toThrow();
     expect(choicesForSchedule(schedule).frequency).toBe("Once daily");
+  });
+});
+
+describe("isPresetSchedule", () => {
+  it.each([...FREQUENCY_CHOICES])("%s's own schedule is a preset", (chip) => {
+    expect(isPresetSchedule(scheduleForFrequencyChoice(chip))).toBe(true);
+  });
+
+  it("a schedule the times editor has nudged off 2x daily is not a preset", () => {
+    expect(isPresetSchedule({ kind: "fixedTimes", times: ["08:00", "18:00"] })).toBe(false);
+  });
+
+  it("08:00 alone, with no daysOfWeek, is NOT the Weekly preset (which needs daysOfWeek: [6])", () => {
+    expect(isPresetSchedule({ kind: "fixedTimes", times: ["08:00"] })).toBe(false);
+  });
+
+  it("fromLastDose is never a preset", () => {
+    expect(isPresetSchedule({ kind: "fromLastDose", intervalHours: 8 })).toBe(false);
   });
 });

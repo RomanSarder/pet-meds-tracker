@@ -3,7 +3,7 @@
 //   spring forward 2026-03-29 (01:00 GMT -> 02:00 BST, a 23h local day)
 //   autumn back    2026-10-25 (02:00 BST -> 01:00 GMT, a 25h local day)
 import { describe, expect, it } from "vitest";
-import type { Course, DoseEvent, IsoWeekday } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, IsoWeekday } from "@/domain";
 import { atLocalTime, formatHHMM, localDayKey, occurrenceKeyFor } from "@/domain";
 import type { EngineContext } from "./engine.types";
 import { getOccurrences } from "./index";
@@ -89,10 +89,46 @@ function givenEvent(
   };
 }
 
+let courseEventSeq = 0;
+/** An `edited` CourseEvent shifting `fixedTimes.times` from `before` to `after` at `at`. */
+function makeEditedEvent(overrides: {
+  courseId: string;
+  at: string;
+  before: string[];
+  after: string[];
+}): CourseEvent {
+  courseEventSeq += 1;
+  return {
+    id: `cev-${courseEventSeq}`,
+    courseId: overrides.courseId,
+    kind: "edited",
+    at: overrides.at,
+    seq: courseEventSeq,
+    actorId: "test-actor-id",
+    before: {
+      schedule: { kind: "fixedTimes", times: overrides.before },
+      doseAmount: 1,
+      doseUnit: "ml",
+      startDate: "2026-01-01",
+      endDate: null,
+    },
+    after: {
+      schedule: { kind: "fixedTimes", times: overrides.after },
+      doseAmount: 1,
+      doseUnit: "ml",
+      startDate: "2026-01-01",
+      endDate: null,
+    },
+    createdAt: overrides.at,
+    updatedAt: overrides.at,
+    deletedAt: null,
+  };
+}
+
 describe("fixedTimes preserves wall-clock time across DST shifts", () => {
   it("keeps 08:00 local across the March 2026 spring-forward shift (2026-03-28 .. 2026-03-30)", () => {
     const course = fixedTimesCourse("dst-fwd", ["08:00"], { startDate: "2026-01-01" });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
 
     const before = getOccurrences("2026-03-28", ctx)[0];
     const shiftDay = getOccurrences("2026-03-29", ctx)[0];
@@ -112,7 +148,7 @@ describe("fixedTimes preserves wall-clock time across DST shifts", () => {
 
   it("keeps 08:00 local across the October 2026 autumn-back shift (2026-10-24 .. 2026-10-26)", () => {
     const course = fixedTimesCourse("dst-back", ["08:00"], { startDate: "2026-01-01" });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
 
     const before = getOccurrences("2026-10-24", ctx)[0];
     const shiftDay = getOccurrences("2026-10-25", ctx)[0];
@@ -139,7 +175,7 @@ describe("fromLastDose preserves elapsed real time (not wall clock) across DST s
       scheduledFor: null,
       givenAt: anchor.toISOString(),
     });
-    const ctx: EngineContext = { courses: [course], events: [event] };
+    const ctx: EngineContext = { courses: [course], events: [event], courseEvents: [] };
 
     const occs = getOccurrences("2026-03-29", ctx);
     expect(occs).toHaveLength(1);
@@ -160,7 +196,7 @@ describe("fromLastDose preserves elapsed real time (not wall clock) across DST s
       scheduledFor: null,
       givenAt: anchor.toISOString(),
     });
-    const ctx: EngineContext = { courses: [course], events: [event] };
+    const ctx: EngineContext = { courses: [course], events: [event], courseEvents: [] };
 
     const occs = getOccurrences("2026-10-25", ctx);
     expect(occs).toHaveLength(1);
@@ -178,7 +214,7 @@ describe("everyNDays counts calendar days, not ms / 86_400_000, across the March
       startDate: "2026-03-01",
       everyNDays: 2,
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
 
     expect(getOccurrences("2026-03-29", ctx)).toHaveLength(1);
   });
@@ -188,7 +224,7 @@ describe("everyNDays counts calendar days, not ms / 86_400_000, across the March
       startDate: "2026-03-01",
       everyNDays: 2,
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
 
     expect(getOccurrences("2026-03-28", ctx)).toHaveLength(0);
     expect(getOccurrences("2026-03-30", ctx)).toHaveLength(0);
@@ -201,7 +237,7 @@ describe("daysOfWeek uses ISO weekday numbering (1 = Monday .. 7 = Sunday), neve
       startDate: "2026-08-01",
       daysOfWeek: [7],
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
 
     expect(getOccurrences("2026-08-09", ctx)).toHaveLength(1);
     expect(getOccurrences("2026-08-10", ctx)).toHaveLength(0);
@@ -212,9 +248,49 @@ describe("daysOfWeek uses ISO weekday numbering (1 = Monday .. 7 = Sunday), neve
       startDate: "2026-08-01",
       daysOfWeek: [1],
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
 
     expect(getOccurrences("2026-08-10", ctx)).toHaveLength(1);
     expect(getOccurrences("2026-08-09", ctx)).toHaveLength(0);
+  });
+});
+
+// SPEC §3c: a schedule edit's forward-only day split must still be computed
+// in wall-clock terms across a DST boundary — the day before an edit that
+// lands near the shift keeps the OLD grid's wall-clock time exactly, not an
+// hour off from naive UTC-offset-carrying arithmetic.
+describe("a schedule edit near a DST shift keeps the OLD grid's wall-clock time on the day before it", () => {
+  it("spring-forward 2026-03-29: 2026-03-28 still shows the OLD grid's 20:00 in wall-clock time", () => {
+    const course = fixedTimesCourse("dst-edit-spring", ["08:00", "18:00"], { startDate: "2026-01-01" });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-03-29", "13:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences("2026-03-28", ctx);
+    const evening = occs.find((o) => o.dueAt!.getHours() === 20)!;
+    expect(formatHHMM(evening.dueAt!)).toBe("20:00");
+    // GMT (UTC+0) on the 28th, the day before the shift.
+    expect(evening.dueAt!.toISOString()).toBe("2026-03-28T20:00:00.000Z");
+  });
+
+  it("autumn-back 2026-10-25: 2026-10-24 still shows the OLD grid's 20:00 in wall-clock time", () => {
+    const course = fixedTimesCourse("dst-edit-autumn", ["08:00", "18:00"], { startDate: "2026-01-01" });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-10-25", "13:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences("2026-10-24", ctx);
+    const evening = occs.find((o) => o.dueAt!.getHours() === 20)!;
+    expect(formatHHMM(evening.dueAt!)).toBe("20:00");
+    // BST (UTC+1) on the 24th, the day before the shift.
+    expect(evening.dueAt!.toISOString()).toBe("2026-10-24T19:00:00.000Z");
   });
 });

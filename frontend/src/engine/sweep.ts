@@ -1,7 +1,7 @@
 // The daily sweep (SPEC §4, §3c) — read-only candidate finders. The engine
 // never writes DoseEvents or mutates Course.status; the caller (W1's
 // recordMissed / finishCourse) acts on what these return.
-import type { Course, DoseEvent, LocalDate } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, LocalDate } from "@/domain";
 import {
   addLocalDays,
   atLocalTime,
@@ -10,25 +10,33 @@ import {
   MISSED_AFTER_HOURS,
 } from "@/domain";
 import type { EngineContext, Occurrence } from "./engine.types";
-import { anchorFor, fixedTimesDayEligible, getOccurrences, inWindow } from "./occurrences";
+import { anchorFor, getOccurrences, inWindow } from "./occurrences";
 
 const MAX_LOOKAHEAD_DAYS = 366;
 const DEFAULT_LOOKBACK_DAYS = 7;
 
 /** The first due instant strictly after `after` for this one course, or `null`. */
-export function nextDueAt(course: Course, events: DoseEvent[], after: Date): Date | null {
+export function nextDueAt(
+  course: Course,
+  events: DoseEvent[],
+  courseEvents: CourseEvent[],
+  after: Date,
+): Date | null {
   if (course.deletedAt !== null || course.status !== "active") return null;
 
   if (course.schedule.kind === "fixedTimes") {
-    const times = [...course.schedule.times].sort();
+    // Applies the IDENTICAL forward-only per-slot rule as `getOccurrences`
+    // (SPEC §3c) by literally calling it, rather than re-deriving the
+    // schedule-timeline logic here — this is what keeps the corrected-time
+    // sheet's "next dose stays at HH:MM" preview
+    // (features/today/logAtTimeModel.ts) from ever drifting off the real
+    // grid on a schedule-edit transition day.
+    const ctx: EngineContext = { courses: [course], events, courseEvents };
     let day: LocalDate = localDayKey(after);
     for (let i = 0; i < MAX_LOOKAHEAD_DAYS; i++) {
       if (course.endDate !== null && differenceInLocalDays(day, course.endDate) > 0) break;
-      if (fixedTimesDayEligible(day, course)) {
-        for (const t of times) {
-          const candidate = atLocalTime(day, t);
-          if (candidate.getTime() > after.getTime()) return candidate;
-        }
+      for (const occ of getOccurrences(day, ctx)) {
+        if (occ.dueAt !== null && occ.dueAt.getTime() > after.getTime()) return occ.dueAt;
       }
       day = addLocalDays(day, 1);
     }

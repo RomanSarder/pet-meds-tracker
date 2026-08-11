@@ -246,6 +246,13 @@ explicitly, not inferred.
 
 - Editing a schedule never rewrites past DoseEvents.
 
+- Editing a schedule is not retroactive. An occurrence is generated from the schedule that was in
+  effect **at that occurrence's own due instant**: a slot whose time today has already passed
+  keeps today's original time, and a slot still ahead of you today moves immediately. Days before
+  the edit therefore keep projecting on the old grid, so already-logged doses stay matched and the
+  missed sweep stays honest. The schedule in effect at an instant is derived from the §6.4
+  CourseEvent ledger, whose `before`/`after` snapshots are the sole record of the change.
+
 ### 3d. Day boundary and time zone
 
 - All scheduling is in the device's local time zone. Store timestamps in UTC, render local.

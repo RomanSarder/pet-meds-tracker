@@ -195,6 +195,28 @@ function nearestFrequencyChoice(s: Extract<Schedule, { kind: "fixedTimes" }>): F
 }
 
 /**
+ * EXACT match against the four `fixedTimes` presets `scheduleForFrequencyChoice`
+ * can produce — used by the schedule-edit form to decide whether the chips
+ * still describe the data, as opposed to `choicesForSchedule`'s best-effort
+ * "nearest chip for display" job below (which this function does not touch
+ * or replace). A schedule the user has nudged with the times editor's
+ * steppers no longer matches any preset and this returns `false`, even
+ * though `choicesForSchedule` still finds a nearest chip to show.
+ */
+export function isPresetSchedule(s: Schedule): boolean {
+  if (s.kind !== "fixedTimes") return false;
+  if (s.everyNDays !== undefined) return false;
+  if (s.daysOfWeek !== undefined) {
+    return sameTimes(s.times, ["08:00"]) && sameWeekdays(s.daysOfWeek, [WEEKLY_ISO_DAY]);
+  }
+  return (
+    sameTimes(s.times, ["09:00"]) ||
+    sameTimes(s.times, ["08:00", "20:00"]) ||
+    sameTimes(s.times, ["08:00", "14:00", "20:00"])
+  );
+}
+
+/**
  * Inverse, for edit mode: the closest choice pair describing an existing
  * `Schedule`. Best-effort and never throws — match `intervalHours` to a
  * chip, falling back to the nearest listed one; match `times`/`daysOfWeek`

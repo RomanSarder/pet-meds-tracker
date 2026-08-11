@@ -2,7 +2,7 @@
 // engine itself (frontend/src/engine/index.ts) is a typed stub on this
 // branch; W2 (slice 3) writes the real function bodies against these same
 // types, so the shapes here are load-bearing for four other branches.
-import type { Course, DoseEvent, LocalDate, Schedule } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, LocalDate, Schedule } from "@/domain";
 
 /** Seven states (SPEC §4 + brief §7 item 3's `notStarted`). */
 export type DoseState =
@@ -37,6 +37,18 @@ export interface Occurrence {
 export interface EngineContext {
   courses: Course[];
   events: DoseEvent[];
+  /**
+   * SPEC §3c / §6.4: the full CourseEvent ledger, REQUIRED (not optional).
+   * `getOccurrences`/`nextDueAt` read it to reconstruct the schedule that
+   * was in effect at a given instant, so a `fixedTimes` schedule edit is
+   * forward-only — past days keep projecting on the old grid instead of
+   * orphaning already-logged doses or flooding the missed sweep with
+   * phantom rows. Required rather than optional on purpose: an optional
+   * field would silently restore that bug at any construction site that
+   * forgot it, where a required one turns `npm run typecheck` into the
+   * completeness proof.
+   */
+  courseEvents: CourseEvent[];
 }
 
 /**

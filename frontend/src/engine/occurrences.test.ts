@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { occurrenceKeyFor } from "@/domain";
-import type { Course, DoseEvent, Schedule } from "@/domain";
+import { atLocalTime, occurrenceKeyFor } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, Schedule } from "@/domain";
 import type { EngineContext } from "./engine.types";
 import { getOccurrences, isoWeekdayOf, liveEventFor } from "./occurrences";
+import { getDoseState } from "./state";
 
 // The test runner pins TZ=Europe/London (see vitest.config.ts).
 
@@ -50,6 +51,42 @@ function makeEvent(overrides: Partial<DoseEvent> & { courseId: string }): DoseEv
   };
 }
 
+let courseEventSeq = 0;
+/** An `edited` CourseEvent shifting `fixedTimes.times` from `before` to `after` at `at`. */
+function makeEditedEvent(overrides: {
+  courseId: string;
+  at: string;
+  before: string[];
+  after: string[];
+}): CourseEvent {
+  courseEventSeq += 1;
+  return {
+    id: `cev-${courseEventSeq}`,
+    courseId: overrides.courseId,
+    kind: "edited",
+    at: overrides.at,
+    seq: courseEventSeq,
+    actorId: "test-actor-id",
+    before: {
+      schedule: { kind: "fixedTimes", times: overrides.before },
+      doseAmount: 1,
+      doseUnit: "ml",
+      startDate: "2026-08-01",
+      endDate: null,
+    },
+    after: {
+      schedule: { kind: "fixedTimes", times: overrides.after },
+      doseAmount: 1,
+      doseUnit: "ml",
+      startDate: "2026-08-01",
+      endDate: null,
+    },
+    createdAt: overrides.at,
+    updatedAt: overrides.at,
+    deletedAt: null,
+  };
+}
+
 describe("isoWeekdayOf", () => {
   it("returns 7 for Sunday 2026-08-09 and 1 for Monday 2026-08-10 (ISO numbering, not JS getDay())", () => {
     expect(isoWeekdayOf("2026-08-09")).toBe(7);
@@ -63,7 +100,7 @@ describe("getOccurrences — fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["08:00", "20:00"] },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     const occs = getOccurrences("2026-08-05", ctx);
     expect(occs).toHaveLength(2);
     expect(occs[0].dueAt?.getHours()).toBe(8);
@@ -75,7 +112,7 @@ describe("getOccurrences — fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["10:00"] },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     const [occ] = getOccurrences("2026-08-05", ctx);
     expect(occ.dueAt).not.toBeNull();
     expect(occ.key).toBe(occurrenceKeyFor(course.id, occ.dueAt!.toISOString()));
@@ -87,7 +124,7 @@ describe("getOccurrences — fixedTimes", () => {
       startDate: "2026-08-05",
       endDate: "2026-08-07",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-04", ctx)).toHaveLength(0);
     expect(getOccurrences("2026-08-05", ctx)).toHaveLength(1);
     expect(getOccurrences("2026-08-07", ctx)).toHaveLength(1);
@@ -99,7 +136,7 @@ describe("getOccurrences — fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["09:00"], daysOfWeek: [7] },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-09", ctx)).toHaveLength(1);
   });
 
@@ -108,7 +145,7 @@ describe("getOccurrences — fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["09:00"], daysOfWeek: [7] },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-10", ctx)).toHaveLength(0);
   });
 
@@ -117,7 +154,7 @@ describe("getOccurrences — fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["09:00"], daysOfWeek: [1] },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-10", ctx)).toHaveLength(1);
   });
 
@@ -126,7 +163,7 @@ describe("getOccurrences — fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["09:00"], daysOfWeek: [1] },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-09", ctx)).toHaveLength(0);
   });
 
@@ -135,7 +172,7 @@ describe("getOccurrences — fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["09:00"], everyNDays: 3 },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-01", ctx)).toHaveLength(1); // day offset 0
     expect(getOccurrences("2026-08-02", ctx)).toHaveLength(0); // day offset 1
     expect(getOccurrences("2026-08-03", ctx)).toHaveLength(0); // day offset 2
@@ -149,7 +186,7 @@ describe("getOccurrences — fixedTimes", () => {
       status: "paused",
     });
     const event = makeEvent({ courseId: course.id, scheduledFor: "2026-08-05T08:00:00.000Z" });
-    const ctx: EngineContext = { courses: [course], events: [event] };
+    const ctx: EngineContext = { courses: [course], events: [event], courseEvents: [] };
     expect(getOccurrences("2026-08-05", ctx)).toHaveLength(0);
     expect(ctx.events).toContain(event);
   });
@@ -160,7 +197,7 @@ describe("getOccurrences — fixedTimes", () => {
       startDate: "2026-08-01",
       status: "stopped",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-05", ctx)).toHaveLength(0);
   });
 
@@ -170,7 +207,7 @@ describe("getOccurrences — fixedTimes", () => {
       startDate: "2026-08-01",
       status: "finished",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     expect(getOccurrences("2026-08-05", ctx)).toHaveLength(0);
   });
 });
@@ -188,7 +225,7 @@ describe("getOccurrences — fromLastDose", () => {
       givenAt: "2026-08-05T22:00:00.000Z", // 23:00 BST
       loggedAt: "2026-08-05T22:00:00.000Z",
     });
-    const ctx: EngineContext = { courses: [course], events: [given] };
+    const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
     // Anchor 2026-08-05T22:00Z + 8h = 2026-08-06T06:00Z = 07:00 BST on 2026-08-06.
     expect(getOccurrences("2026-08-05", ctx)).toHaveLength(0);
     const onDay = getOccurrences("2026-08-06", ctx);
@@ -210,7 +247,7 @@ describe("getOccurrences — fromLastDose", () => {
       givenAt: "2026-08-05T22:00:00.000Z",
       loggedAt: "2026-08-05T22:00:00.000Z",
     });
-    const ctx: EngineContext = { courses: [course], events: [given] };
+    const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
     // Anchor should be resumedAt (10:00Z Aug 6), not the earlier givenAt.
     // 10:00Z + 8h = 18:00Z, same day.
     const occs = getOccurrences("2026-08-06", ctx);
@@ -223,7 +260,7 @@ describe("getOccurrences — fromLastDose", () => {
       schedule: { kind: "fromLastDose", intervalHours: 12, anchorTime: "09:00" },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     const occs = getOccurrences("2026-08-05", ctx);
     expect(occs).toHaveLength(1);
     expect(occs[0].key).toBe(occurrenceKeyFor(course.id, null));
@@ -236,7 +273,7 @@ describe("getOccurrences — fromLastDose", () => {
       schedule: { kind: "fromLastDose", intervalHours: 12 },
       startDate: "2026-08-01",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     const occs = getOccurrences("2026-08-05", ctx);
     expect(occs).toHaveLength(1);
     expect(occs[0].key).toBe(occurrenceKeyFor(course.id, null));
@@ -283,5 +320,204 @@ describe("liveEventFor", () => {
 
   it("returns null when there is no live candidate for the key", () => {
     expect(liveEventFor(occurrenceKeyFor("course-x", null), [])).toBeNull();
+  });
+});
+
+// SPEC §3c: editing a fixedTimes schedule is forward-only. An occurrence is
+// generated from the schedule that was in effect at its OWN due instant, per
+// the CourseEvent ledger — never from the live `course.schedule` alone.
+describe("getOccurrences — fixedTimes schedule edits are forward-only (SPEC §3c)", () => {
+  it("past-day invariant: a day before the edit still projects the OLD grid, and a stored event on it still resolves", () => {
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] }, // live/current = NEW grid
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-10", "13:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const givenOnOldGrid = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime("2026-08-09", "20:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [givenOnOldGrid],
+      courseEvents: [edited],
+    };
+
+    const occs = getOccurrences("2026-08-09", ctx);
+    expect(occs).toHaveLength(2);
+    const evening = occs.find((o) => o.dueAt?.getHours() !== 8)!;
+    expect(evening.dueAt?.toISOString()).toBe(atLocalTime("2026-08-09", "20:00").toISOString());
+    expect(evening.key).toBe(occurrenceKeyFor(course.id, atLocalTime("2026-08-09", "20:00").toISOString()));
+    expect(evening.event).not.toBeNull();
+    expect(evening.event?.id).toBe(givenOnOldGrid.id);
+  });
+
+  it("any day before the edit: whole OLD grid", () => {
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-10", "13:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences("2026-08-05", ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString()).sort()).toEqual(
+      [atLocalTime("2026-08-05", "08:00"), atLocalTime("2026-08-05", "20:00")]
+        .map((d) => d.toISOString())
+        .sort(),
+    );
+  });
+
+  it("any day after the edit: whole NEW grid", () => {
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime("2026-08-10", "13:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences("2026-08-15", ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString()).sort()).toEqual(
+      [atLocalTime("2026-08-15", "08:00"), atLocalTime("2026-08-15", "18:00")]
+        .map((d) => d.toISOString())
+        .sort(),
+    );
+  });
+
+  it("edit at 14:00 with 08:00 already given, 20:00→18:00: {08:00 given, 18:00 pending}", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "14:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const given0800 = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime(day, "08:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [given0800],
+      courseEvents: [edited],
+    };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(2);
+    const morning = occs.find((o) => o.dueAt?.getHours() === 8)!;
+    const evening = occs.find((o) => o.dueAt?.getHours() !== 8)!;
+    expect(morning.event?.id).toBe(given0800.id);
+    expect(evening.dueAt?.toISOString()).toBe(atLocalTime(day, "18:00").toISOString());
+    expect(evening.event).toBeNull();
+  });
+
+  it("edit at 19:00, 20:00→18:00, nothing given: the slot moves into the past and reads overdue, never lost", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "19:00").toISOString(),
+      before: ["20:00"],
+      after: ["18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "18:00").toISOString());
+    expect(occs[0].event).toBeNull();
+    expect(getDoseState(occs[0], atLocalTime(day, "20:00"))).toBe("overdue");
+  });
+
+  it("edit at 21:00 with 20:00 already given at 20:05, →18:00: the slot STAYS 20:00 and no phantom 18:00 row appears", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "21:00").toISOString(),
+      before: ["20:00"],
+      after: ["18:00"],
+    });
+    const given2000 = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime(day, "20:00").toISOString(),
+      givenAt: atLocalTime(day, "20:05").toISOString(),
+      loggedAt: atLocalTime(day, "20:05").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [given2000],
+      courseEvents: [edited],
+    };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "20:00").toISOString());
+    expect(occs[0].event?.id).toBe(given2000.id);
+  });
+
+  it("slot count 2→3 on the transition day: the surplus new slot appears once it is itself due", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00", "22:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "09:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00", "22:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString())).toEqual(
+      ["08:00", "18:00", "22:00"].map((t) => atLocalTime(day, t).toISOString()),
+    );
+  });
+
+  it("slot count 3→2 on the transition day: the removed slot vanishes without ever having fired", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "10:00").toISOString(),
+      before: ["08:00", "14:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString())).toEqual(
+      ["08:00", "18:00"].map((t) => atLocalTime(day, t).toISOString()),
+    );
   });
 });

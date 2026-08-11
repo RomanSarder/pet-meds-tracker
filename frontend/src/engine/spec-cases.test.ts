@@ -108,8 +108,8 @@ describe("SPEC §12 — a fromLastDose course logged 90 minutes late moves the n
 
     const after = new Date(2026, 6, 1, 0, 0); // well before both anchors
 
-    const nextOnTime = nextDueAt(onTimeCourse, [onTimeEvent], after);
-    const nextLate = nextDueAt(lateCourse, [lateEvent], after);
+    const nextOnTime = nextDueAt(onTimeCourse, [onTimeEvent], [], after);
+    const nextLate = nextDueAt(lateCourse, [lateEvent], [], after);
 
     expect(nextOnTime).not.toBeNull();
     expect(nextLate).not.toBeNull();
@@ -136,7 +136,7 @@ describe('SPEC §12 — "at its scheduled time" writes givenAt equal to the occu
     });
 
     const after = new Date(2026, 6, 1, 0, 0); // well before the anchor
-    const next = nextDueAt(course, [event], after);
+    const next = nextDueAt(course, [event], [], after);
 
     expect(next).not.toBeNull();
     // Exactly the next grid tick — not "close to" it. Zero drift, unlike
@@ -168,8 +168,8 @@ describe("SPEC §12 — a fixedTimes course logged late does not move the follow
       givenAt: atLocalTime(day, "11:30").toISOString(),
     });
 
-    const occsOnTime = getOccurrences(day, { courses: [course], events: [onTimeEvent] });
-    const occsLate = getOccurrences(day, { courses: [course], events: [lateEvent] });
+    const occsOnTime = getOccurrences(day, { courses: [course], events: [onTimeEvent], courseEvents: [] });
+    const occsLate = getOccurrences(day, { courses: [course], events: [lateEvent], courseEvents: [] });
 
     const twentyDueAt = atLocalTime(day, "20:00");
     const twentyOnTime = occsOnTime.find((o) => o.dueAt?.getTime() === twentyDueAt.getTime())!;
@@ -202,7 +202,7 @@ describe("SPEC §12 — a dose scheduled 23:00 and logged 00:20 counts against t
       givenAt: givenAtNextMorning,
     });
 
-    const ctx: EngineContext = { courses: [course], events: [event] };
+    const ctx: EngineContext = { courses: [course], events: [event], courseEvents: [] };
 
     const occToday = getOccurrences(day, ctx)[0];
     const occTomorrow = getOccurrences(nextDay, ctx)[0];
@@ -227,7 +227,7 @@ describe("SPEC §12 — pausing a course removes it from Today but leaves its hi
       scheduledFor: atLocalTime("2026-08-07", "08:00").toISOString(),
       givenAt: atLocalTime("2026-08-07", "08:05").toISOString(),
     });
-    const ctx: EngineContext = { courses: [course], events: [event] };
+    const ctx: EngineContext = { courses: [course], events: [event], courseEvents: [] };
 
     const occs = getOccurrences("2026-08-08", ctx);
 
@@ -240,7 +240,7 @@ describe("SPEC §12 — pausing a course removes it from Today but leaves its hi
 describe("SPEC §12 — nothing is due for an interval course that has never been started", () => {
   it("reports dueAt === null and getDoseState notStarted for the fixture corpus's never-started fromLastDose course", () => {
     const day = localDayKey(new Date(FIXTURE_NOW));
-    const ctx: EngineContext = { courses: fixtures.courses, events: fixtures.doseEvents };
+    const ctx: EngineContext = { courses: fixtures.courses, events: fixtures.doseEvents, courseEvents: [] };
     const course = fixtures.courses.find(
       (c) => c.schedule.kind === "fromLastDose" && !fixtures.doseEvents.some((e) => e.courseId === c.id),
     )!;
@@ -260,7 +260,7 @@ describe("SPEC §12 — nothing is due for an interval course that has never bee
       startDate: "2026-08-01",
       anchorTime: "09:00",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
 
     const occ = getOccurrences(day, ctx)[0];
 

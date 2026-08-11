@@ -150,6 +150,33 @@ export interface PetsMessages {
   "courses.duration.custom": () => string;
   "courses.mode.fromLastDose": () => string;
   "courses.mode.atSetTimes": () => string;
+
+  // --- scheduleEditModel.ts / the times editor (shift-earlier feature) ----
+  // `gap`/`expected` are already-rendered durations — the caller resolves
+  // them through `history.detail.lateDuration` first (same convention as
+  // `LogAtTimeSheet.tsx`), so no new plural rule is needed here; `time` is a
+  // bare `HH:MM` from `formatHHMM`, never localized (SPEC §10a).
+  /** `fixedTimes`: "Only {gap} since the {time} dose (this course is every {expected})." */
+  "courses.gapWarning.tooSoon": (p: { gap: string; time: string; expected: string }) => string;
+  /** `fromLastDose`: "Only {gap} between doses (was every {expected})." */
+  "courses.gapWarning.tooSoonInterval": (p: { gap: string; expected: string }) => string;
+  /** The sub-`GRACE_FIXED_MIN` band: the second dose this implies cannot
+   * physically be logged (`DuplicateDoseError`), so the copy says so rather
+   * than reusing the softer "only N since…" wording. */
+  "courses.gapWarning.tooSoonToLog": (p: { gap: string }) => string;
+
+  /** Section label for the `fixedTimes` slot editor. */
+  "courses.times.label": () => string;
+  /** Stepper `aria-label`, decrementing one slot — "15 minutes earlier, dose 2". */
+  "courses.times.earlier": (p: { minutes: number; index: number }) => string;
+  /** Stepper `aria-label`, incrementing one slot — "15 minutes later, dose 2". */
+  "courses.times.later": (p: { minutes: number; index: number }) => string;
+  /** The "was 20:00" caption under a slot that has been nudged off its original value. */
+  "courses.times.was": (p: { time: string }) => string;
+  /** Suffix shown once the edited times no longer match any preset (`isPresetSchedule` false). */
+  "courses.times.customNote": () => string;
+  /** The times editor's single `aria-live` region, announced after each stepper press. */
+  "courses.times.announce": (p: { index: number; time: string }) => string;
 }
 
 export const enPets = (f: Formatters): PetsMessages => ({
@@ -268,6 +295,20 @@ export const enPets = (f: Formatters): PetsMessages => ({
   "courses.duration.custom": () => "Custom",
   "courses.mode.fromLastDose": () => "From last dose",
   "courses.mode.atSetTimes": () => "At set times",
+
+  "courses.gapWarning.tooSoon": (p) =>
+    `Only ${p.gap} since the ${p.time} dose (this course is every ${p.expected}).`,
+  "courses.gapWarning.tooSoonInterval": (p) =>
+    `Only ${p.gap} between doses (was every ${p.expected}).`,
+  "courses.gapWarning.tooSoonToLog": (p) =>
+    `Doses less than ${p.gap} apart cannot both be logged.`,
+
+  "courses.times.label": () => "Times",
+  "courses.times.earlier": (p) => `${p.minutes} minutes earlier, dose ${p.index}`,
+  "courses.times.later": (p) => `${p.minutes} minutes later, dose ${p.index}`,
+  "courses.times.was": (p) => `was ${p.time}`,
+  "courses.times.customNote": () => "Custom times",
+  "courses.times.announce": (p) => `Dose ${p.index} set to ${p.time}`,
 });
 
 export const ukPets = (f: Formatters): PetsMessages => ({
@@ -433,4 +474,18 @@ export const ukPets = (f: Formatters): PetsMessages => ({
   "courses.duration.custom": () => "Власний варіант",
   "courses.mode.fromLastDose": () => "Від останньої дози",
   "courses.mode.atSetTimes": () => "У встановлений час",
+
+  "courses.gapWarning.tooSoon": (p) =>
+    `Лише ${p.gap} після дози о ${p.time} (цей курс — кожні ${p.expected}).`,
+  "courses.gapWarning.tooSoonInterval": (p) =>
+    `Лише ${p.gap} між дозами (було кожні ${p.expected}).`,
+  "courses.gapWarning.tooSoonToLog": (p) =>
+    `Дози з інтервалом менше ${p.gap} не можна зафіксувати обидві.`,
+
+  "courses.times.label": () => "Час прийому",
+  "courses.times.earlier": (p) => `На ${p.minutes} хв раніше, доза ${p.index}`,
+  "courses.times.later": (p) => `На ${p.minutes} хв пізніше, доза ${p.index}`,
+  "courses.times.was": (p) => `було ${p.time}`,
+  "courses.times.customNote": () => "Власний розклад",
+  "courses.times.announce": (p) => `Дозу ${p.index} встановлено на ${p.time}`,
 });

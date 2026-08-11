@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { occurrenceKeyFor } from "@/domain";
-import type { Course, DoseEvent, Schedule } from "@/domain";
+import { addLocalDays, atLocalTime, localDayKey, occurrenceKeyFor } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, LocalDate, Schedule } from "@/domain";
 import type { EngineContext } from "./engine.types";
+import { getOccurrences } from "./occurrences";
 import { findCoursesToFinish, findMissedOccurrences, nextDueAt } from "./sweep";
 
 // The test runner pins TZ=Europe/London (see vitest.config.ts).
@@ -50,6 +51,54 @@ function makeEvent(overrides: Partial<DoseEvent> & { courseId: string }): DoseEv
   };
 }
 
+let courseEventSeq = 0;
+/** An `edited` CourseEvent shifting `fixedTimes.times` from `before` to `after` at `at`. */
+function makeEditedEvent(overrides: {
+  courseId: string;
+  at: string;
+  before: string[];
+  after: string[];
+}): CourseEvent {
+  courseEventSeq += 1;
+  return {
+    id: `cev-${courseEventSeq}`,
+    courseId: overrides.courseId,
+    kind: "edited",
+    at: overrides.at,
+    seq: courseEventSeq,
+    actorId: "test-actor-id",
+    before: {
+      schedule: { kind: "fixedTimes", times: overrides.before },
+      doseAmount: 1,
+      doseUnit: "ml",
+      startDate: "2026-08-01",
+      endDate: null,
+    },
+    after: {
+      schedule: { kind: "fixedTimes", times: overrides.after },
+      doseAmount: 1,
+      doseUnit: "ml",
+      startDate: "2026-08-01",
+      endDate: null,
+    },
+    createdAt: overrides.at,
+    updatedAt: overrides.at,
+    deletedAt: null,
+  };
+}
+
+/** The earliest `dueAt > after` across `getOccurrences`, scanning day by day — the reference implementation `nextDueAt` is checked against. */
+function earliestOccurrenceAfter(ctx: EngineContext, after: Date): Date | null {
+  let day: LocalDate = localDayKey(after);
+  for (let i = 0; i < 400; i++) {
+    for (const occ of getOccurrences(day, ctx)) {
+      if (occ.dueAt !== null && occ.dueAt.getTime() > after.getTime()) return occ.dueAt;
+    }
+    day = addLocalDays(day, 1);
+  }
+  return null;
+}
+
 describe("findMissedOccurrences", () => {
   it("returns a fixedTimes occurrence more than 12h past due with no live event", () => {
     // startDate === endDate: a single-day window so this course contributes
@@ -59,7 +108,7 @@ describe("findMissedOccurrences", () => {
       startDate: "2026-08-08",
       endDate: "2026-08-08",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     // 2026-08-08 08:00 local, now is 2026-08-10 10:00 local: well over 12h late.
     const now = new Date(2026, 7, 10, 10, 0);
     const missed = findMissedOccurrences(ctx, now);
@@ -73,7 +122,7 @@ describe("findMissedOccurrences", () => {
       startDate: "2026-08-10",
       endDate: "2026-08-10",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     // Due today at 09:00, now is 10:00 the same day: only 1h late.
     const now = new Date(2026, 7, 10, 10, 0);
     expect(findMissedOccurrences(ctx, now)).toHaveLength(0);
@@ -91,7 +140,7 @@ describe("findMissedOccurrences", () => {
       givenAt: "2026-08-05T22:00:00.000Z", // anchors a due instant on 2026-08-06, days before `now`
       loggedAt: "2026-08-05T22:00:00.000Z",
     });
-    const ctx: EngineContext = { courses: [course], events: [given] };
+    const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
     const now = new Date(2026, 7, 10, 10, 0);
     expect(findMissedOccurrences(ctx, now)).toHaveLength(0);
   });
@@ -110,7 +159,7 @@ describe("findMissedOccurrences", () => {
       loggedAt: "2026-08-08T20:00:00.000Z",
       givenAt: "2026-08-08T20:00:00.000Z",
     });
-    const ctx: EngineContext = { courses: [course], events: [missedEvent] };
+    const ctx: EngineContext = { courses: [course], events: [missedEvent], courseEvents: [] };
     const now = new Date(2026, 7, 10, 10, 0);
     expect(findMissedOccurrences(ctx, now)).toHaveLength(0);
   });
@@ -121,7 +170,7 @@ describe("findMissedOccurrences", () => {
       startDate: "2026-08-02",
       endDate: "2026-08-02",
     });
-    const ctx: EngineContext = { courses: [course], events: [] };
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [] };
     // now's local day is 2026-08-10; 8 days back is 2026-08-02, outside the
     // default 7-day lookback window (2026-08-03..2026-08-10).
     const now = new Date(2026, 7, 10, 10, 0);
@@ -140,7 +189,7 @@ describe("findMissedOccurrences", () => {
       startDate: "2026-08-09",
       endDate: "2026-08-09",
     });
-    const ctx: EngineContext = { courses: [today, yesterday], events: [] };
+    const ctx: EngineContext = { courses: [today, yesterday], events: [], courseEvents: [] };
     // now's local day is 2026-08-10; today's 08:00 occurrence is >12h late.
     const now = new Date(2026, 7, 10, 21, 0);
     const missed = findMissedOccurrences(ctx, now, { lookbackDays: 0 });
@@ -157,7 +206,7 @@ describe("findMissedOccurrences", () => {
         startDate: "2026-08-10",
         endDate: "2026-08-10",
       });
-      const ctx: EngineContext = { courses: [today], events: [] };
+      const ctx: EngineContext = { courses: [today], events: [], courseEvents: [] };
       const now = new Date(2026, 7, 10, 21, 0);
       const missed = findMissedOccurrences(ctx, now, { lookbackDays: -3 });
       expect(missed).toHaveLength(1);
@@ -173,7 +222,7 @@ describe("nextDueAt", () => {
       startDate: "2026-08-01",
     });
     const after = new Date(2026, 7, 10, 10, 0); // between the two times
-    const next = nextDueAt(course, [], after);
+    const next = nextDueAt(course, [], [], after);
     expect(next?.toISOString()).toBe(new Date(2026, 7, 10, 20, 0).toISOString());
   });
 
@@ -183,7 +232,7 @@ describe("nextDueAt", () => {
       startDate: "2026-08-01",
     });
     const after = new Date(2026, 7, 10, 21, 0); // after both times today
-    const next = nextDueAt(course, [], after);
+    const next = nextDueAt(course, [], [], after);
     expect(next?.toISOString()).toBe(new Date(2026, 7, 11, 8, 0).toISOString());
   });
 
@@ -200,7 +249,7 @@ describe("nextDueAt", () => {
       loggedAt: "2026-08-10T08:00:00.000Z",
     });
     const after = new Date("2026-08-10T09:00:00.000Z");
-    const next = nextDueAt(course, [given], after);
+    const next = nextDueAt(course, [given], [], after);
     expect(next?.toISOString()).toBe("2026-08-10T16:00:00.000Z");
   });
 
@@ -217,7 +266,7 @@ describe("nextDueAt", () => {
       loggedAt: "2026-08-05T22:00:00.000Z",
     });
     const after = new Date(2026, 7, 10, 10, 0);
-    expect(nextDueAt(course, [given], after)).toBeNull();
+    expect(nextDueAt(course, [given], [], after)).toBeNull();
   });
 
   it("fromLastDose: a never-started course with anchorTime returns the next anchorTime instant", () => {
@@ -226,7 +275,7 @@ describe("nextDueAt", () => {
       startDate: "2026-08-01",
     });
     const after = new Date(2026, 7, 10, 10, 0); // after today's 09:00
-    const next = nextDueAt(course, [], after);
+    const next = nextDueAt(course, [], [], after);
     expect(next?.toISOString()).toBe(new Date(2026, 7, 11, 9, 0).toISOString());
   });
 
@@ -236,7 +285,7 @@ describe("nextDueAt", () => {
       startDate: "2026-08-01",
     });
     const after = new Date(2026, 7, 10, 10, 0);
-    expect(nextDueAt(course, [], after)).toBeNull();
+    expect(nextDueAt(course, [], [], after)).toBeNull();
   });
 });
 
@@ -274,8 +323,95 @@ describe("findCoursesToFinish", () => {
     const ctx: EngineContext = {
       courses: [finishable, endsToday, ongoing, alreadyStopped, deletedCourse],
       events: [],
+      courseEvents: [],
     };
 
     expect(findCoursesToFinish(ctx, now)).toEqual([finishable.id]);
+  });
+});
+
+// SPEC §3c: this is the direct regression test for the phantom-rows bug —
+// sweeping, writing what was found, then applying a schedule edit must not
+// make the sweep find those same past occurrences "missed" all over again.
+describe("findMissedOccurrences is idempotent across a schedule edit (SPEC §3c)", () => {
+  it("re-running the sweep after recording missed events and then editing the schedule finds zero new candidates", () => {
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00"] },
+      startDate: "2026-08-08",
+      endDate: "2026-08-08",
+    });
+    const now = new Date(2026, 7, 10, 10, 0); // well over 12h past the single 08:00 occurrence
+
+    const ctxBeforeEdit: EngineContext = { courses: [course], events: [], courseEvents: [] };
+    const missedBefore = findMissedOccurrences(ctxBeforeEdit, now);
+    expect(missedBefore).toHaveLength(1);
+
+    // Write what the sweep found as `missed` DoseEvents — what W1's
+    // `recordMissed` would do with this pass's output.
+    const missedEvents: DoseEvent[] = missedBefore.map((occ) =>
+      makeEvent({
+        courseId: occ.courseId,
+        scheduledFor: occ.dueAt!.toISOString(),
+        status: "missed",
+        loggedAt: now.toISOString(),
+        givenAt: now.toISOString(),
+      }),
+    );
+
+    // Now the schedule is edited — 08:00 becomes 10:00 — with the ledger
+    // entry recording it, effective from `now` onward.
+    const editedCourse: Course = { ...course, schedule: { kind: "fixedTimes", times: ["10:00"] } };
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: now.toISOString(),
+      before: ["08:00"],
+      after: ["10:00"],
+    });
+
+    const ctxAfterEdit: EngineContext = {
+      courses: [editedCourse],
+      events: missedEvents,
+      courseEvents: [edited],
+    };
+    const missedAfter = findMissedOccurrences(ctxAfterEdit, now);
+    expect(missedAfter).toHaveLength(0);
+
+    // The past day's occurrence still carries the SAME key, still resolved
+    // by the missed event just written — no drift, no orphan.
+    const occsAfter = getOccurrences(missedBefore[0].day, ctxAfterEdit);
+    const matched = occsAfter.find((o) => o.key === missedBefore[0].key);
+    expect(matched).toBeDefined();
+    expect(matched?.event?.id).toBe(missedEvents[0].id);
+  });
+});
+
+describe("nextDueAt agrees with getOccurrences across a schedule edit (property, SPEC §3c)", () => {
+  it("equals the earliest getOccurrences entry with dueAt > after, for several afters straddling the edit", () => {
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] },
+      startDate: "2026-08-01",
+    });
+    const changedAt = atLocalTime("2026-08-10", "14:00");
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: changedAt.toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["08:00", "18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const afters = [
+      atLocalTime("2026-08-08", "09:00"), // well before the edit
+      atLocalTime("2026-08-10", "07:00"), // edit day, before the morning slot
+      atLocalTime("2026-08-10", "13:59"), // edit day, just before the edit
+      atLocalTime("2026-08-10", "19:00"), // edit day, after the edit
+      atLocalTime("2026-08-12", "09:00"), // well after the edit
+    ];
+
+    for (const after of afters) {
+      const next = nextDueAt(course, [], [edited], after);
+      const reference = earliestOccurrenceAfter(ctx, after);
+      expect(next?.toISOString() ?? null).toBe(reference?.toISOString() ?? null);
+    }
   });
 });
