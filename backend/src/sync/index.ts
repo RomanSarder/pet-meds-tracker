@@ -1,12 +1,13 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fastifyPlugin from "fastify-plugin";
-import { and, asc, eq, getTableColumns, gt, sql, SQL } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, gt, ne, sql, SQL } from "drizzle-orm";
 import { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import {
   CourseDto,
   CourseEventDto,
   DoseEventDto,
   MedicationDto,
+  MemberDto,
   PetDto,
   StockAdjustmentDto,
   SyncPayload,
@@ -24,6 +25,7 @@ import {
   users,
 } from "../db/schema";
 import authenticatePlugin from "../auth/authenticate-plugin";
+import { toMemberDto } from "../household/index";
 
 // W9-DESIGN §D5: page size for GET /sync/pull. A table whose result reaches
 // exactly this many rows is presumed truncated — see the cursor rule below.
@@ -397,6 +399,36 @@ async function pullTable(
   return { rows, truncated: rows.length >= PULL_LIMIT, maxSeq };
 }
 
+/**
+ * The caller's household roster (every OTHER member — never the caller's own
+ * row), attached to every `/sync/pull` response under `changes.users`.
+ *
+ * Deliberately NOT a `SYNC_TABLES` entry: `users` is the auth identity table
+ * (unique `email`, no `updated_at`/`sync_seq` column, sessions and magic-link
+ * tokens hang off its `id`), so it cannot safely take the generic mutable
+ * table's client-writable LWW upsert the way pets/medications/etc. do — a
+ * client-supplied row on THIS table could otherwise collide with another
+ * account's identity. Accordingly this is PULL-ONLY: `/sync/push` never reads
+ * a `users` key from the request body at all (see `pushTable`'s callers
+ * below, which only ever iterate `SYNC_TABLES`).
+ *
+ * Also deliberately NOT cursor-gated like the six tables: household rosters
+ * are small (a handful of people), so every pull just re-sends the CURRENT
+ * full list rather than tracking a `sync_seq` watermark and soft-delete
+ * tombstone for a table this size — the simpler, safer choice here over
+ * adding replication columns to the auth table. `household_id` is taken from
+ * `requireHousehold`'s session-derived value, never from client input, so
+ * this can never return another household's members (W9-DESIGN §D5's rule,
+ * same as every other table in this file).
+ */
+async function pullRoster(db: any, householdId: string, callerUserId: string): Promise<MemberDto[]> {
+  const rows = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.householdId, householdId), ne(users.id, callerUserId)));
+  return rows.map(toMemberDto);
+}
+
 export default fastifyPlugin(async (fastify) => {
   // MUST be awaited — see household/index.ts for why a bare register() leaves
   // `fastify.authenticate` undefined at route-definition time.
@@ -464,6 +496,15 @@ export default fastifyPlugin(async (fastify) => {
       // apply is idempotent, and no row can be skipped. Otherwise advance to
       // the max actually returned, or leave the cursor untouched if nothing was.
       const nextCursor = anyTruncated ? truncatedMin : anyRows ? overallMax : cursor;
+
+      // Runs after the six-table loop and does not affect `nextCursor`/
+      // `hasMore` at all — see `pullRoster`'s comment for why this is a
+      // separate, uncursored side channel rather than a seventh SYNC_TABLES
+      // entry.
+      const roster = await pullRoster(fastify.db, householdId, request.userId);
+      if (roster.length > 0) {
+        changes.users = roster;
+      }
 
       return { changes, cursor: String(nextCursor), hasMore: anyTruncated };
     },

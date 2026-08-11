@@ -6,6 +6,7 @@
 import { cloneFixtures } from "@/domain";
 import type { Clock, FixtureData } from "@/domain";
 import type {
+  MemberDto,
   SyncPayload,
   SyncPullResult,
   SyncPushResult,
@@ -39,8 +40,12 @@ interface StoredRow {
  * `sync_seq`. `pullLimit` defaults far above anything a test needs, and can
  * be lowered to exercise `hasMore` pagination.
  */
-export function createFakeServer(opts?: { pullLimit?: number }) {
+export function createFakeServer(opts?: { pullLimit?: number; roster?: MemberDto[] }) {
   const pullLimit = opts?.pullLimit ?? 500;
+  // Mirrors `backend/src/sync/index.ts`'s `pullRoster`: not cursor-gated,
+  // just the current full list attached to every pull response. Mutable so a
+  // test can grow the household mid-scenario via `setRoster`.
+  let roster = opts?.roster ?? [];
   let seq = 0;
   const tables = new Map<TableKey, Map<string, StoredRow>>(TABLE_KEYS.map((k) => [k, new Map()]));
 
@@ -96,6 +101,9 @@ export function createFakeServer(opts?: { pullLimit?: number }) {
     }
 
     const nextCursor = anyTruncated ? truncatedMin : anyRows ? overallMax : cursor;
+    if (roster.length > 0) {
+      changes.users = roster;
+    }
     return { changes, cursor: String(nextCursor), hasMore: anyTruncated };
   }
 
@@ -104,7 +112,7 @@ export function createFakeServer(opts?: { pullLimit?: number }) {
     pull: async (cursor) => pull(cursor),
   };
 
-  return { transport };
+  return { transport, setRoster: (next: MemberDto[]) => (roster = next) };
 }
 
 /** Wraps a transport so its `push`/`pull` reject until `failures` calls have been made. */

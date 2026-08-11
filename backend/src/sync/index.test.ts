@@ -568,14 +568,103 @@ describe.each(TABLE_SPECS)("cross-household isolation: $key", (spec) => {
     expect(res.json().changes[spec.key]).toHaveLength(1);
 
     // The auth plugin and requireHousehold also issue `.where()` calls before
-    // the six table pulls (session lookup, session slide-expiry, user lookup)
-    // — take only the trailing six, one per SYNC_TABLES entry in order.
-    const whereCalls = db.calls.filter((c: any) => c.method === "where").slice(-TABLE_SPECS.length);
+    // the six table pulls (session lookup, session slide-expiry, user lookup),
+    // and `pullRoster`'s household-roster query issues one more AFTER them —
+    // take only the six in between, one per SYNC_TABLES entry in order.
+    const whereCalls = db.calls
+      .filter((c: any) => c.method === "where")
+      .slice(-TABLE_SPECS.length - 1, -1);
     expect(whereCalls).toHaveLength(TABLE_SPECS.length);
     const relevantWhere = whereCalls[idx];
     const { sql, params } = renderSql(relevantWhere.args[0]);
     expect(sql).toContain("household_id");
     expect(params).toContain(HOUSEHOLD_A);
     expect(params).not.toContain(HOUSEHOLD_B);
+  });
+});
+
+// --------------------------------------------------------------------------
+// `pullRoster` — the household roster `GET /sync/pull` attaches to
+// `changes.users` (see that function's comment in `sync/index.ts` for why
+// this is a separate, uncursored side channel rather than an eighth
+// TABLE_SPECS entry). The reported defect: a device that never opens the
+// Household screen never learns any OTHER member's name at all, so a dose
+// they logged renders "Someone" forever instead of their real name.
+// --------------------------------------------------------------------------
+
+const MARTA_ID = "00000000-0000-0000-0000-0000000000c2";
+
+function marta(overrides: Record<string, unknown> = {}) {
+  return {
+    id: MARTA_ID,
+    email: "marta@example.com",
+    createdAt: new Date(NOW),
+    householdId: HOUSEHOLD_A,
+    displayName: "Marta",
+    tint: 2,
+    joinedAt: new Date(NOW),
+    ...overrides,
+  };
+}
+
+// NOT async, and never awaited by a caller: `mockDbRecording`'s chain is
+// itself a thenable (it implements `.then` to serve queued results), so
+// returning it from an `async function` — or `await`-ing this helper's
+// result — would let the JS Promise machinery treat the chain as something
+// TO resolve, silently unwrapping it into its first queued result instead of
+// the chain object callers actually need. `sessionRow` is resolved by the
+// caller first (`buildSession()` IS genuinely async — it hashes a secret) and
+// passed in already-settled, matching `pullDb`'s pattern above.
+function pullDbWithRoster(
+  sessionRow: unknown,
+  rosterRows: unknown[],
+  sessionOverrides: Record<string, unknown> = {},
+) {
+  const emptyTableRows = TABLE_SPECS.map(() => []);
+  return mockDbRecording([sessionRow], [], [makeUser(sessionOverrides)], ...emptyTableRows, rosterRows);
+}
+
+describe("GET /sync/pull — household roster (pullRoster)", () => {
+  it("attaches the caller's OTHER members to changes.users, excluding the caller's own row", async () => {
+    const sessionRow = await buildSession();
+    const db = pullDbWithRoster(sessionRow, [marta()], { householdId: HOUSEHOLD_A });
+    const app = build(db);
+    const res = await authed(app, { method: "GET", url: "/sync/pull" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().changes.users).toEqual([
+      { id: MARTA_ID, householdId: HOUSEHOLD_A, displayName: "Marta", tint: 2, joinedAt: NOW },
+    ]);
+  });
+
+  it("omits changes.users entirely when the caller has no other members", async () => {
+    const sessionRow = await buildSession();
+    const db = pullDbWithRoster(sessionRow, [], { householdId: HOUSEHOLD_A });
+    const app = build(db);
+    const res = await authed(app, { method: "GET", url: "/sync/pull" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().changes.users).toBeUndefined();
+  });
+
+  it("tenant isolation: the roster query is scoped to the caller's own household and excludes the caller, never a client-supplied id", async () => {
+    const sessionRow = await buildSession();
+    const db = pullDbWithRoster(sessionRow, [marta()], { householdId: HOUSEHOLD_A });
+    const app = build(db);
+    const res = await authed(app, { method: "GET", url: "/sync/pull" });
+    expect(res.statusCode).toBe(200);
+
+    // The trailing `.where()` call is `pullRoster`'s — everything else in
+    // this route is asserted by the `describe.each(TABLE_SPECS)` block above.
+    const whereCalls = db.calls.filter((c: any) => c.method === "where");
+    const rosterWhere = whereCalls[whereCalls.length - 1];
+    const { sql, params } = renderSql(rosterWhere.args[0]);
+    expect(sql).toContain("household_id");
+    // Scoped to the caller's OWN session-derived household — HOUSEHOLD_A —
+    // never HOUSEHOLD_B, and there is no request field through which a
+    // caller could supply a different household id at all.
+    expect(params).toContain(HOUSEHOLD_A);
+    expect(params).not.toContain(HOUSEHOLD_B);
+    // And the caller's own id is excluded server-side (from `request.userId`,
+    // the authenticated session), never left for the client to filter.
+    expect(params).toContain(USER_ID);
   });
 });

@@ -6,6 +6,7 @@ import type { Repo } from "@/data";
 import type { Clock, DoseEvent, Timestamped } from "@/domain";
 import { RETRACT_GRACE_MS, UNDO_WINDOW_MS } from "@/domain";
 import { domainToPayload, payloadToRemoteChanges } from "./mapping";
+import { mirrorMembers } from "./mirrorMembers";
 import type { SyncEngine, SyncTransport } from "./types";
 
 /**
@@ -30,7 +31,7 @@ function isQuarantined(event: DoseEvent, nowMs: number): boolean {
 }
 
 export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOptions): SyncEngine {
-  async function syncOnce(): Promise<void> {
+  async function syncOnce(): Promise<boolean> {
     const lastPushedAt = await repo.getMeta("lastPushedAt");
     const backup = await repo.exportHousehold();
     const nowMs = clock.now().getTime();
@@ -66,16 +67,32 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
 
     const householdId = await repo.currentHouseholdId();
     let cursor = await repo.getMeta("syncCursor");
+    let changedAnything = false;
 
     for (;;) {
       const result = await transport.pull(cursor);
       // The cursor advances only after a successful apply, so a crash
       // mid-apply re-delivers this page rather than skipping it.
-      await repo.applyRemoteChanges(payloadToRemoteChanges(result.changes, householdId));
+      const report = await repo.applyRemoteChanges(payloadToRemoteChanges(result.changes, householdId));
+      if (Object.values(report.applied).some((count) => count > 0)) {
+        changedAnything = true;
+      }
+      // `changes.users` is the household roster (packages/shared/src/sync.ts,
+      // backend/src/sync/index.ts's `pullRoster`) — not part of
+      // `RemoteChanges`/`applyRemoteChanges` (that contract deliberately
+      // excludes `users`, same as `HouseholdBackup`'s merge always has), so
+      // it is mirrored separately through the same helper `useRefreshMembers`
+      // uses for `GET /household`.
+      if (result.changes.users && result.changes.users.length > 0) {
+        const membersChanged = await mirrorMembers(repo, result.changes.users);
+        if (membersChanged) changedAnything = true;
+      }
       cursor = result.cursor;
       await repo.setMeta("syncCursor", cursor);
       if (!result.hasMore) break;
     }
+
+    return changedAnything;
   }
 
   return { syncOnce };

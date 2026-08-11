@@ -36,7 +36,11 @@ function toHouseholdDto(row: HouseholdRow) {
 // SPEC §5: "If a user is somehow persisted without a name, render 'Someone'" — that
 // substitution belongs to the frontend's displayNameFor helper, so the wire DTO just
 // carries "" for an unset name rather than inventing a placeholder server-side.
-function toMemberDto(user: UserRow): MemberDto {
+//
+// Exported so `sync/index.ts` can reuse it for the roster it now attaches to
+// every `/sync/pull` response (see that file) — one row-to-DTO mapping for
+// the `users` table, not two that could drift apart.
+export function toMemberDto(user: UserRow): MemberDto {
   return {
     id: user.id,
     householdId: user.householdId!,
