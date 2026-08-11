@@ -102,6 +102,34 @@ describe("dosesPerDay", () => {
     expect(dosesPerDay({ kind: "fromLastDose", intervalHours: -4 })).toBe(0);
     expect(dosesPerDay({ kind: "fixedTimes", times: [] })).toBe(0);
   });
+
+  // SPEC §8/§3b-i: `min(24 / intervalHours, maxPerDay)` once a maximum is
+  // set — never plain division. Also SPEC §12's "an interval course with no
+  // maximum set behaves exactly as before" bullet, engine-adjacent half: the
+  // unset case must take the EXACT SAME branch as before this feature
+  // existed, with no `min()` anywhere in its computation.
+  describe("maxPerDay (SPEC §3b-i)", () => {
+    it("caps the plain interval rate when the cap is the binding constraint", () => {
+      // every 4h -> 6/day uncapped; capped at 3 -> 3, not 6.
+      expect(dosesPerDay({ kind: "fromLastDose", intervalHours: 4, maxPerDay: 3 })).toBe(3);
+    });
+
+    it("leaves the interval rate untouched when the interval is already the binding constraint", () => {
+      // every 24h -> 1/day uncapped; a maximum of 3 never applies.
+      expect(dosesPerDay({ kind: "fromLastDose", intervalHours: 24, maxPerDay: 3 })).toBe(1);
+    });
+
+    it("is a true no-op when maxPerDay is absent: identical to the plain-division result, object-for-object", () => {
+      const uncapped = dosesPerDay({ kind: "fromLastDose", intervalHours: 8 });
+      const explicitlyUndefined = dosesPerDay({
+        kind: "fromLastDose",
+        intervalHours: 8,
+        maxPerDay: undefined,
+      });
+      expect(uncapped).toBe(3);
+      expect(explicitlyUndefined).toBe(3);
+    });
+  });
 });
 
 describe("tone boundaries", () => {

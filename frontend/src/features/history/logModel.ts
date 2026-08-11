@@ -37,6 +37,7 @@ export type LogEntryStatus = "given" | "skipped" | "missed" | "course";
 export type DetailClause =
   | { kind: "given" }
   | { kind: "givenLate"; hours: number; minutes: number } // hours may be 0
+  | { kind: "overMax" } // SPEC §3b-i: a "Give anyway" dose past the daily cap
   | { kind: "skipped" }
   | { kind: "missed" }
   | { kind: "scheduledAt"; time: string } // "07:00"
@@ -187,6 +188,13 @@ function buildDoseEntry(
   }
 
   const clauses: DetailClause[] = [doseHeadClause(de.status, lateMs)];
+
+  // SPEC §3b-i: "Give anyway" past the cap reads "over the daily maximum" —
+  // right after the given/late headline, ahead of instructions/notes, same
+  // position `chainShifted`/`nextDue` occupy for an ordinary given dose.
+  if (de.status === "given" && de.overMax === true) {
+    clauses.push({ kind: "overMax" });
+  }
 
   if (de.status === "missed" && scheduledFor !== null) {
     clauses.push({ kind: "scheduledAt", time: formatHHMM(new Date(scheduledFor)) });

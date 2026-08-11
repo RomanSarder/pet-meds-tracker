@@ -38,10 +38,18 @@ export interface MedicationProjection {
   needsStockPrompt: boolean;
 }
 
-/** Average doses per day implied by the schedule SHAPE. */
+/**
+ * Average doses per day implied by the schedule SHAPE. SPEC §8: a
+ * `fromLastDose` course counts `24 / intervalHours` doses per day, or
+ * `min(24 / intervalHours, maxPerDay)` once a daily maximum is set — the
+ * `undefined` (unset) case takes the plain-division branch untouched, with
+ * no `min()` in the computation at all (SPEC §3b-i's builder checklist).
+ */
 export function dosesPerDay(schedule: Schedule): number {
   if (schedule.kind === "fromLastDose") {
-    return schedule.intervalHours <= 0 ? 0 : 24 / schedule.intervalHours;
+    if (schedule.intervalHours <= 0) return 0;
+    const perDay = 24 / schedule.intervalHours;
+    return schedule.maxPerDay !== undefined ? Math.min(perDay, schedule.maxPerDay) : perDay;
   }
   if (schedule.times.length === 0) return 0;
   const weekdayFactor = schedule.daysOfWeek?.length

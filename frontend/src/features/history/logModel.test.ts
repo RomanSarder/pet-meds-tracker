@@ -379,6 +379,45 @@ describe("buildLogEntries", () => {
       expect(detailOf(entry)).toBe("Given");
     });
 
+    // SPEC §3b-i: a "Give anyway" dose past the daily cap reads "over the
+    // daily maximum" right after the given headline.
+    it('given, flagged overMax -> "Given · over the daily maximum"', () => {
+      const course = makeCourse();
+      const medication = makeMedication();
+      const dose = makeDoseEvent({
+        scheduledFor: "2026-08-01T07:00:00.000Z",
+        givenAt: "2026-08-01T07:00:00.000Z",
+        overMax: true,
+      });
+      const [entry] = buildLogEntries(
+        srcOf({ courses: [course], medications: [medication], doseEvents: [dose] }),
+      );
+      expect(detailOf(entry)).toBe("Given · over the daily maximum");
+    });
+
+    it("no overMax clause when the flag is absent, and none for a skipped dose even if overMax were somehow true", () => {
+      const course = makeCourse();
+      const medication = makeMedication();
+      const plainGiven = makeDoseEvent({
+        scheduledFor: "2026-08-01T07:00:00.000Z",
+        givenAt: "2026-08-01T07:00:00.000Z",
+      });
+      const skippedOverMax = makeDoseEvent({
+        id: "dose-2",
+        status: "skipped",
+        scheduledFor: "2026-08-01T07:00:00.000Z",
+        givenAt: "2026-08-01T07:00:00.000Z",
+        overMax: true,
+      });
+      const entries = buildLogEntries(
+        srcOf({ courses: [course], medications: [medication], doseEvents: [plainGiven, skippedOverMax] }),
+      );
+      const plainEntry = entries.find((e) => e.id === "dose-1")!;
+      const skippedEntry = entries.find((e) => e.id === "dose-2")!;
+      expect(detailOf(plainEntry)).toBe("Given");
+      expect(detailOf(skippedEntry)).toBe("Skipped");
+    });
+
     it('SPEC §6.4 example: "Given 40 min late · chain shifted"', () => {
       const course = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 8 } });
       const medication = makeMedication();

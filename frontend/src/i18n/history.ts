@@ -30,6 +30,8 @@ function renderClause(clause: DetailClause, tr: Translator): string {
           minutes: clause.minutes,
         }),
       });
+    case "overMax":
+      return tr.t("history.detail.overMax");
     case "skipped":
       return tr.t("history.detail.skipped");
     case "missed":

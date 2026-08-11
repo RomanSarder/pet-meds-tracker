@@ -666,6 +666,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     amount: number;
     note?: string;
     allowWithinGrace?: boolean;
+    overMax?: boolean;
   }): Promise<DoseEvent> {
     const actorId = await currentActorId();
     const conn = await db();
@@ -743,6 +744,9 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
+      // Absent (never explicit `false`) unless the caller confirms this was
+      // a "Give anyway" past the cap — see `repo.types.ts`'s doc comment.
+      ...(input.overMax ? { overMax: true } : {}),
     };
     await store.add(event);
     await tx.done;

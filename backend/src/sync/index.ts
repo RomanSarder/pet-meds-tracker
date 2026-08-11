@@ -170,6 +170,9 @@ function doseEventToDto(row: typeof doseEvents.$inferSelect): DoseEventDto {
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
     deletedAt: isoOrNull(row.deletedAt),
+    // Optional on the wire (absent means "never over") even though the
+    // column is a plain NOT NULL boolean — omit rather than send `false`.
+    ...(row.overMax ? { overMax: true } : {}),
   };
 }
 
@@ -190,6 +193,7 @@ function doseEventFromDto(dto: DoseEventDto, householdId: string): typeof doseEv
     createdAt: new Date(dto.createdAt),
     updatedAt: new Date(dto.updatedAt),
     deletedAt: dateOrNull(dto.deletedAt),
+    overMax: dto.overMax === true,
   };
 }
 

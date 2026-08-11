@@ -4,7 +4,15 @@
 // timers — per the contract's explicit instruction.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Clock, Course } from "@/domain";
-import { FIXTURE_NOW, GRACE_FIXED_MIN, MISSED_AFTER_HOURS, occurrenceKeyFor } from "@/domain";
+import {
+  addLocalDays,
+  atLocalTime,
+  FIXTURE_NOW,
+  GRACE_FIXED_MIN,
+  localDayKey,
+  MISSED_AFTER_HOURS,
+  occurrenceKeyFor,
+} from "@/domain";
 import { setRepo, type Repo } from "@/data";
 import { createMemoryRepo } from "@/data/memoryRepo";
 import type { DoseState } from "@/engine";
@@ -109,7 +117,7 @@ describe("decideAlert", () => {
     );
   });
 
-  it.each(["given", "skipped", "later", "upcoming", "notStarted"] as DoseState[])(
+  it.each(["given", "skipped", "later", "upcoming", "notStarted", "capped"] as DoseState[])(
     "is null for state '%s' regardless of timing",
     (state) => {
       expect(decideAlert({ state, dueAtMs: DUE, nowMs: DUE, record: null })).toBeNull();
@@ -253,6 +261,73 @@ describe("createNotificationScheduler — fromLastDose", () => {
 
     // At due: exactly one.
     clock.set(dueAt);
+    await scheduler.tick();
+    expect(callsFor(show, course.id)).toHaveLength(1);
+  });
+});
+
+// --- scheduler: SPEC §3b-i, a capped course notifies nothing until tomorrow -
+
+describe("createNotificationScheduler — a capped course notifies nothing until tomorrow (SPEC §3b-i)", () => {
+  const START = "2026-08-08T00:00:00.000Z";
+  let repo: Repo;
+  let course: Course;
+  let clock: ReturnType<typeof movableClock>;
+  let show: ShowSpy;
+  let scheduler: ReturnType<typeof createNotificationScheduler>;
+
+  beforeEach(async () => {
+    repo = createMemoryRepo();
+    setRepo(repo);
+    const [pet] = await repo.listPets();
+    const [medication] = await repo.listMedications();
+    course = await repo.createCourse({
+      petId: pet.id,
+      medicationId: medication.id,
+      doseAmount: 1,
+      doseUnit: "ml",
+      instructions: null,
+      schedule: { kind: "fromLastDose", intervalHours: 4, maxPerDay: 1 },
+      startDate: "2026-08-08",
+      endDate: null,
+      notes: null,
+    });
+    clock = movableClock(START);
+    show = fakeShow();
+    scheduler = createNotificationScheduler({
+      clock,
+      ledger: new AlertLedger(memoryStorage()),
+      show,
+      timers: fakeTimers(),
+    });
+  });
+
+  it("suppresses the plain interval due-time once the day's one dose is given, and fires only once the day rolls over", async () => {
+    const givenAt = plusMinutes(START, 60);
+    await repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1, givenAt });
+
+    // What would be due WITHOUT the cap — `getDoseState` reads `capped`
+    // here (never `due`/`overdue`), so `decideAlert` never fires.
+    const rawDueAt = plusMinutes(givenAt, 4 * 60);
+    clock.set(rawDueAt);
+    await scheduler.tick();
+    expect(callsFor(show, course.id)).toHaveLength(0);
+
+    // Still capped well past the plain due time, for the rest of that day.
+    clock.set(plusMinutes(rawDueAt, 5 * 60));
+    await scheduler.tick();
+    expect(callsFor(show, course.id)).toHaveLength(0);
+
+    // SPEC §3b-i: the effective due instant is 00:00 the day after the dose
+    // that reached the cap — a new calendar day resets the day's count.
+    const givenDay = localDayKey(new Date(givenAt));
+    const cappedDueAt = atLocalTime(addLocalDays(givenDay, 1), "00:00");
+
+    clock.set(new Date(cappedDueAt.getTime() - 60_000).toISOString());
+    await scheduler.tick();
+    expect(callsFor(show, course.id)).toHaveLength(0);
+
+    clock.set(cappedDueAt.toISOString());
     await scheduler.tick();
     expect(callsFor(show, course.id)).toHaveLength(1);
   });

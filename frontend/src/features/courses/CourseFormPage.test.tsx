@@ -651,3 +651,95 @@ describe("times editor: shifting a preset course's times earlier", () => {
     expect(updated.schedule).toEqual({ kind: "fixedTimes", times: ["08:00", "14:00", "20:00"] });
   });
 });
+
+describe("daily maximum chips (SPEC §3b-i / §6.7 step 5a)", () => {
+  it("shows for 'From last dose' with 'No maximum' selected by default, and is hidden entirely for 'At set times'", async () => {
+    renderCreateForm();
+    const user = userEvent.setup();
+    await screen.findByText("Clover");
+
+    expect(screen.getByText("Daily maximum")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "No maximum" })).toHaveAttribute("aria-pressed", "true");
+
+    await clickChip(user, "At set times");
+    expect(screen.queryByText("Daily maximum")).not.toBeInTheDocument();
+
+    await clickChip(user, "From last dose");
+    expect(screen.getByText("Daily maximum")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "No maximum" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("is savable without touching the control, and persists a schedule with no maxPerDay key at all", async () => {
+    const repo = createMemoryRepo();
+    const { repo: usedRepo } = renderWithProviders(<CourseFormView />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("Clover");
+    await selectPet(user, "Clover");
+    await typeMedication(user, "No Maximum Course");
+    await typeDose(user, "0.4", "ml");
+    await clickSave(user);
+
+    const created = await waitFor(async () => {
+      const courses = await usedRepo.listCourses({ petId: CLOVER.id });
+      const match = courses.find((c) => c.doseAmount === 0.4 && c.schedule.kind === "fromLastDose");
+      expect(match).toBeDefined();
+      return match!;
+    });
+    expect(created.schedule).toEqual({ kind: "fromLastDose", intervalHours: 8 });
+    expect("maxPerDay" in created.schedule).toBe(false);
+  });
+
+  it("selecting '3' saves maxPerDay: 3, and the reminders card gains the extra sentence only once a maximum is set", async () => {
+    const repo = createMemoryRepo();
+    const { repo: usedRepo } = renderWithProviders(<CourseFormView />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("Clover");
+    await selectPet(user, "Clover");
+    await typeMedication(user, "Max Three Course");
+    await typeDose(user, "0.4", "ml");
+
+    expect(
+      screen.queryByText(/Nothing more is due once/),
+    ).not.toBeInTheDocument();
+
+    await clickChip(user, "3");
+    expect(screen.getByRole("button", { name: "3" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "No maximum" })).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByText(
+        /Nothing more is due once 3 doses have been given today — you can still give and record one if needed\./,
+      ),
+    ).toBeInTheDocument();
+
+    await clickSave(user);
+    const created = await waitFor(async () => {
+      const courses = await usedRepo.listCourses({ petId: CLOVER.id });
+      const match = courses.find((c) => c.doseAmount === 0.4 && c.schedule.kind === "fromLastDose");
+      expect(match).toBeDefined();
+      return match!;
+    });
+    expect(created.schedule).toEqual({ kind: "fromLastDose", intervalHours: 8, maxPerDay: 3 });
+  });
+
+  it("edit mode prefills the pressed maximum chip from an existing capped course", async () => {
+    const repo = createMemoryRepo();
+    const existing = await repo.createCourse({
+      petId: CLOVER.id,
+      medicationId: METACAM.id,
+      doseAmount: 0.4,
+      doseUnit: "ml",
+      instructions: null,
+      schedule: { kind: "fromLastDose", intervalHours: 8, maxPerDay: 4 },
+      startDate: "2026-08-01",
+      endDate: null,
+      notes: null,
+    });
+
+    renderWithProviders(<CourseFormView courseId={existing.id} />, { repo });
+    const doseInput = await screen.findByLabelText("Dose amount");
+    await waitFor(() => expect(doseInput).toHaveValue("0.4"));
+
+    expect(screen.getByRole("button", { name: "4 per day" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "No maximum" })).toHaveAttribute("aria-pressed", "false");
+  });
+});

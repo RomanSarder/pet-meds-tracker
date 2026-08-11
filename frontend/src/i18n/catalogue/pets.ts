@@ -125,6 +125,15 @@ export interface PetsMessages {
    * through `tr.fmt.plural` (English's own "8h" is not pluralized either).
    */
   "courses.reminders.fromLastDose": (p: { hours: number }) => string;
+  /**
+   * SPEC §6.7 step 7: appended to the reminders paragraph ONLY when a daily
+   * maximum is set — a second sentence, never a replacement for
+   * `courses.reminders.fromLastDose` above. `max` is a bare count, same
+   * non-pluralized convention as `hours` above (English "3 doses" IS
+   * pluralized, so this one routes through `f.plural`; Ukrainian's own
+   * plural rule differs and needs it too — see the `uk` export below).
+   */
+  "courses.reminders.maxPerDay": (p: { max: number }) => string;
   "courses.courseSection": () => string;
   "courses.pause": () => string;
   "courses.stop": () => string;
@@ -151,6 +160,12 @@ export interface PetsMessages {
   "courses.duration.custom": () => string;
   "courses.mode.fromLastDose": () => string;
   "courses.mode.atSetTimes": () => string;
+  /** SPEC §6.7 step 5a section heading, above the daily-maximum chips. */
+  "courses.maxPerDayLabel": () => string;
+  "courses.maxPerDay.noMaximum": () => string;
+  "courses.maxPerDay.two": () => string;
+  "courses.maxPerDay.three": () => string;
+  "courses.maxPerDay.four": () => string;
 
   // --- scheduleEditModel.ts / the times editor (shift-earlier feature) ----
   // `gap`/`expected` are already-rendered durations — the caller resolves
@@ -275,6 +290,11 @@ export const enPets = (f: Formatters): PetsMessages => ({
   "courses.reminders": () => "Reminders",
   "courses.reminders.fromLastDose": (p) =>
     `The next dose is counted from the moment you log one — every ${p.hours}h. Nothing is due until the first dose is logged.`,
+  "courses.reminders.maxPerDay": (p) =>
+    f.plural(p.max, {
+      one: `Nothing more is due once ${p.max} dose has been given today — you can still give and record one if needed.`,
+      other: `Nothing more is due once ${p.max} doses have been given today — you can still give and record one if needed.`,
+    }),
   "courses.courseSection": () => "Course",
   "courses.pause": () => "Pause",
   "courses.stop": () => "Stop",
@@ -297,6 +317,11 @@ export const enPets = (f: Formatters): PetsMessages => ({
   "courses.duration.custom": () => "Custom",
   "courses.mode.fromLastDose": () => "From last dose",
   "courses.mode.atSetTimes": () => "At set times",
+  "courses.maxPerDayLabel": () => "Daily maximum",
+  "courses.maxPerDay.noMaximum": () => "No maximum",
+  "courses.maxPerDay.two": () => "2",
+  "courses.maxPerDay.three": () => "3",
+  "courses.maxPerDay.four": () => "4 per day",
 
   "courses.gapWarning.tooSoon": (p) =>
     `Only ${p.gap} since the ${p.time} dose (this course is every ${p.expected}).`,
@@ -453,6 +478,13 @@ export const ukPets = (f: Formatters): PetsMessages => ({
   // `f.plural` here (mirrors English's own unpluralized "8h").
   "courses.reminders.fromLastDose": (p) =>
     `Наступна доза відраховується з моменту, коли ви фіксуєте попередню, — кожні ${p.hours} год. Жодна доза не вважається простроченою, доки ви не зафіксуєте першу.`,
+  // "понад" ("more than") governs the genitive plural invariantly regardless
+  // of the count that follows it — unlike `hours` above, there is no
+  // one/few/many form to branch on here, so this is not `f.plural` and is
+  // not a lazy suffix either (SPEC §10a): it is the one correct form for
+  // every value the chips can produce (2, 3, 4).
+  "courses.reminders.maxPerDay": (p) =>
+    `Понад ${p.max} доз на день більше не заплановано — ви завжди можете дати та зафіксувати ще одну, якщо потрібно.`,
   "courses.courseSection": () => "Курс",
   "courses.pause": () => "Призупинити",
   "courses.stop": () => "Зупинити",
@@ -477,6 +509,11 @@ export const ukPets = (f: Formatters): PetsMessages => ({
   "courses.duration.custom": () => "Власний варіант",
   "courses.mode.fromLastDose": () => "Від останньої дози",
   "courses.mode.atSetTimes": () => "У встановлений час",
+  "courses.maxPerDayLabel": () => "Добовий максимум",
+  "courses.maxPerDay.noMaximum": () => "Без максимуму",
+  "courses.maxPerDay.two": () => "2",
+  "courses.maxPerDay.three": () => "3",
+  "courses.maxPerDay.four": () => "4 на день",
 
   "courses.gapWarning.tooSoon": (p) =>
     `Лише ${p.gap} після дози о ${p.time} (цей курс — кожні ${p.expected}).`,

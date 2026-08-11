@@ -20,11 +20,18 @@ export const FREQUENCY_CHOICES = ["Once daily", "2× daily", "3× daily", "Weekl
 /** The kit's segmented control, plus "Custom" per CONTRACT.md §4 item 2. */
 export const DURATION_CHOICES = ["7 days", "14 days", "Ongoing", "Custom"] as const;
 export const MODE_CHOICES = ["From last dose", "At set times"] as const;
+/**
+ * SPEC §6.7 step 5a: `fromLastDose`-only, "No maximum" first and selected by
+ * default (§3b-i — a cap is opted into, never assumed). Never shown for
+ * `At set times`.
+ */
+export const MAX_PER_DAY_CHOICES = ["No maximum", "2", "3", "4 per day"] as const;
 
 export type IntervalChoice = (typeof INTERVAL_CHOICES)[number];
 export type FrequencyChoice = (typeof FREQUENCY_CHOICES)[number];
 export type DurationChoice = (typeof DURATION_CHOICES)[number];
 export type ModeChoice = (typeof MODE_CHOICES)[number];
+export type MaxPerDayChoice = (typeof MAX_PER_DAY_CHOICES)[number];
 
 const INTERVAL_HOURS: Record<IntervalChoice, number> = {
   "Every 2h": 2,
@@ -33,6 +40,14 @@ const INTERVAL_HOURS: Record<IntervalChoice, number> = {
   "Every 8h": 8,
   "Every 12h": 12,
   "Every 24h": 24,
+};
+
+/** `undefined` for "No maximum" — matches `Schedule.maxPerDay`'s absent-or-integer contract exactly. */
+const MAX_PER_DAY_VALUES: Record<MaxPerDayChoice, number | undefined> = {
+  "No maximum": undefined,
+  "2": 2,
+  "3": 3,
+  "4 per day": 4,
 };
 
 /**
@@ -45,9 +60,20 @@ const INTERVAL_HOURS: Record<IntervalChoice, number> = {
  */
 const WEEKLY_ISO_DAY: IsoWeekday = 6;
 
-/** Chip label → the exact `Schedule` object persisted. */
-export function scheduleForIntervalChoice(c: IntervalChoice): Schedule {
-  return { kind: "fromLastDose", intervalHours: INTERVAL_HOURS[c] };
+/**
+ * Chip label(s) → the exact `Schedule` object persisted. `maxPerDay`
+ * defaults to `"No maximum"` — a caller that never touches the daily-max
+ * control (the form's default, SPEC §3b-i/§6.7) gets back the identical
+ * `{ kind: "fromLastDose", intervalHours }` shape this produced before the
+ * chip existed, with no `maxPerDay` key at all.
+ */
+export function scheduleForIntervalChoice(
+  c: IntervalChoice,
+  maxPerDay: MaxPerDayChoice = "No maximum",
+): Schedule {
+  const intervalHours = INTERVAL_HOURS[c];
+  const cap = MAX_PER_DAY_VALUES[maxPerDay];
+  return cap !== undefined ? { kind: "fromLastDose", intervalHours, maxPerDay: cap } : { kind: "fromLastDose", intervalHours };
 }
 
 /** Chip label → the exact `Schedule` object persisted. */
@@ -94,6 +120,27 @@ export function intervalChoiceLabel(c: IntervalChoice, tr: Translator): string {
  * paragraph without re-parsing the chip's own label text. */
 export function intervalChoiceHours(c: IntervalChoice): number {
   return INTERVAL_HOURS[c];
+}
+
+/** Same rule as `intervalChoiceLabel`, for the daily-maximum chip row. */
+export function maxPerDayChoiceLabel(c: MaxPerDayChoice, tr: Translator): string {
+  switch (c) {
+    case "No maximum":
+      return tr.t("courses.maxPerDay.noMaximum");
+    case "2":
+      return tr.t("courses.maxPerDay.two");
+    case "3":
+      return tr.t("courses.maxPerDay.three");
+    case "4 per day":
+      return tr.t("courses.maxPerDay.four");
+  }
+}
+
+/** The integer a maximum choice implies, or `undefined` for "No maximum" —
+ * used to compose the step-7 reminders sentence without re-parsing the
+ * chip's own label text (mirrors `intervalChoiceHours`). */
+export function maxPerDayChoiceValue(c: MaxPerDayChoice): number | undefined {
+  return MAX_PER_DAY_VALUES[c];
 }
 
 /** Same rule as `intervalChoiceLabel`, for the frequency chip row. */
@@ -163,6 +210,19 @@ export function endDateForDurationChoice(
     case "Custom":
       return custom;
   }
+}
+
+/**
+ * Inverse of `MAX_PER_DAY_VALUES`, best-effort like `nearestIntervalChoice`:
+ * `undefined` -> "No maximum"; an exact 2/3/4 -> its own chip; anything else
+ * a sync partner might have set (e.g. a value below 2, or above 4) falls
+ * back to the nearest of the three numeric chips rather than throwing.
+ */
+function nearestMaxPerDayChoice(n: number | undefined): MaxPerDayChoice {
+  if (n === undefined) return "No maximum";
+  if (n <= 2) return "2";
+  if (n === 3) return "3";
+  return "4 per day";
 }
 
 function nearestIntervalChoice(hours: number): IntervalChoice {
@@ -236,17 +296,22 @@ export function choicesForSchedule(s: Schedule): {
   mode: ModeChoice;
   interval: IntervalChoice;
   frequency: FrequencyChoice;
+  maxPerDay: MaxPerDayChoice;
 } {
   if (s.kind === "fromLastDose") {
     return {
       mode: "From last dose",
       interval: nearestIntervalChoice(s.intervalHours),
       frequency: "Once daily",
+      maxPerDay: nearestMaxPerDayChoice(s.maxPerDay),
     };
   }
   return {
     mode: "At set times",
     interval: "Every 8h",
     frequency: nearestFrequencyChoice(s),
+    // SPEC §3b-i: `maxPerDay` is `fromLastDose`-only — a `fixedTimes`
+    // schedule can never carry one, so this is always "No maximum".
+    maxPerDay: "No maximum",
   };
 }

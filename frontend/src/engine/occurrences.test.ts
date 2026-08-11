@@ -416,6 +416,147 @@ describe("getOccurrences — fromLastDose", () => {
   });
 });
 
+describe("getOccurrences — fromLastDose maxPerDay (SPEC §3b-i)", () => {
+  // CRITICAL SCOPE GUARD (SPEC §3b-i's builder checklist / §12): with no
+  // `maxPerDay` set, the occurrence must carry neither field at all — not
+  // merely `givenToday < maxPerDay` — regardless of how many doses were
+  // actually given that day. This is what keeps `getDoseState` from ever
+  // computing `capped` for an uncapped course.
+  it("CRITICAL SCOPE GUARD: with no maxPerDay set, maxPerDay/givenToday are both absent no matter how many doses were given today", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 4 },
+      startDate: "2026-08-01",
+    });
+    const events = [
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: null,
+        givenAt: "2026-08-06T05:00:00.000Z",
+        loggedAt: "2026-08-06T05:00:00.000Z",
+      }),
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: "2026-08-06T09:00:00.000Z",
+        givenAt: "2026-08-06T09:00:00.000Z",
+        loggedAt: "2026-08-06T09:00:00.000Z",
+      }),
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: "2026-08-06T13:00:00.000Z",
+        givenAt: "2026-08-06T13:00:00.000Z",
+        loggedAt: "2026-08-06T13:00:00.000Z",
+      }),
+    ];
+    const ctx: EngineContext = { courses: [course], events, courseEvents: [] };
+    const occs = getOccurrences("2026-08-06", ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].maxPerDay).toBeUndefined();
+    expect(occs[0].givenToday).toBeUndefined();
+    expect(occs[0].dueAt?.toISOString()).toBe("2026-08-06T17:00:00.000Z"); // plain +4h, no cap logic touches it
+  });
+
+  it("under the cap: dueAt is plain anchor + intervalHours, unaffected, and maxPerDay/givenToday are both carried", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 4, maxPerDay: 3 },
+      startDate: "2026-08-01",
+    });
+    const given = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      givenAt: "2026-08-06T05:00:00.000Z", // 06:00 BST
+      loggedAt: "2026-08-06T05:00:00.000Z",
+    });
+    const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
+    const occs = getOccurrences("2026-08-06", ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe("2026-08-06T09:00:00.000Z"); // +4h, untouched
+    expect(occs[0].maxPerDay).toBe(3);
+    expect(occs[0].givenToday).toBe(1);
+  });
+
+  it("reaching the cap same-day pushes the effective due instant to 00:00 the next day, when that is later than the plain interval math", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 4, maxPerDay: 3 },
+      startDate: "2026-08-01",
+    });
+    // 08:00, 12:00, 16:00 BST — three given doses today (2026-08-06).
+    const events = [
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: null,
+        givenAt: "2026-08-06T07:00:00.000Z",
+        loggedAt: "2026-08-06T07:00:00.000Z",
+      }),
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: "2026-08-06T11:00:00.000Z",
+        givenAt: "2026-08-06T11:00:00.000Z",
+        loggedAt: "2026-08-06T11:00:00.000Z",
+      }),
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: "2026-08-06T15:00:00.000Z",
+        givenAt: "2026-08-06T15:00:00.000Z",
+        loggedAt: "2026-08-06T15:00:00.000Z",
+      }),
+    ];
+    const ctx: EngineContext = { courses: [course], events, courseEvents: [] };
+
+    // Plain math: last given 16:00 BST + 4h = 20:00 BST, same day — but the
+    // cap has been reached, so the effective due instant is pushed to 00:00
+    // BST the next day instead (later than 20:00).
+    const today = getOccurrences("2026-08-06", ctx);
+    expect(today).toHaveLength(1);
+    expect(today[0].dueAt?.toISOString()).toBe("2026-08-06T23:00:00.000Z"); // 00:00 BST on 08-07
+    expect(today[0].maxPerDay).toBe(3);
+    expect(today[0].givenToday).toBe(3); // today's own count: at the cap
+
+    // The SAME occurrence (same key, same dueAt) also appears on the day it
+    // is now due — with a FRESH count for that day, so it reads plain
+    // due/later/overdue there once its instant arrives, not capped.
+    const tomorrow = getOccurrences("2026-08-07", ctx);
+    expect(tomorrow).toHaveLength(1);
+    expect(tomorrow[0].key).toBe(today[0].key);
+    expect(tomorrow[0].dueAt?.toISOString()).toBe(today[0].dueAt?.toISOString());
+    expect(tomorrow[0].givenToday).toBe(0);
+  });
+
+  it("when the plain interval math already crosses into the next day past the push floor, dueAt is left exactly as plain arithmetic computes it", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 8, maxPerDay: 3 },
+      startDate: "2026-08-01",
+    });
+    // 06:00, 14:00, 22:00 BST — three given doses today (2026-08-06), the
+    // exact SPEC §12 "every 8h, max 3 per day" example.
+    const events = [
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: null,
+        givenAt: "2026-08-06T05:00:00.000Z",
+        loggedAt: "2026-08-06T05:00:00.000Z",
+      }),
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: "2026-08-06T13:00:00.000Z",
+        givenAt: "2026-08-06T13:00:00.000Z",
+        loggedAt: "2026-08-06T13:00:00.000Z",
+      }),
+      makeEvent({
+        courseId: course.id,
+        scheduledFor: "2026-08-06T21:00:00.000Z",
+        givenAt: "2026-08-06T21:00:00.000Z",
+        loggedAt: "2026-08-06T21:00:00.000Z",
+      }),
+    ];
+    const ctx: EngineContext = { courses: [course], events, courseEvents: [] };
+    const occs = getOccurrences("2026-08-06", ctx);
+    expect(occs).toHaveLength(1);
+    // 22:00 BST + 8h = 06:00 BST the next day — already later than 00:00, so
+    // the cap changes nothing about the due instant here.
+    expect(occs[0].dueAt?.toISOString()).toBe("2026-08-07T05:00:00.000Z");
+  });
+});
+
 describe("liveEventFor", () => {
   it("ignores soft-deleted and superseded events and returns the newest live candidate by loggedAt", () => {
     const courseId = "course-live";

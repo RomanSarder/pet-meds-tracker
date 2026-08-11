@@ -109,6 +109,10 @@ export const doseEvents = pgTable("dose_events", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  // SPEC §3b-i: true only for a "Give anyway" dose logged past a course's
+  // `maxPerDay` cap. `maxPerDay` itself needs no column — it rides inside
+  // `courses.schedule` (jsonb) like every other Schedule field.
+  overMax: boolean("over_max").notNull().default(false),
 });
 
 export const doseEventsRelations = relations(doseEvents, ({ one }) => ({

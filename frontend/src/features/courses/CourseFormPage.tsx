@@ -28,6 +28,7 @@ import {
   DURATION_CHOICES,
   FREQUENCY_CHOICES,
   INTERVAL_CHOICES,
+  MAX_PER_DAY_CHOICES,
   MODE_CHOICES,
   choicesForSchedule,
   durationChoiceLabel,
@@ -36,6 +37,8 @@ import {
   intervalChoiceHours,
   intervalChoiceLabel,
   isPresetSchedule,
+  maxPerDayChoiceLabel,
+  maxPerDayChoiceValue,
   modeChoiceLabel,
   scheduleForFrequencyChoice,
   scheduleForIntervalChoice,
@@ -43,6 +46,7 @@ import {
   type DurationChoice,
   type FrequencyChoice,
   type IntervalChoice,
+  type MaxPerDayChoice,
   type ModeChoice,
 } from "./scheduleChoice";
 
@@ -150,6 +154,10 @@ export function CourseFormView({
   const [instructions, setInstructions] = useState("");
   const [mode, setMode] = useState<ModeChoice>("From last dose");
   const [intervalChoice, setIntervalChoice] = useState<IntervalChoice>("Every 8h");
+  // SPEC §3b-i/§6.7 step 5a: "No maximum" is the default — a cap is opted
+  // into, never assumed on the user's behalf. Ignored by `computeSchedule`
+  // whenever `mode` is "At set times" (§3b-i: `fixedTimes` cannot carry one).
+  const [maxPerDayChoice, setMaxPerDayChoice] = useState<MaxPerDayChoice>("No maximum");
   const [frequency, setFrequency] = useState<FrequencyChoice>("2× daily");
   const [duration, setDuration] = useState<DurationChoice>("7 days");
   const [customEndDate, setCustomEndDate] = useState("");
@@ -191,6 +199,7 @@ export function CourseFormView({
     setMode(choices.mode);
     setIntervalChoice(choices.interval);
     setFrequency(choices.frequency);
+    setMaxPerDayChoice(choices.maxPerDay);
 
     // The bug this state exists to fix: `choicesForSchedule` above is a
     // best-effort "nearest chip for display" lookup — for an existing
@@ -261,7 +270,7 @@ export function CourseFormView({
    * Saturday-only constraint the very next time the course is saved.
    */
   function computeSchedule(): Schedule {
-    if (mode === "From last dose") return scheduleForIntervalChoice(intervalChoice);
+    if (mode === "From last dose") return scheduleForIntervalChoice(intervalChoice, maxPerDayChoice);
     if (customTimes !== null && customTimesBase !== null) {
       return { ...customTimesBase, kind: "fixedTimes", times: customTimes };
     }
@@ -642,6 +651,33 @@ export function CourseFormView({
           </div>
         </div>
 
+        {mode === "From last dose" ? (
+          // SPEC §6.7 step 5a: interval courses only, hidden entirely for
+          // "At set times" — `computeSchedule` above already ignores
+          // `maxPerDayChoice` in that mode, this just keeps the control from
+          // being shown for a value it cannot affect.
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
+              {tr.t("courses.maxPerDayLabel")}
+            </span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {MAX_PER_DAY_CHOICES.map((o) => {
+                const selected = maxPerDayChoice === o;
+                return (
+                  <Chip
+                    key={o}
+                    selected={selected}
+                    aria-pressed={selected}
+                    onClick={() => setMaxPerDayChoice(o)}
+                  >
+                    {maxPerDayChoiceLabel(o, tr)}
+                  </Chip>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
             {tr.t("courses.forHowLong")}
@@ -668,7 +704,17 @@ export function CourseFormView({
               {tr.t("courses.reminders")}
             </span>
             <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.5 }}>
-              {tr.t("courses.reminders.fromLastDose", { hours: intervalChoiceHours(intervalChoice) })}
+              {
+                // SPEC §6.7 step 7: a second sentence, ONLY when a maximum is
+                // set — "nothing more is due after the cap but a dose can
+                // still be given and recorded" (§3b-i). Built as ONE string
+                // (not two sibling JSX expressions) so it renders as a single
+                // text node — a screen reader, and `screen.getByText`, must
+                // read/match it as one sentence pair, not two fragments.
+                maxPerDayChoice !== "No maximum"
+                  ? `${tr.t("courses.reminders.fromLastDose", { hours: intervalChoiceHours(intervalChoice) })} ${tr.t("courses.reminders.maxPerDay", { max: maxPerDayChoiceValue(maxPerDayChoice)! })}`
+                  : tr.t("courses.reminders.fromLastDose", { hours: intervalChoiceHours(intervalChoice) })
+              }
             </div>
           </Card>
         ) : (

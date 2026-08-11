@@ -4,10 +4,16 @@
 // types, so the shapes here are load-bearing for four other branches.
 import type { Course, CourseEvent, DoseEvent, LocalDate, Schedule } from "@/domain";
 
-/** Seven states (SPEC §4 + brief §7 item 3's `notStarted`). */
+/**
+ * Eight states (SPEC §4 + brief §7 item 3's `notStarted` + SPEC §3b-i's
+ * `capped`). `capped` is possible ONLY for a `fromLastDose` occurrence whose
+ * course has `maxPerDay` set — see `Occurrence.maxPerDay`/`givenToday` below
+ * and `state.ts#getDoseState`.
+ */
 export type DoseState =
   | "given"
   | "skipped"
+  | "capped"
   | "overdue"
   | "due"
   | "later"
@@ -32,6 +38,23 @@ export interface Occurrence {
   instructions: string | null;
   /** The live DoseEvent resolving this occurrence, if any. */
   event: DoseEvent | null;
+  /**
+   * SPEC §3b-i. Present ONLY when this occurrence's course is `fromLastDose`
+   * AND its schedule has `maxPerDay` set — absent for every other
+   * occurrence, which is what keeps the unset case a true no-op (no pill
+   * prop, no `capped` state possible; see `state.ts#getDoseState`). Mirrors
+   * `Schedule`'s `maxPerDay` verbatim.
+   */
+  maxPerDay?: number;
+  /**
+   * SPEC §3b-i/§3d: `given` DoseEvents for this course whose `givenAt` falls
+   * in `day` above (this occurrence's OWN scheduled day, not "today" by wall
+   * clock) — `skipped`/`missed` never count. Present exactly when
+   * `maxPerDay` above is. Computed once per emitted occurrence in
+   * `occurrences.ts`, not re-derived by `getDoseState`, so state derivation
+   * stays a pure read of already-resolved data.
+   */
+  givenToday?: number;
 }
 
 export interface EngineContext {

@@ -10,7 +10,7 @@ import {
   MISSED_AFTER_HOURS,
 } from "@/domain";
 import type { EngineContext, Occurrence } from "./engine.types";
-import { anchorFor, getOccurrences, inWindow } from "./occurrences";
+import { anchorFor, fromLastDoseDueAt, getOccurrences, inWindow } from "./occurrences";
 
 const MAX_LOOKAHEAD_DAYS = 366;
 const DEFAULT_LOOKBACK_DAYS = 7;
@@ -46,8 +46,12 @@ export function nextDueAt(
   const schedule = course.schedule;
   const anchor = anchorFor(course, events);
   if (anchor !== null) {
-    // An overdue chain has no *future* due instant — nothing after it is scheduled.
-    const candidate = new Date(anchor.getTime() + schedule.intervalHours * 3_600_000);
+    // An overdue chain has no *future* due instant — nothing after it is
+    // scheduled. `fromLastDoseDueAt` folds in SPEC §3b-i's optional cap the
+    // same way `occurrences.ts#fromLastDoseOccurrences` does, so a capped
+    // course's "next due" (e.g. the history detail line's "next due HH:MM")
+    // never disagrees with what Today would actually show.
+    const candidate = fromLastDoseDueAt(course, schedule, anchor, events);
     const day = localDayKey(candidate);
     if (candidate.getTime() > after.getTime() && inWindow(day, course)) return candidate;
     return null;

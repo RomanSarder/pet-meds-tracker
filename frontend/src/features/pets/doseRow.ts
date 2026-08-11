@@ -33,6 +33,11 @@ const ROW_STATE: Record<DoseState, NonNullable<DoseRowProps["state"]>> = {
   later: "later",
   upcoming: "later",
   notStarted: "later",
+  // SPEC §3b-i's `capped` state (amber "N of M max" pill, ghost "Give
+  // anyway") has no DS presentation yet — the DS `DoseRow` component is
+  // frozen to exactly these four variants. Placeholder mapping, same as
+  // `upcoming`/`notStarted` above, until that wiring lands.
+  capped: "later",
 };
 
 export function doseRowPropsFor(args: {

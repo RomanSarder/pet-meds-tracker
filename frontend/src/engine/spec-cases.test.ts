@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { Course, DoseEvent } from "@/domain";
 import { FIXTURE_NOW, atLocalTime, fixtures, localDayKey, occurrenceKeyFor } from "@/domain";
 import type { EngineContext } from "./engine.types";
-import { getDoseState, getOccurrences, nextDueAt } from "./index";
+import { getDoseState, getOccurrences, nextDueAt, summariseDay } from "./index";
 
 function fixedTimesCourse(
   id: string,
@@ -41,7 +41,7 @@ function fixedTimesCourse(
 function fromLastDoseCourse(
   id: string,
   intervalHours: number,
-  opts: { startDate: string; anchorTime?: string },
+  opts: { startDate: string; anchorTime?: string; maxPerDay?: number },
 ): Course {
   return {
     id,
@@ -54,6 +54,7 @@ function fromLastDoseCourse(
       kind: "fromLastDose",
       intervalHours,
       ...(opts.anchorTime ? { anchorTime: opts.anchorTime } : {}),
+      ...(opts.maxPerDay !== undefined ? { maxPerDay: opts.maxPerDay } : {}),
     },
     startDate: opts.startDate,
     endDate: null,
@@ -267,5 +268,155 @@ describe("SPEC §12 — nothing is due for an interval course that has never bee
     expect(occ.dueAt).not.toBeNull();
     expect(occ.key).toBe(occurrenceKeyFor(course.id, null));
     expect(getDoseState(occ, atLocalTime(day, "12:00"))).toBe("notStarted");
+  });
+});
+
+// --- SPEC §12's four new maxPerDay (§3b-i) bullets --------------------------
+// Engine-level only, per this slice's scope: the "N of M max" pill and the
+// "Give anyway" button itself are Today-screen rendering, wired in a LATER
+// phase by a different agent (SPEC §4's presentation column). What is
+// verified here is the DATA those bullets depend on: `getDoseState`,
+// `getOccurrences`, `nextDueAt` and `summariseDay` all agreeing with SPEC.
+
+describe("SPEC §12 — an interval course with no maximum set behaves exactly as before: no pill, no capped state, and a fourth dose in one day is logged without comment", () => {
+  it("a fourth same-day dose on an uncapped every-4h course generates a plain occurrence — no maxPerDay/givenToday, no capped state — and logs with no overMax flag", () => {
+    const course = fromLastDoseCourse("case-no-max", 4, { startDate: "2026-08-01" });
+    const events = [
+      givenEvent("case-no-max-1", course.id, { scheduledFor: null, givenAt: "2026-08-06T06:00:00.000Z" }),
+      givenEvent("case-no-max-2", course.id, {
+        scheduledFor: "2026-08-06T10:00:00.000Z",
+        givenAt: "2026-08-06T10:00:00.000Z",
+      }),
+      givenEvent("case-no-max-3", course.id, {
+        scheduledFor: "2026-08-06T14:00:00.000Z",
+        givenAt: "2026-08-06T14:00:00.000Z",
+      }),
+    ];
+    const ctx: EngineContext = { courses: [course], events, courseEvents: [] };
+
+    const occs = getOccurrences("2026-08-06", ctx);
+    expect(occs).toHaveLength(1);
+    // Plain +4h off the third dose — no cap arithmetic in the pipeline at all.
+    expect(occs[0].dueAt?.toISOString()).toBe("2026-08-06T18:00:00.000Z");
+    expect(occs[0].maxPerDay).toBeUndefined();
+    expect(occs[0].givenToday).toBeUndefined();
+    expect(getDoseState(occs[0], new Date("2026-08-06T18:00:00.000Z"))).toBe("due");
+
+    // The fourth dose itself: an ordinary given event, "without comment" —
+    // no `overMax`, since there is no cap to have gone over.
+    const fourth = givenEvent("case-no-max-4", course.id, {
+      scheduledFor: "2026-08-06T18:00:00.000Z",
+      givenAt: "2026-08-06T18:00:00.000Z",
+    });
+    expect(fourth.overMax).toBeUndefined();
+  });
+});
+
+describe("SPEC §12 — an every 8h, max 3 per day course logged at 06:00, 14:00 and 22:00 has nothing due at 06:00 the next morning until the interval from 22:00 has also elapsed", () => {
+  it("stays capped through the rest of the day and becomes due only once the 8h interval from the 22:00 dose actually elapses", () => {
+    const course = fromLastDoseCourse("case-8h-max3", 8, { startDate: "2026-08-01", maxPerDay: 3 });
+    const events = [
+      givenEvent("case-8h-1", course.id, { scheduledFor: null, givenAt: "2026-08-06T05:00:00.000Z" }), // 06:00 BST
+      givenEvent("case-8h-2", course.id, {
+        scheduledFor: "2026-08-06T13:00:00.000Z",
+        givenAt: "2026-08-06T13:00:00.000Z", // 14:00 BST
+      }),
+      givenEvent("case-8h-3", course.id, {
+        scheduledFor: "2026-08-06T21:00:00.000Z",
+        givenAt: "2026-08-06T21:00:00.000Z", // 22:00 BST
+      }),
+    ];
+    const ctx: EngineContext = { courses: [course], events, courseEvents: [] };
+
+    const today = getOccurrences("2026-08-06", ctx)[0];
+    // 22:00 BST + 8h = 06:00 BST the next day.
+    expect(today.dueAt?.toISOString()).toBe("2026-08-07T05:00:00.000Z");
+    // Capped for the rest of the day it was reached, well before that instant.
+    expect(getDoseState(today, new Date("2026-08-06T22:00:00.000Z"))).toBe("capped");
+
+    // The next morning: the day has rolled over (fresh count), so this is
+    // plain due/later math again — nothing due before the interval elapses.
+    const tomorrow = getOccurrences("2026-08-07", ctx)[0];
+    expect(tomorrow.givenToday).toBe(0);
+    expect(getDoseState(tomorrow, new Date("2026-08-07T02:00:00.000Z"))).toBe("later"); // 03:00 BST — well before due
+    expect(getDoseState(tomorrow, new Date("2026-08-07T05:00:00.000Z"))).toBe("due"); // exactly 06:00 BST — the full interval
+
+    expect(nextDueAt(course, events, [], new Date("2026-08-06T22:00:00.000Z"))?.toISOString()).toBe(
+      "2026-08-07T05:00:00.000Z",
+    );
+  });
+});
+
+describe("SPEC §12 — Give anyway past the cap writes one given event flagged overMax and does not advance the chain past midnight", () => {
+  it("a fourth, overMax-flagged dose given before midnight re-anchors the chain but leaves the effective next-due at the cap's own midnight floor, not later", () => {
+    const course = fromLastDoseCourse("case-give-anyway", 4, { startDate: "2026-08-01", maxPerDay: 3 });
+    const first3 = [
+      givenEvent("case-ga-1", course.id, { scheduledFor: null, givenAt: "2026-08-06T07:00:00.000Z" }), // 08:00 BST
+      givenEvent("case-ga-2", course.id, {
+        scheduledFor: "2026-08-06T11:00:00.000Z",
+        givenAt: "2026-08-06T11:00:00.000Z", // 12:00 BST
+      }),
+      givenEvent("case-ga-3", course.id, {
+        scheduledFor: "2026-08-06T15:00:00.000Z",
+        givenAt: "2026-08-06T15:00:00.000Z", // 16:00 BST
+      }),
+    ];
+    const before = getOccurrences("2026-08-06", { courses: [course], events: first3, courseEvents: [] })[0];
+    expect(before.dueAt?.toISOString()).toBe("2026-08-06T23:00:00.000Z"); // 00:00 BST on 08-07
+
+    // "Give anyway": exactly what the repo's `logDose({ ..., overMax: true })`
+    // writes — one MORE `given` event, flagged `overMax`, against the
+    // capped occurrence's own key.
+    const giveAnyway: DoseEvent = {
+      ...givenEvent("case-ga-4", course.id, {
+        scheduledFor: before.dueAt!.toISOString(),
+        givenAt: "2026-08-06T16:00:00.000Z", // 17:00 BST, still before midnight
+      }),
+      overMax: true,
+    };
+    expect(giveAnyway.overMax).toBe(true);
+
+    const after = getOccurrences("2026-08-06", {
+      courses: [course],
+      events: [...first3, giveAnyway],
+      courseEvents: [],
+    })[0];
+    // Still exactly 00:00 BST the next day: the extra dose re-anchors the
+    // chain (SPEC §3b) but the cap's own midnight floor does not move any
+    // later because of it — a naive "anchor + intervalHours" off the NEW
+    // 17:00 BST anchor would land at 21:00 BST the SAME day, well before
+    // midnight; the cap logic still enforces the floor regardless.
+    expect(after.dueAt?.toISOString()).toBe("2026-08-06T23:00:00.000Z");
+    expect(after.givenToday).toBe(4);
+    // This exact slot now resolves as `given` (the overMax dose itself IS
+    // its live event) — the "does not advance past midnight" guarantee is
+    // about `dueAt` above, the NEXT occurrence's scheduling, not this one's
+    // state.
+    expect(getDoseState(after, new Date("2026-08-06T22:00:00.000Z"))).toBe("given");
+  });
+});
+
+describe("SPEC §12 — a capped course never appears in the overdue count or the overdue banner", () => {
+  it("summariseDay never counts a capped occurrence as overdue, however long past its (pushed) due instant now is", () => {
+    const course = fromLastDoseCourse("case-never-overdue", 4, { startDate: "2026-08-01", maxPerDay: 2 });
+    const events = [
+      givenEvent("case-no-ov-1", course.id, { scheduledFor: null, givenAt: "2026-08-06T05:00:00.000Z" }),
+      givenEvent("case-no-ov-2", course.id, {
+        scheduledFor: "2026-08-06T09:00:00.000Z",
+        givenAt: "2026-08-06T09:00:00.000Z",
+      }),
+    ];
+    const ctx: EngineContext = { courses: [course], events, courseEvents: [] };
+    const occ = getOccurrences("2026-08-06", ctx)[0];
+
+    // Far enough past the (pushed) due instant that an ordinary occurrence
+    // would long since be overdue.
+    const now = new Date(occ.dueAt!.getTime() + 6 * 3_600_000);
+    expect(getDoseState(occ, now)).toBe("capped");
+
+    const summary = summariseDay([occ], now);
+    expect(summary.overdue).toBe(0);
+    expect(summary.earliestOverdue).toBeNull();
+    expect(summary.remaining).toBe(1); // still outstanding, just never overdue
   });
 });

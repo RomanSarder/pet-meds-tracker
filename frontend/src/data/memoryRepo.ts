@@ -587,6 +587,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     amount: number;
     note?: string;
     allowWithinGrace?: boolean;
+    overMax?: boolean;
   }): Promise<DoseEvent> {
     const course = requireAlive(courses, input.courseId, "Course");
     const actorId = await currentActorId();
@@ -663,6 +664,9 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
+      // Absent (never explicit `false`) unless the caller confirms this was
+      // a "Give anyway" past the cap — see `repo.types.ts`'s doc comment.
+      ...(input.overMax ? { overMax: true } : {}),
     };
     doseEvents.push(event);
     return structuredClone(event);
