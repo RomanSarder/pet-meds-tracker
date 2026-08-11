@@ -416,6 +416,53 @@ describe("TodayPage", () => {
     expect(pathname()).toBe("/today");
   });
 
+  // SPEC §3b bug fix: a `fromLastDose` course's next dose must be reachable
+  // — and giveable early — before the interval has elapsed, even when its
+  // computed due instant falls on a later local day than "today" (a
+  // late-evening last dose on a 4h+ interval). Before this fix,
+  // `fromLastDoseOccurrences` only ever emitted the occurrence on the exact
+  // day `dueAt` landed on, so a row like this never existed to tap.
+  it("shows an anchored interval dose due tomorrow and logs it early without leaving the dashboard", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metoclopramide");
+    const tomorrow = "2026-08-09";
+    const occurrence = makeOccurrence(course, {
+      day: DAY,
+      scheduledFor: `${tomorrow}T02:00:00.000Z`,
+    });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "upcoming");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+    expect(pathname()).toBe("/today");
+
+    // Reachable: the row exists and reads as due tomorrow, not now.
+    expect(within(card).getByText(/tomorrow/)).toBeInTheDocument();
+    const giveButton = within(card).getByRole("button", { name: "Give" });
+    expect(giveButton).toBeInTheDocument();
+
+    await user.click(giveButton);
+
+    const toast = await screen.findByRole("status");
+    expect(toast).toHaveTextContent("Metoclopramide logged");
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+    const created = newEvents(before, await repo.listDoseEvents({}));
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("given");
+    // Given early: logged at "now" (SPEC §5.1), not at the planned due
+    // instant — which is exactly what re-anchors the chain from the actual
+    // given time (SPEC §3b), not the original schedule.
+    expect(created[0].givenAt).toBe(FIXTURE_NOW);
+
+    expect(pathname()).toBe("/today");
+  });
+
   // SPEC §5: "Two people logging the same dose within the grace window
   // produce one DoseEvent; the second log is rejected client-side with
   // 'Already given by Marta at 07:12'." This is the exact repro from the

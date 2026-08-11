@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course, DoseEvent, LocalTime } from "@/domain";
 import {
+  addLocalDays,
   atLocalTime,
   cloneFixtures,
   FIXTURE_NOW,
@@ -176,6 +177,43 @@ describe("buildTodayView — dose fields", () => {
     expect(dose.time).toBeNull();
     expect(dose.detail.startsWith("Not started")).toBe(true);
     expect(dose.detail).toContain("from last dose");
+  });
+});
+
+describe("buildTodayView — fromLastDose reachable before its dueAt (SPEC §3b)", () => {
+  it("shows an anchored interval dose whose due instant crosses into tomorrow, giveable early today", () => {
+    const course = courseOf(COURSE_CLOVER_METOCLOPRAMIDE);
+    const tomorrow = addLocalDays(DAY, 1);
+    const scheduledFor = atLocalTime(tomorrow, "02:00").toISOString();
+    const occ = makeOccurrence(course, { day: DAY, scheduledFor });
+    setState(occ.key, "upcoming");
+
+    const group = groupNamed(buildTodayView(snapshotOf([occ]), NOW, EN), "Clover");
+    const dose = group.pending.find((d) => d.key === occ.key);
+
+    expect(dose).toBeDefined();
+    expect(dose!.time).toBe("02:00");
+    // Reads as due tomorrow rather than "at 02:00" today (requirement: the
+    // row must not present an early-reachable dose as if it were due now).
+    expect(dose!.detail.startsWith("02:00 · tomorrow · ")).toBe(true);
+    expect(dose!.detail).toContain("from last dose");
+  });
+
+  it("CRITICAL SCOPE GUARD: an 'upcoming' fixedTimes occurrence is never folded into the pending list", () => {
+    // A real fixedTimes occurrence can never actually reach `upcoming` when
+    // `day` is the real "today" `TodayPage` always queries (its `dueAt` is
+    // always built inside that same day — see `fixedTimesOccurrences`), so
+    // this proves the `occ.kind` guard in `isPendingDose` itself rather than
+    // just the engine invariant that normally makes it moot: a regression
+    // that dropped the guard would flood the dashboard with every later
+    // fixed-time dose of the day, which this test would catch.
+    const occ = occAt(COURSE_CLOVER_METACAM, "08:00");
+    setState(occ.key, "upcoming");
+
+    const group = groupNamed(buildTodayView(snapshotOf([occ]), NOW, EN), "Clover");
+
+    expect(group.pending).toHaveLength(0);
+    expect(group.body).toHaveLength(0);
   });
 });
 

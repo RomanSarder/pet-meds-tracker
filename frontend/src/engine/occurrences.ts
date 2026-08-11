@@ -346,7 +346,26 @@ function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEve
 
   // Elapsed-millisecond arithmetic (SPEC §3d) — never wall-clock reconstruction.
   const dueAt = new Date(anchor.getTime() + schedule.intervalHours * 3_600_000);
-  if (localDayKey(dueAt) !== day) return [];
+  const anchorDay = localDayKey(anchor);
+  const dueDay = localDayKey(dueAt);
+  // Emitted on every day from the anchor's own day through the due day —
+  // not only the single day `dueAt` happens to land on. SPEC §3b: "Logging a
+  // dose early or late shifts the whole chain — this is intended", which
+  // requires the next dose to already be a visible, actionable row the
+  // moment the chain re-anchors (`day === anchorDay`), not only once the
+  // computed due instant happens to cross into the next local day (e.g. a
+  // late-evening dose on a 4h+ interval). `getDoseState` still tells the
+  // full story once this renders: "upcoming" while `day` precedes `dueDay`,
+  // "later"/"due"/"overdue" once `day` reaches it. The window's upper bound
+  // stays at `dueDay`, matching the PRE-EXISTING behaviour once the dose is
+  // overdue and unlogged past its own day — unrelated to this fix, and left
+  // untouched (`sweep.ts`'s `findMissedOccurrences` never sweeps a
+  // `fromLastDose` occurrence either, so "no future occurrence generated
+  // once a whole day has passed unlogged" is a pre-existing, separate
+  // question this change does not answer).
+  if (differenceInLocalDays(day, anchorDay) < 0 || differenceInLocalDays(dueDay, day) < 0) {
+    return [];
+  }
   const scheduledFor = dueAt.toISOString();
   const key = occurrenceKeyFor(course.id, scheduledFor);
   return [

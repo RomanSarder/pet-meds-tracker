@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { atLocalTime, occurrenceKeyFor } from "@/domain";
 import type { Course, CourseEvent, DoseEvent, Schedule } from "@/domain";
 import type { EngineContext } from "./engine.types";
-import { getOccurrences, isoWeekdayOf, liveEventFor } from "./occurrences";
+import { anchorFor, getOccurrences, isoWeekdayOf, liveEventFor } from "./occurrences";
 import { getDoseState } from "./state";
 
 // The test runner pins TZ=Europe/London (see vitest.config.ts).
@@ -246,7 +246,7 @@ describe("getOccurrences — fixedTimes", () => {
 });
 
 describe("getOccurrences — fromLastDose", () => {
-  it("emits the anchored occurrence only on the local day the chain lands on", () => {
+  it("emits the anchored occurrence on every day from the anchor's day through the due day (early-give reachability), and no further", () => {
     const course = makeCourse({
       schedule: { kind: "fromLastDose", intervalHours: 8 },
       startDate: "2026-08-01",
@@ -260,11 +260,80 @@ describe("getOccurrences — fromLastDose", () => {
     });
     const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
     // Anchor 2026-08-05T22:00Z + 8h = 2026-08-06T06:00Z = 07:00 BST on 2026-08-06.
-    expect(getOccurrences("2026-08-05", ctx)).toHaveLength(0);
+    // The chain re-anchored on 2026-08-05 (BST), so the SAME occurrence — same
+    // key, same dueAt — is already visible (and giveable early) that day, not
+    // only once its due instant crosses into 2026-08-06.
+    const onAnchorDay = getOccurrences("2026-08-05", ctx);
+    expect(onAnchorDay).toHaveLength(1);
+    expect(onAnchorDay[0].dueAt?.toISOString()).toBe("2026-08-06T06:00:00.000Z");
     const onDay = getOccurrences("2026-08-06", ctx);
     expect(onDay).toHaveLength(1);
     expect(onDay[0].dueAt?.toISOString()).toBe("2026-08-06T06:00:00.000Z");
+    expect(onDay[0].key).toBe(onAnchorDay[0].key);
+    // The window's upper bound stays at the due day: an unlogged chain does
+    // not keep generating past it (pre-existing behaviour, untouched here).
     expect(getOccurrences("2026-08-07", ctx)).toHaveLength(0);
+  });
+
+  it("SPEC §3b: an anchored every-4h course is actionable 1 hour after the last dose, even though the interval has not elapsed and the due instant lands the next local day", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 4 },
+      startDate: "2026-08-01",
+    });
+    const givenAt = "2026-08-05T21:30:00.000Z"; // 22:30 BST
+    const given = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      status: "given",
+      givenAt,
+      loggedAt: givenAt,
+    });
+    const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
+
+    const oneHourLater = new Date("2026-08-05T22:30:00.000Z"); // 23:30 BST, still on the anchor's day
+    const occs = getOccurrences("2026-08-05", ctx);
+    expect(occs).toHaveLength(1);
+    const occ = occs[0];
+    // Due instant: 22:30Z + 4h = 2026-08-06T01:30:00.000Z — the next local day.
+    expect(occ.dueAt?.toISOString()).toBe("2026-08-06T01:30:00.000Z");
+    // Not due yet, not overdue — but present, and (per `getDoseState`'s
+    // existing `upcoming` branch) distinguishable from a same-day "later"
+    // dose so the row can say which day it is actually due.
+    expect(getDoseState(occ, oneHourLater)).toBe("upcoming");
+  });
+
+  it("SPEC §3b: logging that early dose re-anchors the chain from the actual given time, not the original schedule", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 4 },
+      startDate: "2026-08-01",
+    });
+    const firstGivenAt = "2026-08-05T21:30:00.000Z"; // 22:30 BST — would plan the next dose at 2026-08-06T01:30Z
+    const first = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      status: "given",
+      givenAt: firstGivenAt,
+      loggedAt: firstGivenAt,
+    });
+    // Given early — only 1 hour later, not the full 4h interval. `scheduledFor`
+    // is the occurrence it was logged against: the planned 2026-08-06T01:30Z slot.
+    const earlyGivenAt = "2026-08-05T22:30:00.000Z"; // 23:30 BST
+    const early = makeEvent({
+      courseId: course.id,
+      scheduledFor: "2026-08-06T01:30:00.000Z",
+      status: "given",
+      givenAt: earlyGivenAt,
+      loggedAt: earlyGivenAt,
+    });
+    const ctx: EngineContext = { courses: [course], events: [first, early], courseEvents: [] };
+
+    expect(anchorFor(course, ctx.events)!.toISOString()).toBe(earlyGivenAt);
+
+    // The chain's next dose comes off the ACTUAL given time (23:30 BST),
+    // not the original 22:30-BST-derived grid — 23:30Z + 4h = 2026-08-06T02:30Z.
+    const onNewDueDay = getOccurrences("2026-08-06", ctx);
+    expect(onNewDueDay).toHaveLength(1);
+    expect(onNewDueDay[0].dueAt?.toISOString()).toBe("2026-08-06T02:30:00.000Z");
   });
 
   it("anchors from resumedAt when it is later than the last given event", () => {

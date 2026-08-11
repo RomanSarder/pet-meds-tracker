@@ -55,6 +55,30 @@ const RESOLVED_STATES: ReadonlySet<DoseState> = new Set<DoseState>([
   "skipped",
 ]);
 
+/**
+ * Whether a dose belongs in the card body's pending list.
+ *
+ * `PENDING_STATES` applies uniformly to every course kind. `upcoming` is
+ * folded in on top of it, but restricted to `fromLastDose` occurrences —
+ * SPEC §3b: an anchored interval chain's next dose must be reachable, and
+ * giveable early, from the moment the chain re-anchors, even when the
+ * computed due instant lands on a later local day than "today"
+ * (`occurrences.ts`'s `fromLastDoseOccurrences` now emits it for every day
+ * from the anchor's own day through the due day, so its state can compute
+ * as `upcoming` on the days before the due day arrives).
+ *
+ * CRITICAL SCOPE GUARD: a `fixedTimes` occurrence's `dueAt` is always inside
+ * the very day `fixedTimesOccurrences` built it for (`atLocalTime(day, t)`),
+ * so `upcoming` structurally cannot arise for one while `day` is the real
+ * "today" `TodayPage` always queries — the `occ.kind` check below is
+ * belt-and-braces, not a live branch today, so a later regression cannot
+ * silently flood the dashboard with tomorrow's (or later) fixed-time doses.
+ */
+function isPendingDose(dose: TodayDose): boolean {
+  if (PENDING_STATES.has(dose.state)) return true;
+  return dose.state === "upcoming" && dose.occurrence.kind === "fromLastDose";
+}
+
 /** The separator every composed clause on this screen is joined with. */
 const SEPARATOR = " · ";
 
@@ -118,6 +142,16 @@ function detailFor(
   const parts = [
     // A clock time when there is one — never localized (SPEC §10a).
     time ?? tr.t("today.notStarted"),
+    // A `fromLastDose` occurrence whose computed due instant crosses onto a
+    // LATER local day than the one being viewed (`occurrences.ts` now emits
+    // it starting the anchor's own day, so it stays actionable — and
+    // giveable early — before the interval elapses) must not read as due at
+    // that bare clock time TODAY. `whenLabel` — the same "today"/"tomorrow"/
+    // "in N days" word `comingUpFor` below already uses — says which day it
+    // actually belongs to, reusing existing copy rather than inventing new.
+    occ.kind === "fromLastDose" && occ.dueAt !== null && localDayKey(occ.dueAt) !== day
+      ? whenLabel(differenceInLocalDays(localDayKey(occ.dueAt), day), tr)
+      : "",
     // Instructions are user-entered DATA: interpolated verbatim.
     course.instructions ?? "",
     // SPEC §3b: an interval course's detail line must carry the "from last
@@ -209,7 +243,7 @@ function groupFor(
   keepResolved: ReadonlySet<string> | undefined,
   tr: Translator,
 ): TodayPetGroup {
-  const pending = doses.filter((d) => PENDING_STATES.has(d.state)).sort(byDueAt);
+  const pending = doses.filter(isPendingDose).sort(byDueAt);
   const resolved = doses
     .filter((d) => RESOLVED_STATES.has(d.state))
     .sort(byDueAt);
