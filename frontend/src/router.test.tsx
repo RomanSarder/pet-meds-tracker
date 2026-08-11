@@ -25,6 +25,9 @@ import type { SessionUser } from "@pet-tracker/shared";
 import { router as appRouter } from "./router";
 import { queryClient as appQueryClient } from "./queryClient";
 import { LocaleProvider } from "@/i18n";
+import { getStoreOwner, setStoreOwner } from "./shared/session";
+import { setRepo } from "@/data";
+import { createMemoryRepo } from "@/data/memoryRepo";
 
 /**
  * How this file recognises that the Today screen is mounted.
@@ -164,6 +167,16 @@ describe("router", () => {
   describe("authenticated", () => {
     beforeEach(() => {
       mockAuthenticated();
+      // These tests are about routing once a device is already established,
+      // not about the first-claim/ownership-transfer mechanics (see A6's
+      // dedicated coverage below and in the "device ownership" describe).
+      // `src/test/setup.ts`'s global `afterEach` swaps `getRepo()` for a
+      // FRESH, fixture-SEEDED `createMemoryRepo()` after every test in every
+      // file — real, un-pushed-looking pet/course/dose data — so without
+      // this, `beforeLoad`'s A6 disposability check (correctly) refuses to
+      // let a null-owner device silently claim it, which is real data by
+      // the check's own rules, just not what THIS describe block is testing.
+      setStoreOwner(SESSION_USER.id);
     });
 
     it("redirects / to /today when the signed-in user already has a server-side household", async () => {
@@ -249,6 +262,54 @@ describe("router", () => {
       await user.click(within(nav).getByRole("button", { name: /supplies/i }));
       await screen.findByRole("heading", { level: 1, name: "Supplies" });
       expect(router.state.location.pathname).toBe("/supplies");
+    });
+  });
+
+  // A6: `getStoreOwner() === null` is NOT proof this device's local store is
+  // empty (an install predating ownership tracking, or one where
+  // `localStorage` was evicted while IndexedDB survived, reads the same
+  // way) — so a null owner must go through the same disposability gate the
+  // "different owner" branch already did, not claim the device outright.
+  describe("device ownership (A6)", () => {
+    beforeEach(() => {
+      mockAuthenticated();
+      window.localStorage.clear();
+    });
+
+    it("claims a null-owner device outright when the local store is disposable (no real data)", async () => {
+      setRepo(
+        createMemoryRepo({
+          pets: [],
+          medications: [],
+          courses: [],
+          doseEvents: [],
+          stockAdjustments: [],
+          joinCodes: [],
+        }),
+      );
+      expect(getStoreOwner()).toBeNull();
+
+      const { router } = renderApp("/");
+
+      await screen.findByText(TODAY_HEADING);
+      expect(router.state.location.pathname).toBe("/today");
+      expect(getStoreOwner()).toBe(SESSION_USER.id);
+    });
+
+    it("blocks to /account-switch rather than silently claiming a null-owner device that already holds real, un-synced data", async () => {
+      // The default fixture seed: real pets/medications/courses/dose
+      // history, no `lastPushedAt` — genuinely non-disposable, exactly the
+      // shape a pre-ownership-tracking install or an evicted-localStorage
+      // device would actually have.
+      setRepo(createMemoryRepo());
+      expect(getStoreOwner()).toBeNull();
+
+      const { router } = renderApp("/");
+
+      await screen.findByText(/Another account's data is on this device/);
+      expect(router.state.location.pathname).toBe("/account-switch");
+      // Never silently claimed — the whole point of the gate.
+      expect(getStoreOwner()).toBeNull();
     });
   });
 });

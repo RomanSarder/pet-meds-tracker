@@ -19,6 +19,7 @@ import type { Household, JoinCode, Pet, User } from "@/domain";
 import { DEFAULT_SELF_DISPLAY_NAME, DISPLAY_NAME_MAX, JOIN_CODE_LENGTH, now, qk } from "@/domain";
 import { getRepo } from "@/data";
 import { apiClient, ApiError } from "@/shared/api";
+import { mirrorMembers } from "@/sync/mirrorMembers";
 import { JoinCodeRejectedError, evaluateJoinCode, type JoinCodeRejection } from "./joinCode";
 
 // Household query keys live in the shared `qk` factory in `@/domain`, appended at
@@ -84,21 +85,22 @@ export function useAllMembers(): UseQueryResult<User[], Error> {
 }
 
 /**
- * Members are the one part of the household this device cannot learn on its
- * own. `SyncPayload` carries six tables and `users` is not among them (see
- * `packages/shared/src/sync.ts`), so nobody who joins ever reaches this
- * device's local store through the sync cycle — which is why the People list
- * sat at one person forever no matter who redeemed a code.
+ * Members are the one part of the household this device cannot learn from the
+ * six-table sync payload alone — `SyncPayload.pets`/`.medications`/etc. don't
+ * carry a roster. `SyncPayload.users` (see `packages/shared/src/sync.ts`) now
+ * does: `sync/engine.ts`'s background cycle mirrors it on every device via
+ * `@/sync/mirrorMembers`, whether or not this screen has ever been opened —
+ * that is the durable fix for "the People list sat at one person forever no
+ * matter who redeemed a code."
  *
- * This closes that gap the narrow way: the screen whose subject IS the roster
- * mounts this, the server's list is mirrored into the local store, and the
- * member queries above are invalidated only when something actually changed.
+ * This hook is what remains of the original, narrower fix: it makes the same
+ * mirror happen EAGERLY the moment the Household screen — the screen whose
+ * subject IS the roster — mounts, via `GET /household` (a superset of
+ * `SyncPayload.users`: it also carries the caller's own row, used elsewhere
+ * on this screen). Harmless to run alongside the background path since both
+ * go through the same `mirrorMembers` merge (additive, skip-if-unchanged).
  * The read source stays local, so nothing here can blank a screen that was
  * already rendering — a failed refresh leaves the previous roster standing.
- *
- * The durable fix is `users` becoming a synced table like the other six, which
- * needs a `sync_seq` column on `users` and a soft-delete flag; until then this
- * is the only path by which a second member exists on this device at all.
  */
 export function useRefreshMembers(): void {
   const queryClient = useQueryClient();
@@ -131,25 +133,6 @@ async function refreshMembersFromServer(): Promise<boolean> {
     // surfacing — the local roster is still the right thing to show.
     return false;
   }
-  return mirrorMembers(state);
-}
-
-/**
- * Writes `state.members` into the local user store.
- *
- * Skips the member row that IS this device. `users.id` on the server is the
- * auth identity minted against an email address, while the local self row is a
- * device-minted uuid (see `idbRepo`'s `currentActorId`) — and it is the local
- * one every `actorId` in the ledger points at. Mirroring the server's row for
- * self would show you twice rather than reconciling anything.
- *
- * Additive only. A member missing from the server list is left alone rather
- * than soft-deleted: removal has its own explicit path (`useRemoveMember`), and
- * a local row the server does not know is just as likely to be a name restored
- * from a backup, which SPEC §12 needs kept so their past events still render a
- * name.
- */
-async function mirrorMembers(state: HouseholdStateDto): Promise<boolean> {
   // The DTO is defensively shape-checked rather than trusted: this runs on a
   // response that may be a 200 from something other than this endpoint (a
   // captive-portal login page, a stale service worker), and a roster that
@@ -157,46 +140,7 @@ async function mirrorMembers(state: HouseholdStateDto): Promise<boolean> {
   if (!state || !Array.isArray(state.members)) {
     return false;
   }
-
-  const repo = getRepo();
-  const householdId = await repo.currentHouseholdId();
-  const self = await repo.getCurrentUser();
-  const existing = await repo.listUsers({ includeRemoved: true });
-  const byId = new Map(existing.map((u) => [u.id, u]));
-  const ts = now().toISOString();
-  let changed = false;
-
-  for (const member of state.members) {
-    if (member.id === state.self?.id || member.id === self.id) {
-      continue;
-    }
-    const local = byId.get(member.id);
-    if (local?.isSelf) {
-      continue;
-    }
-    // Skip the write when nothing the server owns has changed, so a poll on
-    // every window focus does not churn `updatedAt` on untouched rows — and,
-    // more importantly, does not report a change that would re-invalidate the
-    // member queries on every focus forever.
-    if (local && local.displayName === member.displayName && local.tint === member.tint) {
-      continue;
-    }
-    await repo.upsertUser({
-      id: member.id,
-      householdId,
-      email: null,
-      displayName: member.displayName,
-      tint: member.tint,
-      isSelf: false,
-      joinedAt: member.joinedAt,
-      createdAt: local?.createdAt ?? member.joinedAt,
-      updatedAt: ts,
-      deletedAt: local?.deletedAt ?? null,
-    });
-    changed = true;
-  }
-
-  return changed;
+  return mirrorMembers(getRepo(), state.members, { excludeId: state.self?.id });
 }
 
 /** The signed-in user's own member row. Never null — the repo mints one on demand. */
@@ -388,7 +332,9 @@ async function adoptJoinedHousehold(state: HouseholdStateDto, displayName?: stri
     if (nextDisplayName !== self.displayName) {
       await repo.updateUser(self.id, { displayName: nextDisplayName });
     }
-    await mirrorMembers(state);
+    if (Array.isArray(state.members)) {
+      await mirrorMembers(repo, state.members, { excludeId: state.self?.id });
+    }
     return;
   }
 
@@ -433,6 +379,7 @@ async function adoptJoinedHousehold(state: HouseholdStateDto, displayName?: stri
       createdAt: m.joinedAt,
       updatedAt: ts,
       deletedAt: null,
+      aliasIds: m.aliasIds ?? [],
     }));
   const serverMemberIds = new Set(serverMembers.map((u) => u.id));
   const otherUsers = users.filter((u) => u.id !== self.id && !serverMemberIds.has(u.id));

@@ -13,12 +13,13 @@
 // a scheduler is already running is a no-op.
 import { getRepo } from "@/data";
 import { getClock } from "@/domain";
+import { queryClient } from "@/queryClient";
 import { ApiError } from "@/shared/api";
 import { isSessionEstablished } from "@/shared/session";
 import { createSyncEngine } from "./engine";
 import { createSyncScheduler } from "./scheduler";
 import { httpTransport } from "./transport";
-import type { SyncScheduler, Timers } from "./types";
+import type { SyncEngine, SyncScheduler, Timers } from "./types";
 
 const windowTimers: Timers = {
   setTimeout: (callback, ms) => window.setTimeout(callback, ms),
@@ -42,7 +43,25 @@ export function startBackgroundSync(): void {
       return;
     }
     const clock = getClock();
-    const engine = createSyncEngine({ repo: getRepo(), transport: httpTransport(), clock });
+    const rawEngine = createSyncEngine({ repo: getRepo(), transport: httpTransport(), clock });
+    // The one place a sync cycle's result reaches React Query. `engine.ts`
+    // stays free of it (`sync/types.ts`'s header: "nothing here is React"),
+    // so a cycle that actually wrote something locally (pets/meds/.../users
+    // via `mirrorMembers`) is turned into a cache invalidation HERE — without
+    // this, every screen's `staleTime: 0` queries stay showing whatever they
+    // rendered before the sync cycle finished (`startBackgroundSync()` is
+    // fire-and-forget from the router guard, so the first render always beats
+    // the first pull), and nothing ever prompts a refetch short of the user
+    // reloading the page or refocusing the window.
+    const engine: SyncEngine = {
+      syncOnce: async () => {
+        const changed = await rawEngine.syncOnce();
+        if (changed) {
+          void queryClient.invalidateQueries();
+        }
+        return changed;
+      },
+    };
     const scheduler = createSyncScheduler({
       engine,
       clock,

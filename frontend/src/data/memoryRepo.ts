@@ -147,6 +147,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     courseEventSeq: 0,
     syncCursor: null,
     lastPushedAt: null,
+    selfAliasIdsPushed: null,
   };
 
   /** W9 sync (design §D3): the Lamport counter every `CourseEvent` write allocates from. */
@@ -222,6 +223,37 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     users.push(user);
     meta.selfUserId = user.id;
     return user.id;
+  }
+
+  // See `Repo.reconcileSelfId`'s doc comment (repo.types.ts) for the full
+  // rationale — this mirrors `idbRepo`'s implementation exactly, minus the
+  // transaction machinery an in-memory store doesn't need.
+  async function reconcileSelfId(canonicalId: string): Promise<{ changed: boolean }> {
+    const localId = await currentActorId();
+    if (localId === canonicalId) {
+      return { changed: false };
+    }
+    const idx = users.findIndex((u) => u.id === localId);
+    if (idx !== -1) {
+      const existing = users[idx];
+      const priorAliasIds = existing.aliasIds ?? [];
+      const nextAliasIds = priorAliasIds.includes(localId) ? priorAliasIds : [...priorAliasIds, localId];
+      const renamed = { ...existing, id: canonicalId, aliasIds: nextAliasIds, updatedAt: stamp() };
+      // A6: mirror `idbRepo`'s `put()` overwrite semantics. IndexedDB's
+      // `users` store is keyed by `id`, so a `put()` under `canonicalId`
+      // there can never produce two rows with the same id — if one already
+      // existed at that key, it is silently replaced. A plain array has no
+      // such constraint, so without this, a pre-existing row already
+      // holding `canonicalId` (should not normally happen — `mirrorMembers`
+      // and `pullRoster` both exclude the caller's own canonical id from
+      // what gets mirrored onto this same device — but is not provably
+      // impossible, e.g. across two reconciliations racing) would survive
+      // alongside the renamed one, leaving two entries with the same `id`
+      // where the real store would have one.
+      users = [...users.filter((u, i) => i !== idx && u.id !== canonicalId), renamed];
+    }
+    meta.selfUserId = canonicalId;
+    return { changed: true };
   }
 
   // --- pets ---------------------------------------------------------------
@@ -1059,6 +1091,13 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     meta.lastPushedAt = null;
     meta.householdId = household.id;
     meta.selfUserId = user.id;
+    // A4: the fresh self row above has no aliases yet, so whatever this
+    // device previously believed it had "confirmed pushed" for the OLD self
+    // id is meaningless now — leaving it stale would not cause incorrect
+    // behaviour (a fresh self starts with empty `aliasIds`, so the diff in
+    // `pushPendingSelfAliases` is empty either way) but is still stale
+    // bookkeeping for an identity this store no longer has.
+    meta.selfAliasIdsPushed = null;
   }
 
   async function importHousehold(b: HouseholdBackup, mode: "replace" | "merge"): Promise<ImportReport> {
@@ -1079,8 +1118,21 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       if (b.households && b.households[0]) {
         household = structuredClone(b.households[0]);
       }
+      // A2: this device's OWN self identity must never change as a side
+      // effect of importing a backup — see `idbRepo.ts`'s matching comment
+      // on its `importHousehold` for the full rationale. `fallbackActorId`
+      // is already this account's authoritative, already-reconciled id by
+      // the time Settings (the only caller of "replace") is reachable, so
+      // it is the one value that survives untouched; the backup's own
+      // `isSelf`-flagged row is imported as a normal member unless its id
+      // happens to be this very same id (the healthy same-account case).
       if (b.users) {
-        users = structuredClone(b.users);
+        const restored = structuredClone(b.users).map((u) =>
+          u.id === fallbackActorId ? { ...u, isSelf: true } : { ...u, isSelf: false },
+        );
+        const hadSelf = restored.some((u) => u.id === fallbackActorId);
+        const currentSelfRow = users.find((u) => u.id === fallbackActorId);
+        users = hadSelf || !currentSelfRow ? restored : [...restored, currentSelfRow];
       }
       pets = backfillPets(structuredClone(b.pets));
       medications = structuredClone(b.medications);
@@ -1098,7 +1150,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       meta.tintCursor = b.meta?.tintCursor ?? pets.length;
       meta.lastSweepDay = b.meta?.lastSweepDay ?? null;
       meta.householdId = household.id;
-      meta.selfUserId = users.find((u) => u.isSelf)?.id ?? meta.selfUserId;
+      meta.selfUserId = fallbackActorId;
       // The counter this database's own restored history implies — a
       // replace wipes and reinstalls `courseEvents` wholesale, so the
       // Lamport counter must be reset to match rather than left stale.
@@ -1127,7 +1179,15 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     });
 
     if (b.users) {
-      users = mergeArray(users, b.users).merged;
+      // A2 (merge-mode extension): a foreign backup's row for THIS
+      // device's own account (same id, e.g. another member's independently
+      // exported backup that happens to include us) could otherwise LWW-win
+      // on `updatedAt` and flip local self's `isSelf` to `false` — their
+      // export legitimately marks us that way from THEIR point of view.
+      // `isSelf` must never flip via merge; every other field still merges
+      // normally.
+      const selfSafeUsers = b.users.map((u) => (u.id === fallbackActorId ? { ...u, isSelf: true } : u));
+      users = mergeArray(users, selfSafeUsers).merged;
     }
     if (b.households && b.households[0]) {
       household = mergeArray([household], b.households).merged[0] ?? household;
@@ -1199,6 +1259,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     getMeta,
     setMeta,
     currentActorId,
+    reconcileSelfId,
     currentHouseholdId,
     getHousehold,
     getCurrentHousehold,

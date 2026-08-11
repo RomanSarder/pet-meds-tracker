@@ -6,10 +6,19 @@
 // points runtime consumers at `./dist/index.js`, which vitest/vite never build,
 // so nothing here may be a value (no enums, no consts, no functions).
 //
-// Deliberately no `householdId` field anywhere in this file. `household_id` is
-// always stamped from the caller's session (W9-DESIGN §D5) and never read from
-// the request body — leaving it out of the wire shape makes that a type-level
-// fact rather than a discipline every call site has to remember.
+// Deliberately no `householdId` field anywhere in this file's OWN types.
+// `household_id` is always stamped from the caller's session (W9-DESIGN §D5)
+// and never read from the request body — leaving it out of the wire shape
+// makes that a type-level fact rather than a discipline every call site has
+// to remember. `SyncPayload.users` below is the one exception, and it is an
+// import, not a type defined here: `MemberDto` (from `./household`) already
+// carries `householdId` for `GET /household`'s consumers, and reusing it
+// keeps one shape for "a household member as seen by another member" rather
+// than two that could drift. That field is populated by the SERVER on the
+// way OUT (`GET /sync/pull`) and never read from a request body — see
+// `backend/src/sync/index.ts`'s `pullRoster`.
+
+import type { MemberDto } from "./household";
 
 export type IsoDateTime = string;
 /** Calendar day, "YYYY-MM-DD" — NOT an instant. */
@@ -156,6 +165,16 @@ export interface SyncPayload {
   doseEvents?: DoseEventDto[];
   stockAdjustments?: StockAdjustmentDto[];
   courseEvents?: CourseEventDto[];
+  /**
+   * The caller's household roster (every other member), attached only to
+   * `/sync/pull` responses. Unlike the six arrays above, this is never a
+   * `SyncPushBody` field the client fills in — the server is the sole writer
+   * — and it is not incrementally cursored: every pull carries the CURRENT
+   * full list rather than a delta, since household member counts are small.
+   * See `backend/src/sync/index.ts`'s `pullRoster` for why `users` is not a
+   * `SYNC_TABLES` entry like the six tables above.
+   */
+  users?: MemberDto[];
 }
 
 /** `POST /sync/push` request body. */
@@ -176,4 +195,16 @@ export interface SyncPullResult {
   cursor: string;
   /** True when at least one table truncated at the page limit; call again with `cursor`. */
   hasMore: boolean;
+  /**
+   * The caller's OWN current `aliasIds` (see `MemberDto.aliasIds`'s doc
+   * comment) — deliberately NOT delivered through `changes.users`, which
+   * `pullRoster` (backend/src/sync/index.ts) excludes the caller's own row
+   * from by design ("every OTHER member"). A second device signed into the
+   * SAME account never appears in its own `changes.users`, so without this
+   * separate field it could never learn its own account's disclosed
+   * aliases — which is exactly the "still shows 'Someone' for my OWN
+   * pre-fix dose on a second device" defect this closes. Present only when
+   * non-empty, same convention as `changes.users`.
+   */
+  selfAliasIds?: string[];
 }

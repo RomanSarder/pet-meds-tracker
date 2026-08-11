@@ -57,7 +57,15 @@ function createFakeTimers() {
 }
 
 function makeEngine(run: () => Promise<void>): SyncEngine {
-  return { syncOnce: vi.fn(run) };
+  // The scheduler only cares whether `syncOnce()` resolves or rejects, never
+  // its resolved value — so every case below stays a plain `Promise<void>`
+  // closure, adapted here to `SyncEngine`'s real `Promise<boolean>` shape.
+  return {
+    syncOnce: vi.fn(async () => {
+      await run();
+      return false;
+    }),
+  };
 }
 
 describe("sync scheduler", () => {

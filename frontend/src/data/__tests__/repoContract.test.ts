@@ -317,9 +317,19 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
 
   // --- 8. export -> import(replace) -> export is byte-identical ----------
 
-  it("export -> importHousehold(replace) into a second empty repo -> export produces a byte-identical JSON string", async () => {
+  it("export -> importHousehold(replace) into a second, ALREADY-RECONCILED-to-the-same-account repo -> export produces a byte-identical JSON string", async () => {
     setClock(fixedClock("2026-08-08T07:00:00.000Z"));
+    // A2: "restore my own backup on a different device" — realistically,
+    // BOTH devices are already signed into the same account and have
+    // already run `reconcileSelfId` to the same canonical id (`router.ts`'s
+    // `beforeLoad` runs it before Settings, the only caller of "replace",
+    // is ever reachable). Simulated here explicitly rather than starting
+    // both repos from independent random self ids, which `importHousehold`
+    // no longer treats as "the same person" — see the dedicated
+    // cross-account test just below for that boundary.
+    const SAME_ACCOUNT_ID = "d0000000-0000-4000-8000-0000000000aa";
     const repo1 = makeRepo();
+    await repo1.reconcileSelfId(SAME_ACCOUNT_ID);
     const { medicationId, courseId } = await setupCourse(repo1);
     await repo1.adjustStock({ medicationId, deltaUnits: 10, reason: "purchase" });
     const dose = await repo1.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
@@ -330,10 +340,45 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     const backup1 = await repo1.exportHousehold();
 
     const repo2 = makeRepo();
+    await repo2.reconcileSelfId(SAME_ACCOUNT_ID);
     await repo2.importHousehold(backup1, "replace");
     const backup2 = await repo2.exportHousehold();
 
     expect(JSON.stringify(backup2)).toBe(JSON.stringify(backup1));
+  });
+
+  // --- 8b. A2: importing a DIFFERENT account's backup must not change this
+  // device's own actor identity ---------------------------------------------
+
+  it("importHousehold(replace) with a DIFFERENT account's backup keeps this device's own self id — does not adopt the backup author's identity", async () => {
+    setClock(fixedClock("2026-08-08T07:00:00.000Z"));
+    const author = makeRepo();
+    const { courseId } = await setupCourse(author);
+    await author.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    const authorSelf = await author.getCurrentUser();
+    const backup = await author.exportHousehold();
+
+    const importer = makeRepo();
+    const importerSelfBefore = await importer.getCurrentUser();
+    expect(importerSelfBefore.id).not.toBe(authorSelf.id);
+
+    await importer.importHousehold(backup, "replace");
+
+    // The importer's OWN identity survived, unchanged — it did not become
+    // the backup author.
+    const importerSelfAfter = await importer.getCurrentUser();
+    expect(importerSelfAfter.id).toBe(importerSelfBefore.id);
+    expect(await importer.currentActorId()).toBe(importerSelfBefore.id);
+
+    // The backup author's own row was imported as a normal (non-self)
+    // member instead — their data (the dose event) is not lost, just not
+    // claimed as this device's own.
+    const allUsers = await importer.listUsers({ includeRemoved: true });
+    const authorRow = allUsers.find((u) => u.id === authorSelf.id);
+    expect(authorRow).toBeDefined();
+    expect(authorRow?.isSelf).toBe(false);
+    const importedDose = (await importer.listDoseEvents({})).find((e) => e.actorId === authorSelf.id);
+    expect(importedDose).toBeDefined();
   });
 
   // --- 9. merge import is last-write-wins on updatedAt --------------------
@@ -1455,5 +1500,80 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
 
     const events = await repo.listCourseEvents({ courseId, from: sharedAt, to: sharedAt });
     expect(events.map((e) => e.id)).toEqual([lowSeqHighId.id, highSeqLowId.id]);
+  });
+
+  // --- 28. reconcileSelfId — the identity-mismatch fix ------------------------
+
+  describe("reconcileSelfId", () => {
+    const CANONICAL_ID = "c0000000-0000-4000-8000-0000000000ca";
+
+    it("a device's self record ends up with the canonical id, not the locally-generated one", async () => {
+      const repo = makeRepo();
+      const localId = await repo.currentActorId();
+      expect(localId).not.toBe(CANONICAL_ID);
+
+      const result = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(result.changed).toBe(true);
+
+      expect(await repo.currentActorId()).toBe(CANONICAL_ID);
+      const self = await repo.getCurrentUser();
+      expect(self.id).toBe(CANONICAL_ID);
+      // The old id is preserved as an alias rather than discarded — it is
+      // what lets already-logged events, still stamped with the old id,
+      // keep resolving to this same user (see the alias-based test below
+      // and `domain/identity.test.ts`).
+      expect(self.aliasIds).toContain(localId);
+    });
+
+    it("a dose logged before reconciliation still resolves to the real name afterwards, via aliasIds — the existing-data remediation, applied locally", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo);
+      const staleId = await repo.currentActorId();
+
+      const dose = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+      expect(dose.actorId).toBe(staleId);
+
+      await repo.reconcileSelfId(CANONICAL_ID);
+
+      // The ledger row itself is untouched — append-only, never rewritten —
+      // but it now resolves to the right name because the self row's
+      // aliasIds picked up the id it used to be.
+      const doseAfter = (await repo.listDoseEvents({ courseId })).find((e) => e.id === dose.id)!;
+      expect(doseAfter.actorId).toBe(staleId);
+      const users = await repo.listUsers({ includeRemoved: true });
+      const canonicalUser = users.find((u) => u.id === CANONICAL_ID);
+      expect(displayNameFor(staleId, users)).toBe(canonicalUser?.displayName);
+    });
+
+    it("is idempotent: calling it twice with the same canonical id changes nothing the second time", async () => {
+      const repo = makeRepo();
+      await repo.currentActorId();
+
+      const first = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(first.changed).toBe(true);
+      const selfAfterFirst = await repo.getCurrentUser();
+
+      const second = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(second.changed).toBe(false);
+      const selfAfterSecond = await repo.getCurrentUser();
+
+      expect(selfAfterSecond.id).toBe(CANONICAL_ID);
+      expect(selfAfterSecond.aliasIds).toEqual(selfAfterFirst.aliasIds);
+      // No duplicate row was created under the old id or anywhere else.
+      const users = await repo.listUsers({ includeRemoved: true });
+      expect(users.filter((u) => u.isSelf)).toHaveLength(1);
+    });
+
+    it("is a no-op when the local id already equals the canonical id (e.g. every navigation after the first)", async () => {
+      const repo = makeRepo();
+      await repo.currentActorId();
+      await repo.reconcileSelfId(CANONICAL_ID);
+
+      const before = await repo.getCurrentUser();
+      const result = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(result.changed).toBe(false);
+      const after = await repo.getCurrentUser();
+      expect(after).toEqual(before);
+    });
   });
 });

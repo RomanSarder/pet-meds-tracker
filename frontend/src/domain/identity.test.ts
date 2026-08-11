@@ -47,6 +47,31 @@ describe("displayNameFor", () => {
     expect(displayNameFor("u1", users)).toBe("Marta");
   });
 
+  it("resolves an actorId that matches a user's aliasIds, not just their id", () => {
+    const users = [makeUser({ id: "u1", displayName: "Roman", aliasIds: ["stale-local-id"] })];
+    expect(displayNameFor("stale-local-id", users)).toBe("Roman");
+  });
+
+  it("still returns 'Someone' for an id that matches no user's id or aliasIds", () => {
+    const users = [makeUser({ id: "u1", displayName: "Roman", aliasIds: ["stale-local-id"] })];
+    expect(displayNameFor("some-other-id", users)).toBe(UNKNOWN_ACTOR_NAME);
+  });
+
+  // A5: this is a resolution-order/tie-break test, NOT anti-hijack coverage
+  // — `displayNameFor` has no way to know whether an overlapping alias got
+  // there through the backend's collision guard being bypassed or through
+  // any other means; it only ever resolves whatever `users` it is handed.
+  // The actual anti-hijack guard (a collision with a REAL account id is
+  // rejected server-side before it can ever reach a client's `users` array
+  // at all) is covered in `backend/src/household/index.test.ts`, against
+  // the route that owns it.
+  it("resolution order, not a security boundary: an exact id match always wins over another user's aliasIds, even if they happened to overlap", () => {
+    const impostor = makeUser({ id: "u2", displayName: "Impostor", aliasIds: ["u1"] });
+    const real = makeUser({ id: "u1", displayName: "Roman" });
+    expect(displayNameFor("u1", [impostor, real])).toBe("Roman");
+    expect(displayNameFor("u1", [real, impostor])).toBe("Roman");
+  });
+
   it("never returns a string containing '@' even when email is populated", () => {
     // Not a real email address — just a value containing "@" to prove the
     // function never reads this field for display (CONTRACT.md §0 forbids

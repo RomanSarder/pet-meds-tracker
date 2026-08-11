@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { buildApp, mockDbMulti } from "../test-utils";
+import { buildApp, mockDbMulti, mockDbRecording, renderSql } from "../test-utils";
 import householdPlugin from "./index";
 import { hashSecret } from "../auth/utils";
 import { addToDate } from "../utils";
@@ -96,6 +96,19 @@ describe("GET /household", () => {
     expect(body.members).toHaveLength(2);
     expect(body.self.id).toBe(self.id);
     expect(body.self.email).toBe(self.email);
+  });
+
+  it("carries each member's aliasIds so a stale actorId resolves on every device", async () => {
+    const STALE_ID = "00000000-0000-0000-0000-0000000000ab";
+    const self = makeUser();
+    const other = makeUser({ id: OTHER_ID, displayName: "Ilya", tint: 2, aliasIds: [STALE_ID] });
+    const household = makeHousehold({ name: "Home" });
+    const db = mockDbMulti([await buildSession()], [], [self], [household], [self, other]);
+    const app = build(db);
+    const res = await authed(app, { method: "GET", url: "/household" });
+    const body = res.json();
+    const ilya = body.members.find((m: { id: string }) => m.id === OTHER_ID);
+    expect(ilya.aliasIds).toEqual([STALE_ID]);
   });
 });
 
@@ -207,6 +220,157 @@ describe("PATCH /household/me", () => {
     const res = await authed(app, { method: "PATCH", url: "/household/me", payload: { displayName: "  Marta  " } });
     expect(res.statusCode).toBe(200);
     expect(res.json().displayName).toBe("Marta");
+  });
+});
+
+// The reconciliation endpoint for the identity-mismatch fix: a device's
+// local "self" user id used to be a random uuid it minted itself, never the
+// account's canonical `users.id`, so events it logged before the mismatch
+// was caught carry that stale id as `actorId`. This lets the account
+// disclose the stale id as its own so OTHER devices' roster mirrors learn to
+// resolve it — see `users.aliasIds`'s schema comment and `toMemberDto`.
+//
+// A5: rewritten against `mockDbRecording` + `renderSql` (the pattern
+// `sync/index.test.ts` already uses correctly) instead of `mockDbMulti`.
+// `mockDbMulti` serves queued results POSITIONALLY regardless of what query
+// was actually issued, so a test built on it alone can pass even after the
+// guard it names is deleted outright — every test below was checked by
+// literally deleting the guard it defends and confirming a RED result; see
+// the PR/commit note for the per-guard results.
+describe("POST /household/me/aliases", () => {
+  const STALE_ID = "00000000-0000-0000-0000-0000000000aa";
+
+  // Distinct from the auth plugin's OWN `.set()` call — every authenticated
+  // request also does `update(sessions).set({ expiresAt })` to slide the
+  // session's expiry, which `db.calls` records identically. Filtering on
+  // the `aliasIds` key is what actually finds THIS route's update.
+  function aliasSetCall(db: ReturnType<typeof mockDbRecording>) {
+    return db.calls.find((c: any) => c.method === "set" && c.args[0]?.aliasIds !== undefined);
+  }
+
+  it("merges a new alias id, computed atomically from the column's LIVE value — never from the JS-read snapshot (A1's lost-update fix)", async () => {
+    const updatedRow = makeUser({ aliasIds: [STALE_ID] });
+    // session select, session-refresh update, caller select (no existing
+    // aliasIds), collision select (empty — STALE_ID belongs to no account),
+    // the update's RETURNING.
+    const db = mockDbRecording([await buildSession()], [], [makeUser({ aliasIds: [] })], [], [updatedRow]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [STALE_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aliasIds).toEqual([STALE_ID]);
+
+    const setCall = aliasSetCall(db);
+    expect(setCall).toBeDefined();
+    const { sql, params } = renderSql(setCall!.args[0].aliasIds);
+    // The computed value references the column itself (so Postgres
+    // evaluates it against whatever the row's CURRENT value is at UPDATE
+    // time, not a value this request read earlier) and unions in the
+    // candidate as a bound parameter — never a literal array baked in from
+    // `caller.aliasIds` read above.
+    expect(sql).toContain("alias_ids");
+    expect(sql).toContain("unnest");
+    expect(params).toContain(STALE_ID);
+  });
+
+  it("re-submitting an id already present still issues the same atomic union (dedup lives in SQL, not a JS pre-check) and the response does not grow", async () => {
+    const updatedRow = makeUser({ aliasIds: [STALE_ID] });
+    const db = mockDbRecording([await buildSession()], [], [makeUser({ aliasIds: [STALE_ID] })], [], [updatedRow]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [STALE_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aliasIds).toEqual([STALE_ID]);
+
+    const setCall = aliasSetCall(db);
+    expect(setCall).toBeDefined();
+    const { sql } = renderSql(setCall!.args[0].aliasIds);
+    // The dedup guard: a plain `unnest(a || b)` without the `GROUP BY`
+    // would let a re-submitted id duplicate itself in the array every call.
+    expect(sql).toContain("GROUP BY");
+  });
+
+  it("never lets a caller alias themselves to another real account's id — the anti-hijack guard", async () => {
+    // STALE_ID here is NOT abandoned — it is OTHER_ID's own, live, canonical
+    // account id. Without the collision check, the caller could claim it as
+    // an "alias" and future events legitimately logged by OTHER_ID would
+    // start resolving to the caller's name instead.
+    const db = mockDbRecording(
+      [await buildSession()],
+      [],
+      [makeUser({ aliasIds: [] })], // caller select
+      [{ id: OTHER_ID }], // collision select: OTHER_ID is a real account
+    );
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [OTHER_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    // Rejected silently (not an error — this is an idempotent merge, and a
+    // stale/garbage id is an expected input, not a client bug), and not
+    // merged in.
+    expect(res.json().aliasIds).toEqual([]);
+
+    // The decisive assertion (A5): the collision SELECT actually ran,
+    // scoped to the submitted candidate ids — proving the empty result
+    // above came from the guard firing, not from an update call that
+    // simply never happened to include it. It is the LAST `.where()` call
+    // recorded in this scenario: session lookup, session-refresh update,
+    // caller select, then this one — execution never reaches an UPDATE at
+    // all once the collision guard empties `safeCandidates`.
+    const whereCalls = db.calls.filter((c: any) => c.method === "where");
+    const collisionWhere = whereCalls.at(-1);
+    expect(collisionWhere).toBeDefined();
+    const { sql, params } = renderSql(collisionWhere!.args[0]);
+    expect(sql.toLowerCase()).toContain(" in (");
+    expect(params).toContain(OTHER_ID);
+    // And, just as decisively: no UPDATE was ever issued at all.
+    expect(aliasSetCall(db)).toBeUndefined();
+  });
+
+  it("drops a caller's own id from the submitted list rather than aliasing an account to itself — never even reaches a collision check or an UPDATE", async () => {
+    const db = mockDbRecording([await buildSession()], [], [makeUser({ aliasIds: [] })]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [USER_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aliasIds).toEqual([]);
+    // Only two `select`s ran (the auth plugin's session lookup and this
+    // route's caller lookup) — no THIRD select (the collision check) and no
+    // update at all.
+    expect(db.calls.filter((c: any) => c.method === "select")).toHaveLength(2);
+    expect(db.calls.filter((c: any) => c.method === "update")).toHaveLength(1); // the session-refresh only
+  });
+
+  it("A4: caps the merged array, evicting the OLDEST ids first, expressed as a LIMIT over first-seen order", async () => {
+    const updatedRow = makeUser({ aliasIds: [STALE_ID] });
+    const db = mockDbRecording([await buildSession()], [], [makeUser({ aliasIds: [] })], [], [updatedRow]);
+    const app = build(db);
+    await authed(app, { method: "POST", url: "/household/me/aliases", payload: { ids: [STALE_ID] } });
+
+    const setCall = aliasSetCall(db);
+    const { sql, params } = renderSql(setCall!.args[0].aliasIds);
+    expect(sql).toContain("LIMIT");
+    // The cap value itself travels as a bound parameter.
+    expect(params).toContain(50);
+  });
+
+  it("401s when unauthenticated", async () => {
+    const db = mockDbMulti();
+    const app = build(db);
+    const res = await app.inject({ method: "POST", url: "/household/me/aliases", payload: { ids: [STALE_ID] } });
+    expect(res.statusCode).toBe(401);
   });
 });
 

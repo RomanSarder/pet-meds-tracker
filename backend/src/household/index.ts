@@ -1,7 +1,8 @@
 import { FastifyReply } from "fastify";
 import fastifyPlugin from "fastify-plugin";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import {
+  AddSelfAliasIdsBody,
   ConfirmationRequiredError,
   CreateHouseholdBody,
   HouseholdStateDto,
@@ -13,6 +14,7 @@ import {
   LeaveHouseholdResult,
   MemberDto,
   RedeemJoinCodeBody,
+  SelfAliasesDto,
   SelfDto,
   SetDisplayNameBody,
 } from "@pet-tracker/shared";
@@ -23,6 +25,14 @@ import { evaluateJoinCode, generateJoinCode, JOIN_CODE_TTL_MS } from "./joinCode
 type UserRow = typeof users.$inferSelect;
 type HouseholdRow = typeof households.$inferSelect;
 type JoinCodeRow = typeof joinCodes.$inferSelect;
+
+// A4: see `POST /household/me/aliases`'s eviction-rule comment.
+const ALIAS_ID_CAP = 50;
+
+/** A `uuid[]` literal built from bound parameters — never raw string interpolation. */
+function uuidArrayLiteral(ids: string[]) {
+  return sql`ARRAY[${sql.join(ids.map((id) => sql`${id}::uuid`), sql.raw(", "))}]::uuid[]`;
+}
 
 function toHouseholdDto(row: HouseholdRow) {
   return {
@@ -36,13 +46,18 @@ function toHouseholdDto(row: HouseholdRow) {
 // SPEC §5: "If a user is somehow persisted without a name, render 'Someone'" — that
 // substitution belongs to the frontend's displayNameFor helper, so the wire DTO just
 // carries "" for an unset name rather than inventing a placeholder server-side.
-function toMemberDto(user: UserRow): MemberDto {
+//
+// Exported so `sync/index.ts` can reuse it for the roster it now attaches to
+// every `/sync/pull` response (see that file) — one row-to-DTO mapping for
+// the `users` table, not two that could drift apart.
+export function toMemberDto(user: UserRow): MemberDto {
   return {
     id: user.id,
     householdId: user.householdId!,
     displayName: user.displayName ?? "",
     tint: user.tint as 1 | 2 | 3 | 4,
     joinedAt: (user.joinedAt ?? user.createdAt ?? new Date()).toISOString(),
+    aliasIds: user.aliasIds ?? [],
   };
 }
 
@@ -54,6 +69,7 @@ function toSelfDto(user: UserRow): SelfDto {
     joinedAt: (user.joinedAt ?? user.createdAt ?? new Date()).toISOString(),
     householdId: user.householdId,
     email: user.email,
+    aliasIds: user.aliasIds ?? [],
   };
 }
 
@@ -241,6 +257,127 @@ export default fastifyPlugin(async (fastify) => {
       }
 
       return toSelfDto(user);
+    },
+  );
+
+  // Reconciliation for the pre-fix identity bug (see `users.aliasIds`'s
+  // schema comment): a device's local "self" row used to get a
+  // locally-minted id that was never reconciled with this account's
+  // canonical `users.id`, and any dose/course/stock event it logged before
+  // the mismatch was caught carries that stale id as its `actorId` — some
+  // of them already pushed and sitting in ledger tables that are, by
+  // design, never rewritten (`SYNC_TABLES`'s ledger kind: insert-if-absent,
+  // no update path at all). Rather than rewrite that history, the CLIENT
+  // (which is the only party that ever knew its own stale id — it was
+  // never disclosed to the server before this route existed) discloses it
+  // here, and `toMemberDto`/`toSelfDto` carry the resulting `aliasIds` to
+  // every device via the existing roster pull, so `displayNameFor` can
+  // match an old actorId to this same member without touching a single
+  // historical row.
+  //
+  // Deliberately self-only and NOT a `/sync/push`-style bulk write: this
+  // updates exactly `request.userId`'s own row, the same shape of
+  // self-mutation `PATCH /household/me` above already allows, and never
+  // reads a target-user id from the body. That is what keeps this
+  // different from the roster's deliberately PULL-ONLY `users` write path
+  // (W9-DESIGN §D5) — this never lets a caller name any row but their own.
+  //
+  // `ids` that already belong to a *real* account (any existing
+  // `users.id`, self included) are silently dropped rather than merged: an
+  // alias id must stay a dead, unclaimed value forever, or a member could
+  // alias themselves to another live account's id and hijack that
+  // account's FUTURE events (any device that later re-mirrors the roster
+  // would then resolve the victim's new dose logs to the attacker's name).
+  // Idempotent: re-submitting the same ids changes nothing, since the
+  // dedup and the "already alive" filter apply identically every time.
+  //
+  // USER DECISION (authoritative, do not "fix" without raising it again):
+  // this collision check is the ONLY guard. There is deliberately no
+  // uniqueness constraint or normalized alias table preventing two DIFFERENT
+  // accounts from independently claiming the SAME dead, never-claimed id as
+  // their own — household members are trusted with each other's
+  // attribution, not modelled as adversaries of one another (SPEC §5: "no
+  // permissions", any member can already rename or remove any other with no
+  // check at all). A member deliberately claiming a stale id they somehow
+  // learned belonged to another member's history is accepted as out of
+  // scope. What this guard DOES prevent is an account reassigning a REAL,
+  // currently-live account's identity to itself — the only case that is an
+  // accident-proof, not merely a trust-model, concern.
+  fastify.post<{ Body: AddSelfAliasIdsBody }>(
+    "/household/me/aliases",
+    {
+      preHandler: fastify.authenticate,
+      schema: {
+        body: {
+          type: "object",
+          required: ["ids"],
+          properties: {
+            ids: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 20 },
+          },
+        },
+      },
+    },
+    async (request, reply): Promise<SelfAliasesDto> => {
+      const [caller] = await fastify.db.select().from(users).where(eq(users.id, request.userId));
+      if (!caller) {
+        return reply.unauthorized();
+      }
+
+      const candidates = Array.from(new Set(request.body.ids.filter((id) => id !== caller.id)));
+      if (candidates.length === 0) {
+        return { aliasIds: caller.aliasIds ?? [] };
+      }
+
+      const collisions = await fastify.db.select({ id: users.id }).from(users).where(inArray(users.id, candidates));
+      const claimed = new Set(collisions.map((row) => row.id));
+      const safeCandidates = candidates.filter((id) => !claimed.has(id));
+      if (safeCandidates.length === 0) {
+        return { aliasIds: caller.aliasIds ?? [] };
+      }
+
+      // Atomic, capped append. The new value is computed ENTIRELY from the
+      // column's live value inside one UPDATE statement — never from
+      // `caller.aliasIds` read above — because Postgres locks and evaluates
+      // a single UPDATE's SET expression against the row's current value:
+      // two concurrent reconciliations from two devices of the SAME account
+      // (the reported failure — device 1 adds X, device 2 adds Y, both read
+      // an empty array first) now serialize correctly instead of the second
+      // write silently clobbering the first's addition. `WITH ORDINALITY`
+      // dedups while preserving first-seen order (a plain `DISTINCT` does
+      // not guarantee order), so this is also naturally idempotent:
+      // re-submitting an id already present changes nothing.
+      //
+      // Cap + eviction rule (A4): `aliasIds` can otherwise grow without
+      // bound — `currentActorId()` mints a fresh throwaway local id on every
+      // fresh install, every `resetLocalHousehold`, and every account
+      // switch, and each one gets disclosed here. Capped at
+      // `ALIAS_ID_CAP`; once full, the OLDEST ids (by first-disclosed order)
+      // are evicted to make room for new ones — chosen over refusing new
+      // additions because a device that just reconciled needs ITS current
+      // stale id resolvable, and eviction only ever discards the ids least
+      // likely to still be needed. In practice a real account accumulates a
+      // handful of these, not dozens; hitting the cap is not expected
+      // outside of pathological reset loops.
+      const merged = sql<string[]>`(
+        SELECT ARRAY(
+          SELECT x FROM (
+            SELECT x, MIN(ord) AS first_ord
+            FROM unnest(${users.aliasIds} || ${uuidArrayLiteral(safeCandidates)}) WITH ORDINALITY AS t(x, ord)
+            GROUP BY x
+            ORDER BY first_ord DESC
+            LIMIT ${ALIAS_ID_CAP}
+          ) capped
+          ORDER BY first_ord ASC
+        )
+      )`;
+
+      const [updated] = await fastify.db
+        .update(users)
+        .set({ aliasIds: merged })
+        .where(eq(users.id, request.userId))
+        .returning();
+
+      return { aliasIds: updated?.aliasIds ?? caller.aliasIds ?? [] };
     },
   );
 

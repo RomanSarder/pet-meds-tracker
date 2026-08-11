@@ -6,6 +6,7 @@ import type { Repo } from "@/data";
 import type { Clock, DoseEvent, Timestamped } from "@/domain";
 import { RETRACT_GRACE_MS, UNDO_WINDOW_MS } from "@/domain";
 import { domainToPayload, payloadToRemoteChanges } from "./mapping";
+import { mergeSelfAliasIds, mirrorMembers } from "./mirrorMembers";
 import type { SyncEngine, SyncTransport } from "./types";
 
 /**
@@ -30,11 +31,31 @@ function isQuarantined(event: DoseEvent, nowMs: number): boolean {
 }
 
 export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOptions): SyncEngine {
-  async function syncOnce(): Promise<void> {
+  async function syncOnce(): Promise<boolean> {
     const lastPushedAt = await repo.getMeta("lastPushedAt");
     const backup = await repo.exportHousehold();
     const nowMs = clock.now().getTime();
 
+    // Every ledger row newer than the watermark is pushed, regardless of
+    // whose `actorId` it carries — including one this device merely
+    // learned about via merge-mode `importHousehold` (which legitimately
+    // brings in ANOTHER member's own dose/course/stock history, preserving
+    // their `actorId` verbatim; see `Repo.applyRemoteChanges`'s doc
+    // comment). An earlier version of this filtered such rows out before
+    // push, on the theory that the server would otherwise reattribute them
+    // to whoever pushes — true at the time, but it meant a row whose true
+    // author's own device never comes back online was stranded in this
+    // device's IndexedDB forever, invisible to the rest of the household.
+    // For a medication tracker that is worse than the mis-attribution it
+    // avoided: a dose nobody can see was given invites a duplicate.
+    // `backend/src/sync/index.ts`'s `pushTable` now resolves this the other
+    // way — it trusts a client-supplied `actorId` verbatim whenever it
+    // names a member of the CALLER's OWN household (by canonical id or
+    // disclosed alias), computed server-side from the session, and only
+    // overrides an id naming nobody in that household (garbage, or a
+    // different household's member — the cross-household spoofing hole
+    // stays closed). So every row this device holds is safe to push
+    // exactly as logged: no filter needed here at all.
     const candidateDoseEvents = backup.doseEvents.filter((e) => isPushable(e, lastPushedAt));
     const quarantined = candidateDoseEvents.filter((e) => isQuarantined(e, nowMs));
     const pushableDoseEvents = candidateDoseEvents.filter((e) => !isQuarantined(e, nowMs));
@@ -66,16 +87,44 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
 
     const householdId = await repo.currentHouseholdId();
     let cursor = await repo.getMeta("syncCursor");
+    let changedAnything = false;
 
     for (;;) {
       const result = await transport.pull(cursor);
       // The cursor advances only after a successful apply, so a crash
       // mid-apply re-delivers this page rather than skipping it.
-      await repo.applyRemoteChanges(payloadToRemoteChanges(result.changes, householdId));
+      const report = await repo.applyRemoteChanges(payloadToRemoteChanges(result.changes, householdId));
+      if (Object.values(report.applied).some((count) => count > 0)) {
+        changedAnything = true;
+      }
+      // `changes.users` is the household roster (packages/shared/src/sync.ts,
+      // backend/src/sync/index.ts's `pullRoster`) — not part of
+      // `RemoteChanges`/`applyRemoteChanges` (that contract deliberately
+      // excludes `users`, same as `HouseholdBackup`'s merge always has), so
+      // it is mirrored separately through the same helper `useRefreshMembers`
+      // uses for `GET /household`.
+      if (result.changes.users && result.changes.users.length > 0) {
+        const membersChanged = await mirrorMembers(repo, result.changes.users);
+        if (membersChanged) changedAnything = true;
+      }
+      // G1: `pullRoster` never includes the caller's own row in
+      // `changes.users` (see that function's comment), so a second device
+      // signed into the SAME account would otherwise never learn its own
+      // account's disclosed aliases through the background sync cycle at
+      // all — the exact "still 'Someone' for my own pre-fix dose on another
+      // device of mine" defect. `selfAliasIds` is the separate channel for
+      // it; see `SyncPullResult.selfAliasIds`'s doc comment.
+      if (result.selfAliasIds && result.selfAliasIds.length > 0) {
+        const self = await repo.getCurrentUser();
+        const selfChanged = await mergeSelfAliasIds(repo, self, result.selfAliasIds);
+        if (selfChanged) changedAnything = true;
+      }
       cursor = result.cursor;
       await repo.setMeta("syncCursor", cursor);
       if (!result.hasMore) break;
     }
+
+    return changedAnything;
   }
 
   return { syncOnce };

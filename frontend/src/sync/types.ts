@@ -19,13 +19,19 @@ export interface SyncTransport {
 export interface SyncEngine {
   /**
    * Collect local changes → push → pull from `syncCursor` →
-   * `repo.applyRemoteChanges()` → advance `syncCursor` and `lastPushedAt`
-   * (W9-DESIGN §D6). Rejects on any transport failure; a failed sync is
-   * never surfaced to the user (offline is the normal case), which is the
-   * scheduler's job, not this one's — `syncOnce()` reports failure honestly
-   * by rejecting, and the scheduler is what swallows it.
+   * `repo.applyRemoteChanges()` (plus `changes.users` → `mirrorMembers()`) →
+   * advance `syncCursor` and `lastPushedAt` (W9-DESIGN §D6). Rejects on any
+   * transport failure; a failed sync is never surfaced to the user (offline
+   * is the normal case), which is the scheduler's job, not this one's —
+   * `syncOnce()` reports failure honestly by rejecting, and the scheduler is
+   * what swallows it.
+   *
+   * Resolves to whether this cycle actually wrote anything to the local
+   * store — `sync/index.ts` is the one caller allowed to act on that (it
+   * invalidates the React Query cache when true), keeping this interface
+   * itself free of React.
    */
-  syncOnce(): Promise<void>;
+  syncOnce(): Promise<boolean>;
 }
 
 /**

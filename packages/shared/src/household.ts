@@ -34,6 +34,20 @@ export interface MemberDto {
   /** Same 1–4 palette as pets, assigned on join. */
   tint: 1 | 2 | 3 | 4;
   joinedAt: string;
+  /**
+   * Prior local ids this account has disclosed as its own, via `POST
+   * /household/me/aliases` — see that route's doc comment for why this
+   * exists (a device minted a random local id for "self" before it ever
+   * learned this account's canonical id, and had already stamped
+   * `actorId` on ledger rows with it before the mismatch was caught).
+   * `displayNameFor` (frontend/src/domain/identity.ts) matches an
+   * `actorId` against a member's `id` OR any of these, so a historical
+   * event stamped with a stale id still resolves to this member's name on
+   * every device, without rewriting the (append-only) event itself.
+   * Optional so every pre-existing `MemberDto` literal in tests and older
+   * fixtures still type-checks; absent means "no aliases", same as `[]`.
+   */
+  aliasIds?: string[];
 }
 
 /**
@@ -112,6 +126,24 @@ export interface RedeemJoinCodeBody {
 /** `PATCH /household/me` request body. */
 export interface SetDisplayNameBody {
   displayName: string;
+}
+
+/**
+ * `POST /household/me/aliases` request body. Self-only, by design: there is
+ * no target-user field, because the route always writes to
+ * `request.userId` — the authenticated caller's own row — and nowhere else.
+ * `ids` are prior local-only ids the caller's OWN device(s) minted before
+ * ever learning this account's canonical id; a value that collides with any
+ * account's real `users.id` is rejected server-side rather than accepted
+ * (that would let a member overwrite another account's future attribution).
+ */
+export interface AddSelfAliasIdsBody {
+  ids: string[];
+}
+
+/** `POST /household/me/aliases` response: the caller's alias set after the merge. */
+export interface SelfAliasesDto {
+  aliasIds: string[];
 }
 
 /**

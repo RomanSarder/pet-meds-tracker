@@ -16,6 +16,8 @@ export type {
   IssueJoinCodeBody,
   RedeemJoinCodeBody,
   SetDisplayNameBody,
+  AddSelfAliasIdsBody,
+  SelfAliasesDto,
   CreateHouseholdBody,
   LeaveHouseholdBody,
   LeaveHouseholdResult,

@@ -1,12 +1,13 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fastifyPlugin from "fastify-plugin";
-import { and, asc, eq, getTableColumns, gt, sql, SQL } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, gt, ne, sql, SQL } from "drizzle-orm";
 import { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import {
   CourseDto,
   CourseEventDto,
   DoseEventDto,
   MedicationDto,
+  MemberDto,
   PetDto,
   StockAdjustmentDto,
   SyncPayload,
@@ -24,6 +25,7 @@ import {
   users,
 } from "../db/schema";
 import authenticatePlugin from "../auth/authenticate-plugin";
+import { toMemberDto } from "../household/index";
 
 // W9-DESIGN §D5: page size for GET /sync/pull. A table whose result reaches
 // exactly this many rows is presumed truncated — see the cursor rule below.
@@ -300,18 +302,23 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
  * when the caller has no household, or isn't a user at all — every sync route
  * calls this first and stamps its result as `household_id`, never reading one
  * from the request body (W9-DESIGN §D5).
+ *
+ * Also returns the caller's own `aliasIds`: `/sync/pull` needs it (see
+ * `selfAliasIds` on `SyncPullResult`) and this is the one place both sync
+ * routes already fetch the caller's own row, so exposing it here costs no
+ * extra query. `/sync/push` simply ignores the field.
  */
 async function requireHousehold(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
-): Promise<string | null> {
+): Promise<{ householdId: string; aliasIds: string[] } | null> {
   const [user] = await fastify.db.select().from(users).where(eq(users.id, request.userId));
   if (!user || !user.householdId) {
     reply.notFound();
     return null;
   }
-  return user.householdId;
+  return { householdId: user.householdId, aliasIds: user.aliasIds ?? [] };
 }
 
 /**
@@ -344,11 +351,33 @@ function excludedSetClause(table: SyncTable): Record<string, SQL> {
  * household's row id would overwrite that row on conflict. Ledger rows can
  * never be overwritten at all, by any household, since `onConflictDoNothing`
  * has no update path to guard.
+ *
+ * `actorId` on a ledger row is trusted verbatim ONLY when it names a member
+ * of the CALLER's OWN household — `allowedActorIds` (built once per push
+ * in the route handler below, never per row) is that household's every
+ * member canonical `users.id` UNION every one of their disclosed
+ * `aliasIds`. The user's own decision: household members are mutually
+ * trusted with attribution (SPEC §5, "no permissions"), so one member
+ * pushing a row that legitimately names another member — e.g. a
+ * merge-mode `importHousehold` bringing in someone else's own dose/course/
+ * stock history, still carrying THEIR `actorId` — must not get silently
+ * reattributed to the pusher; the frontend used to solve this by simply
+ * never pushing such a row at all, which meant it was stranded forever the
+ * moment its true author's own device never came back online (worse than
+ * mis-attribution, for a medication tracker: a dose nobody can see was
+ * given invites a duplicate). `callerId` is the fallback for anything
+ * else — an id belonging to nobody, or to a member of a DIFFERENT
+ * household entirely — which is what keeps this from reopening the
+ * cross-household attribution-spoofing hole the earlier, unconditional
+ * version of this stamping closed. Mutable tables (pets/medications/
+ * courses) have no `actorId` column and are untouched by this.
  */
 async function pushTable(
   db: any,
   spec: SyncTableSpec,
   householdId: string,
+  callerId: string,
+  allowedActorIds: ReadonlySet<string>,
   dtoRows: unknown[] | undefined,
 ): Promise<{ count: number; maxSeq: number }> {
   if (!dtoRows || dtoRows.length === 0) {
@@ -356,6 +385,12 @@ async function pushTable(
   }
 
   const values = dtoRows.map((row) => spec.fromDto(row, householdId));
+  if (spec.kind === "ledger") {
+    for (const value of values) {
+      const actorId = (value as { actorId: string }).actorId;
+      (value as { actorId: string }).actorId = allowedActorIds.has(actorId) ? actorId : callerId;
+    }
+  }
 
   const written =
     spec.kind === "ledger"
@@ -397,6 +432,64 @@ async function pullTable(
   return { rows, truncated: rows.length >= PULL_LIMIT, maxSeq };
 }
 
+/**
+ * The caller's household roster (every OTHER member — never the caller's own
+ * row), attached to every `/sync/pull` response under `changes.users`.
+ *
+ * Deliberately NOT a `SYNC_TABLES` entry: `users` is the auth identity table
+ * (unique `email`, no `updated_at`/`sync_seq` column, sessions and magic-link
+ * tokens hang off its `id`), so it cannot safely take the generic mutable
+ * table's client-writable LWW upsert the way pets/medications/etc. do — a
+ * client-supplied row on THIS table could otherwise collide with another
+ * account's identity. Accordingly this is PULL-ONLY: `/sync/push` never reads
+ * a `users` key from the request body at all (see `pushTable`'s callers
+ * below, which only ever iterate `SYNC_TABLES`).
+ *
+ * Also deliberately NOT cursor-gated like the six tables: household rosters
+ * are small (a handful of people), so every pull just re-sends the CURRENT
+ * full list rather than tracking a `sync_seq` watermark and soft-delete
+ * tombstone for a table this size — the simpler, safer choice here over
+ * adding replication columns to the auth table. `household_id` is taken from
+ * `requireHousehold`'s session-derived value, never from client input, so
+ * this can never return another household's members (W9-DESIGN §D5's rule,
+ * same as every other table in this file).
+ */
+async function pullRoster(db: any, householdId: string, callerUserId: string): Promise<MemberDto[]> {
+  const rows = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.householdId, householdId), ne(users.id, callerUserId)));
+  return rows.map(toMemberDto);
+}
+
+/**
+ * Every actor id `/sync/push` will trust verbatim on a ledger row: the
+ * caller's OWN household's members, by canonical `users.id`, UNION every
+ * one of their disclosed `aliasIds` (see `users.aliasIds`'s schema comment
+ * — a member's pre-fix local id, which their own already-pushed history may
+ * still be stamped with). `householdId` MUST be the session-derived value
+ * `requireHousehold` already resolved — never anything from the request
+ * body — or a client could simply claim membership in a household it
+ * isn't in and launder attribution to one of ITS members instead. One
+ * query for the whole push, not one per row: `pushTable` is called once
+ * per table (six times, at most), and this set is built once up front and
+ * passed to all of them.
+ */
+async function allowedActorIdsForHousehold(db: any, householdId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ id: users.id, aliasIds: users.aliasIds })
+    .from(users)
+    .where(eq(users.householdId, householdId));
+  const allowed = new Set<string>();
+  for (const row of rows as Array<{ id: string; aliasIds: string[] | null }>) {
+    allowed.add(row.id);
+    for (const alias of row.aliasIds ?? []) {
+      allowed.add(alias);
+    }
+  }
+  return allowed;
+}
+
 export default fastifyPlugin(async (fastify) => {
   // MUST be awaited — see household/index.ts for why a bare register() leaves
   // `fastify.authenticate` undefined at route-definition time.
@@ -406,10 +499,14 @@ export default fastifyPlugin(async (fastify) => {
     "/sync/push",
     { preHandler: fastify.authenticate },
     async (request, reply): Promise<SyncPushResult | undefined> => {
-      const householdId = await requireHousehold(fastify, request, reply);
-      if (!householdId) return;
+      const resolved = await requireHousehold(fastify, request, reply);
+      if (!resolved) return;
+      const { householdId } = resolved;
 
       const changes = request.body?.changes ?? {};
+      // One query for the whole request (not per row, not per table) —
+      // see `allowedActorIdsForHousehold`'s doc comment.
+      const allowedActorIds = await allowedActorIdsForHousehold(fastify.db, householdId);
 
       let accepted = 0;
       let cursorSeq = 0;
@@ -418,7 +515,14 @@ export default fastifyPlugin(async (fastify) => {
       // or none does (W9-DESIGN §D5).
       await fastify.db.transaction(async (tx: any) => {
         for (const spec of SYNC_TABLES) {
-          const { count, maxSeq } = await pushTable(tx, spec, householdId, changes[spec.key]);
+          const { count, maxSeq } = await pushTable(
+            tx,
+            spec,
+            householdId,
+            request.userId,
+            allowedActorIds,
+            changes[spec.key],
+          );
           accepted += count;
           cursorSeq = Math.max(cursorSeq, maxSeq);
         }
@@ -432,8 +536,9 @@ export default fastifyPlugin(async (fastify) => {
     "/sync/pull",
     { preHandler: fastify.authenticate },
     async (request, reply): Promise<SyncPullResult | undefined> => {
-      const householdId = await requireHousehold(fastify, request, reply);
-      if (!householdId) return;
+      const resolved = await requireHousehold(fastify, request, reply);
+      if (!resolved) return;
+      const { householdId, aliasIds: callerAliasIds } = resolved;
 
       const parsedCursor = Number(request.query.cursor);
       const cursor = Number.isFinite(parsedCursor) ? parsedCursor : 0;
@@ -465,7 +570,26 @@ export default fastifyPlugin(async (fastify) => {
       // the max actually returned, or leave the cursor untouched if nothing was.
       const nextCursor = anyTruncated ? truncatedMin : anyRows ? overallMax : cursor;
 
-      return { changes, cursor: String(nextCursor), hasMore: anyTruncated };
+      // Runs after the six-table loop and does not affect `nextCursor`/
+      // `hasMore` at all — see `pullRoster`'s comment for why this is a
+      // separate, uncursored side channel rather than a seventh SYNC_TABLES
+      // entry.
+      const roster = await pullRoster(fastify.db, householdId, request.userId);
+      if (roster.length > 0) {
+        changes.users = roster;
+      }
+
+      return {
+        changes,
+        cursor: String(nextCursor),
+        hasMore: anyTruncated,
+        // See `SyncPullResult.selfAliasIds`'s doc comment: `pullRoster`
+        // excludes the caller's own row from `changes.users` by design, so
+        // this is the only way a SECOND device of the same account ever
+        // learns its own account's disclosed aliases without a Household
+        // screen visit.
+        ...(callerAliasIds.length > 0 ? { selfAliasIds: callerAliasIds } : {}),
+      };
     },
   );
 });

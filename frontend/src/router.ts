@@ -26,6 +26,7 @@ import { SettingsPage } from "./features/settings/SettingsPage";
 import { HistoryPage } from "./features/history/HistoryPage";
 import { HouseholdPage } from "./features/household/HouseholdPage";
 import { JoinHouseholdPage } from "./features/household/JoinHouseholdPage";
+import { pushPendingSelfAliases } from "./features/household/selfIdentity";
 import { FirstRunPage } from "./features/onboarding/FirstRunPage";
 
 // Marks routes that should not render the tab bar / app chrome (full-screen
@@ -116,9 +117,35 @@ const appLayoutRoute = createRoute({
 
     if (getStoreOwner() !== signedInUser.id) {
       if (getStoreOwner() === null) {
-        // Legacy install / first run on this device: no prior owner recorded,
-        // so there is nothing to lose by claiming it.
-        setStoreOwner(signedInUser.id);
+        // Legacy install / first run on this device: no prior owner
+        // recorded. A6: null is NOT proof this device's local store is
+        // empty — an install that predates `storeOwnerUserId` tracking, or
+        // one where localStorage was evicted (Safari private mode, quota
+        // pressure) while IndexedDB survived, reads as null here too, and
+        // blindly claiming it would let a second account silently inherit
+        // the first account's device id and its IndexedDB rows (SPEC §9:
+        // AppShell/TodayPage/PetsPage read IndexedDB directly). Same
+        // disposability gate as the "different owner" branch below; only
+        // the action on the disposable path differs — claim outright, no
+        // reset needed, since a genuinely fresh device has nothing to lose
+        // either way and a reset would needlessly discard the local
+        // household id the first-run flow depends on matching server-side
+        // (see FirstRunPage).
+        let disposable: boolean;
+        try {
+          disposable = await localStoreIsDisposable(getRepo());
+        } catch {
+          throw redirect({ to: "/account-switch" });
+        }
+
+        if (disposable) {
+          setStoreOwner(signedInUser.id);
+        } else {
+          // Real, unrecognised local data and no owner on record for it —
+          // do not guess whose it is. Same fail-closed treatment as the
+          // "different owner, not disposable" case just below.
+          throw redirect({ to: "/account-switch" });
+        }
       } else {
         // A different account previously owned this device's local store.
         // Wrap the repo calls, but do NOT fall back to `isSessionEstablished()`
@@ -158,6 +185,17 @@ const appLayoutRoute = createRoute({
         }
       }
     }
+
+    // Reconciles this device's local self id with the id `/auth/me` just
+    // vouched for — see `features/household/selfIdentity.ts`'s header
+    // comment for the bug this closes. Awaited: it is a local IndexedDB
+    // write only (fast), and it must complete before anything on this
+    // navigation can log a dose or course event under a stale id. The
+    // alias disclosure half is NOT awaited — it is a network call, is
+    // usually a no-op (nothing pending), and is safe to retry on the next
+    // navigation if it fails or the device is offline right now.
+    await getRepo().reconcileSelfId(signedInUser.id);
+    void pushPendingSelfAliases(getRepo());
 
     markSessionEstablished();
     // The session is confirmed as of right now, so background sync may run.
