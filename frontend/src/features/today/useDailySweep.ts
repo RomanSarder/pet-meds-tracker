@@ -43,11 +43,12 @@ export function useDailySweep(now: Date): void {
         // survives a refresh, where the ref above does not.
         if ((await repo.getMeta("lastSweepDay")) === day) return;
 
-        const [courses, events] = await Promise.all([
+        const [courses, events, courseEvents] = await Promise.all([
           repo.listCourses(),
           repo.listDoseEvents({}),
+          repo.listCourseEvents({}),
         ]);
-        const ctx: EngineContext = { courses, events };
+        const ctx: EngineContext = { courses, events, courseEvents };
 
         const missed = findMissedOccurrences(ctx, now);
         const inputs: Array<{ courseId: string; scheduledFor: IsoDateTime; amount: number }> = [];

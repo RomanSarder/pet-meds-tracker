@@ -154,6 +154,7 @@ function buildDoseEntry(
   course: Course,
   medication: Medication,
   allDoseEvents: DoseEvent[],
+  allCourseEvents: CourseEvent[],
 ): LogEntry {
   const scheduledFor = de.scheduledFor;
   const givenAtDate = new Date(de.givenAt);
@@ -186,7 +187,7 @@ function buildDoseEntry(
         // `nextDueAt` is the engine's own function — never reimplemented
         // here. It returns null once the course is no longer active, in
         // which case the clause is simply omitted.
-        const nextDue = nextDueAt(course, allDoseEvents, givenAtDate);
+        const nextDue = nextDueAt(course, allDoseEvents, allCourseEvents, givenAtDate);
         if (nextDue !== null) {
           clauses.push({
             kind: "nextDue",
@@ -313,7 +314,7 @@ export function buildLogEntries(src: LogSource): LogEntry[] {
     if (!course) continue;
     const medication = medicationById.get(course.medicationId);
     if (!medication) continue;
-    entries.push(buildDoseEntry(de, course, medication, src.doseEvents));
+    entries.push(buildDoseEntry(de, course, medication, src.doseEvents, src.courseEvents));
   }
 
   for (const ce of src.courseEvents) {

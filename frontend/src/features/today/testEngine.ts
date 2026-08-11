@@ -17,7 +17,7 @@
 //
 // When W2's real engine lands, tests can drop the `vi.mock` and this file with
 // it; nothing in the shipped screen references it.
-import type { Course, DoseEvent, IsoDateTime, LocalDate } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, IsoDateTime, LocalDate } from "@/domain";
 import { occurrenceKeyFor } from "@/domain";
 import type { DoseState, EngineContext, Occurrence } from "@/engine";
 
@@ -119,9 +119,15 @@ export const engineDouble = {
     return doseState(occurrence);
   },
 
-  nextDueAt(_course: Course, _events: DoseEvent[], _after: Date): Date | null {
+  nextDueAt(
+    _course: Course,
+    _events: DoseEvent[],
+    _courseEvents: CourseEvent[],
+    _after: Date,
+  ): Date | null {
     void _course;
     void _events;
+    void _courseEvents;
     void _after;
     return engineStore.nextDue;
   },

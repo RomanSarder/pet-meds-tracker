@@ -100,15 +100,17 @@ export function createNotificationScheduler(deps: SchedulerDeps): {
     if (!canNotify()) return;
 
     const repo = getRepo();
-    const [courses, events, pets, medications] = await Promise.all([
+    const [courses, events, courseEvents, pets, medications] = await Promise.all([
       repo.listCourses(),
       repo.listDoseEvents({}),
+      repo.listCourseEvents({}),
       repo.listPets(),
       repo.listMedications(),
     ]);
-    // `EngineContext` (frozen shape, slice 3) is exactly `{ courses, events }`
-    // — pets/medications are fetched separately, only for name lookups below.
-    const ctx: EngineContext = { courses, events };
+    // `EngineContext` (slice 3, widened for the forward-only schedule-edit
+    // ledger fix) is `{ courses, events, courseEvents }` — pets/medications
+    // are fetched separately, only for name lookups below.
+    const ctx: EngineContext = { courses, events, courseEvents };
 
     const today = localDayKey(now);
     const yesterday = addLocalDays(today, -1);

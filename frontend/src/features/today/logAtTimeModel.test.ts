@@ -10,7 +10,7 @@
 // below are real transitions: 2026-03-29 (01:00 → 02:00, a 23-hour day) and
 // 2026-10-25 (02:00 → 01:00, a 25-hour day).
 import { describe, expect, it } from "vitest";
-import type { Course, DoseEvent, LocalDate, Medication, Schedule } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, LocalDate, Medication, Schedule } from "@/domain";
 import { FIXTURE_NOW, occurrenceKeyFor, startOfLocalDay } from "@/domain";
 import type { Occurrence } from "@/engine";
 // The one cross-feature import in this file, and a deliberate one: the sheet's
@@ -476,6 +476,7 @@ describe("the lateness the sheet promises is the lateness History renders", () =
     const result = consequenceFor({
       course,
       events: [],
+      courseEvents: [],
       occurrence: makeOccurrence(course, DAY, dueAt),
       chosen,
     });
@@ -514,7 +515,7 @@ describe("consequenceFor · fromLastDose", () => {
     const events = [givenEvent(course, at(0, 0))];
     const occurrence = makeOccurrence(course, DAY, at(8, 0));
 
-    const result = consequenceFor({ course, events, occurrence, chosen: at(9, 30) });
+    const result = consequenceFor({ course, events, courseEvents: [], occurrence, chosen: at(9, 30) });
 
     expect(result.kind).toBe("moves");
     if (result.kind !== "moves") return;
@@ -528,7 +529,7 @@ describe("consequenceFor · fromLastDose", () => {
     const dueAt = at(8, 0);
     const occurrence = makeOccurrence(course, DAY, dueAt);
 
-    const result = consequenceFor({ course, events, occurrence, chosen: dueAt });
+    const result = consequenceFor({ course, events, courseEvents: [], occurrence, chosen: dueAt });
 
     expect(result.kind).toBe("stays");
     if (result.kind !== "stays") return;
@@ -543,7 +544,7 @@ describe("consequenceFor · fromLastDose", () => {
     const events = [givenEvent(course, at(0, 0)), givenEvent(course, at(12, 0))];
     const occurrence = makeOccurrence(course, DAY, at(8, 0));
 
-    const result = consequenceFor({ course, events, occurrence, chosen: at(9, 30) });
+    const result = consequenceFor({ course, events, courseEvents: [], occurrence, chosen: at(9, 30) });
 
     expect(result.kind).toBe("stays");
     if (result.kind !== "stays") return;
@@ -555,7 +556,7 @@ describe("consequenceFor · fromLastDose", () => {
     const course = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 8 } });
     const occurrence = makeOccurrence(course, DAY, null);
 
-    const result = consequenceFor({ course, events: [], occurrence, chosen: at(9, 30) });
+    const result = consequenceFor({ course, events: [], courseEvents: [], occurrence, chosen: at(9, 30) });
 
     expect(result.kind).toBe("moves");
     if (result.kind !== "moves") return;
@@ -573,7 +574,7 @@ describe("consequenceFor · fromLastDose", () => {
     const events = [givenEvent(course, at(0, 0))];
     const occurrence = makeOccurrence(course, DAY, at(8, 0));
 
-    expect(consequenceFor({ course, events, occurrence, chosen: at(9, 30) })).toEqual({
+    expect(consequenceFor({ course, events, courseEvents: [], occurrence, chosen: at(9, 30) })).toEqual({
       kind: "none",
     });
   });
@@ -586,7 +587,7 @@ describe("consequenceFor · fixedTimes", () => {
     });
     const occurrence = makeOccurrence(course, DAY, at(8, 0));
 
-    const result = consequenceFor({ course, events: [], occurrence, chosen: at(9, 30) });
+    const result = consequenceFor({ course, events: [], courseEvents: [], occurrence, chosen: at(9, 30) });
 
     expect(result.kind).toBe("stays");
     if (result.kind !== "stays") return;
@@ -599,7 +600,7 @@ describe("consequenceFor · fixedTimes", () => {
       schedule: { kind: "fixedTimes", times: ["08:00", "20:00"] },
     });
     const occurrence = makeOccurrence(course, DAY, at(8, 0));
-    const base = { course, events: [] as DoseEvent[], occurrence };
+    const base = { course, events: [] as DoseEvent[], courseEvents: [] as CourseEvent[], occurrence };
 
     const early = consequenceFor({ ...base, chosen: at(8, 5) });
     const late = consequenceFor({ ...base, chosen: at(11, 45) });
@@ -615,7 +616,7 @@ describe("consequenceFor · fixedTimes", () => {
     const course = makeCourse({ schedule: { kind: "fixedTimes", times: ["20:00"] } });
     const occurrence = makeOccurrence(course, DAY, at(20, 0));
 
-    const result = consequenceFor({ course, events: [], occurrence, chosen: at(20, 30) });
+    const result = consequenceFor({ course, events: [], courseEvents: [], occurrence, chosen: at(20, 30) });
 
     expect(result.kind).toBe("stays");
     if (result.kind !== "stays") return;
@@ -627,7 +628,7 @@ describe("consequenceFor · fixedTimes", () => {
     const course = makeCourse({ schedule: { kind: "fixedTimes", times: ["08:00"] } });
     const occurrence = makeOccurrence(course, DAY, at(8, 0));
 
-    const result = consequenceFor({ course, events: [], occurrence, chosen: at(7, 45) });
+    const result = consequenceFor({ course, events: [], courseEvents: [], occurrence, chosen: at(7, 45) });
 
     expect(result.kind).toBe("stays");
     if (result.kind !== "stays") return;
@@ -641,7 +642,7 @@ describe("consequenceFor · fixedTimes", () => {
     });
     const occurrence = makeOccurrence(course, DAY, at(8, 0));
 
-    expect(consequenceFor({ course, events: [], occurrence, chosen: at(9, 30) })).toEqual({
+    expect(consequenceFor({ course, events: [], courseEvents: [], occurrence, chosen: at(9, 30) })).toEqual({
       kind: "none",
     });
   });

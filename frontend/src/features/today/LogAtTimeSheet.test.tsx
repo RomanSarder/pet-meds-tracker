@@ -129,8 +129,12 @@ function makeDose(occurrence: Occurrence, overrides: Partial<TodayDose> = {}): T
   };
 }
 
+// Every course this file builds comes from `makeCourse()` and is never
+// edited within a test (no `CourseEvent` of kind `edited` appears anywhere
+// below), so an empty ledger here is the real ledger for these courses, not
+// a stand-in for one that exists.
 function makeContext(course: Course, events: DoseEvent[] = []): LogAtTimeContext {
-  return { pet, course, events, scheduleSummary: "2× daily · 08:00, 20:00" };
+  return { pet, course, events, courseEvents: [], scheduleSummary: "2× daily · 08:00, 20:00" };
 }
 
 interface HarnessResult {

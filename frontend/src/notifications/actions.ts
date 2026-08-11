@@ -28,11 +28,12 @@ export interface ActionDeps {
  */
 async function resolveFreshAmount(dose: DoseRef, clock: Clock): Promise<number> {
   const repo = getRepo();
-  const [courses, events] = await Promise.all([
+  const [courses, events, courseEvents] = await Promise.all([
     repo.listCourses(),
     repo.listDoseEvents({ courseId: dose.courseId }),
+    repo.listCourseEvents({ courseId: dose.courseId }),
   ]);
-  const ctx: EngineContext = { courses, events };
+  const ctx: EngineContext = { courses, events, courseEvents };
   const day = dose.scheduledFor !== null ? localDayKey(new Date(dose.scheduledFor)) : localDayKey(clock.now());
   const occurrence = getOccurrences(day, ctx).find((occ) => occ.key === dose.occurrenceKey);
   return occurrence ? occurrence.doseAmount : dose.amount;

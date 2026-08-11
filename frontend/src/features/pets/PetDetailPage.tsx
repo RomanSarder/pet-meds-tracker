@@ -65,6 +65,11 @@ export function PetDetailView({ petId }: { petId: string }) {
   // have at most 9 same-kind entries ranked above it, so it is necessarily
   // within its own kind's top 10 too.
   const courseEventsForRecent = useCourseEventLog({ courseIds, limit: 10, newestFirst: true });
+  // Unbounded (unlike the Recent card's own top-10 fetch above): the engine
+  // context below needs the course's REAL ledger to reconstruct the schedule
+  // in effect, not a recency-truncated slice — see engine.types.ts's
+  // `EngineContext.courseEvents` doc.
+  const courseEvents = useCourseEventLog({ courseIds });
   const users = useUsers();
   const setPetArchived = useSetPetArchived();
 
@@ -96,6 +101,7 @@ export function PetDetailView({ petId }: { petId: string }) {
   const occurrences = getOccurrences(today, {
     courses: activeCourses,
     events: recentEvents,
+    courseEvents: courseEvents.data ?? [],
   }).filter((o) => o.petId === petId);
 
   function medicationName(medicationId: string): string {

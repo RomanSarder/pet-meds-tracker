@@ -11,7 +11,7 @@
 // `i18n/schedule.ts`), so the English examples in the comments are the English
 // rendering of a catalogue key, not a literal any file contains. The page
 // renders these fields verbatim and composes no copy of its own.
-import type { Course, DoseEvent, LocalDate, Medication, Pet } from "@/domain";
+import type { Course, CourseEvent, DoseEvent, LocalDate, Medication, Pet } from "@/domain";
 import type { DoseState, Occurrence } from "@/engine";
 
 /** Everything one `qk.today(day)` fetch loads, in a single cache entry. */
@@ -21,7 +21,14 @@ export interface TodaySnapshot {
   medications: Medication[];
   courses: Course[];
   events: DoseEvent[];
-  /** `getOccurrences(day, { courses, events })` — engine output, verbatim. */
+  /**
+   * The full CourseEvent ledger, unfiltered — same reasoning as `events`
+   * above: `getOccurrences`/`nextDueAt` reconstruct the schedule in effect at
+   * each slot's own due instant from this ledger (SPEC §3c), so narrowing it
+   * here would silently restore the retroactive-edit bug.
+   */
+  courseEvents: CourseEvent[];
+  /** `getOccurrences(day, { courses, events, courseEvents })` — engine output, verbatim. */
   occurrences: Occurrence[];
 }
 
@@ -143,5 +150,6 @@ export interface LogAtTimeContext {
   pet: Pet;
   course: Course;
   events: DoseEvent[]; // unfiltered — nextDueAt anchors on events days old
+  courseEvents: CourseEvent[]; // unfiltered — nextDueAt reconstructs the schedule in effect from this ledger
   scheduleSummary: string; // ALREADY LOCALIZED by the caller
 }

@@ -10,11 +10,20 @@ import { Button, Card, Chip, PetAvatar, SectionLabel, SegmentedControl } from "@
 import { Field } from "@/features/forms/Field";
 import { usePets } from "@/features/pets/hooks";
 import { amountLabel } from "@/features/pets/format";
-import type { CourseStatus, LocalDate } from "@/domain";
+import type { CourseStatus, LocalDate, LocalTime, Schedule } from "@/domain";
 import { differenceInLocalDays, localDayKey, now } from "@/domain";
 import { useTranslator } from "@/i18n";
 import type { Translator } from "@/i18n";
-import { useCourse, useMedications, useSaveCourse, useSetCourseStatus, useUpdateCourse } from "./hooks";
+import { gapWarningFor } from "./scheduleEditModel";
+import { TimesEditor } from "./TimesEditor";
+import {
+  useCourse,
+  useDoseEvents,
+  useMedications,
+  useSaveCourse,
+  useSetCourseStatus,
+  useUpdateCourse,
+} from "./hooks";
 import {
   DURATION_CHOICES,
   FREQUENCY_CHOICES,
@@ -26,6 +35,7 @@ import {
   frequencyChoiceLabel,
   intervalChoiceHours,
   intervalChoiceLabel,
+  isPresetSchedule,
   modeChoiceLabel,
   scheduleForFrequencyChoice,
   scheduleForIntervalChoice,
@@ -35,6 +45,17 @@ import {
   type IntervalChoice,
   type ModeChoice,
 } from "./scheduleChoice";
+
+/** The `fixedTimes` member of `Schedule` — the type `customTimesBase` holds. */
+type FixedTimesSchedule = Extract<Schedule, { kind: "fixedTimes" }>;
+
+/** A whole-minute duration into `{hours, minutes}`, for `history.detail.lateDuration`
+ * — same small helper as `features/today/LogAtTimeSheet.tsx` (not exported there,
+ * so not importable; duplicated rather than promoted, per that file's own convention). */
+function toHoursMinutes(totalMinutes: number): { hours: number; minutes: number } {
+  const abs = Math.abs(totalMinutes);
+  return { hours: Math.floor(abs / 60), minutes: abs % 60 };
+}
 
 /** `CourseStatus` word, shown on the course-lifecycle card. Not exported —
  * the four `pets.courseStatus.*` catalogue entries are shared with Pet
@@ -104,6 +125,18 @@ export function CourseFormView({
     courseId ? "" : localDayKey(now()),
   );
   const [errors, setErrors] = useState<FormErrors>({});
+  // `null` = the frequency chip governs `times`. Non-null once either (a) the
+  // prefill finds an existing `fixedTimes` schedule that no preset matches
+  // (`isPresetSchedule` false), or (b) the first stepper press in
+  // `TimesEditor` seeds it from the currently-selected preset. Pressing any
+  // frequency chip, or switching `mode`, resets `times` to that preset
+  // wholesale and clears this back to `null` — see the chip/mode handlers
+  // below. `customTimesBase` carries the ORIGINAL schedule `customTimes` was
+  // seeded from (so `daysOfWeek`/`everyNDays` survive a save even though
+  // this UI cannot produce them) and is kept in lockstep with `customTimes`:
+  // non-null exactly when `customTimes` is non-null.
+  const [customTimes, setCustomTimes] = useState<LocalTime[] | null>(null);
+  const [customTimesBase, setCustomTimesBase] = useState<FixedTimesSchedule | null>(null);
 
   // Edit mode prefill — runs once, as soon as both the course and the
   // medication list have loaded (the medication name isn't on Course itself,
@@ -126,6 +159,23 @@ export function CourseFormView({
     setMode(choices.mode);
     setIntervalChoice(choices.interval);
     setFrequency(choices.frequency);
+
+    // The bug this state exists to fix: `choicesForSchedule` above is a
+    // best-effort "nearest chip for display" lookup — for an existing
+    // `fixedTimes` schedule that does not exactly match any of the four
+    // presets (a course nudged by this very feature, or synced in with
+    // custom times), it silently snaps to the nearest one, and until now
+    // `handleSave` re-derived `schedule` from the chips unconditionally, so
+    // saving after touching only e.g. the dose amount would rewrite the
+    // schedule from that snapped preset. Here the exact original is kept
+    // instead, so the chips are cosmetic and the save path stays faithful.
+    if (existingCourse.schedule.kind === "fixedTimes" && !isPresetSchedule(existingCourse.schedule)) {
+      setCustomTimes(existingCourse.schedule.times);
+      setCustomTimesBase(existingCourse.schedule);
+    } else {
+      setCustomTimes(null);
+      setCustomTimesBase(null);
+    }
 
     if (existingCourse.endDate === null) {
       setDuration("Ongoing");
@@ -166,12 +216,29 @@ export function CourseFormView({
     }
   }
 
+  /**
+   * The one place `Schedule` is derived from form state — used both to
+   * persist on Save and to preview the gap warning, so the two can never
+   * disagree about what would be saved.
+   *
+   * The `customTimes !== null` branch spreads `customTimesBase` rather than
+   * building a bare `{ kind: "fixedTimes", times: customTimes }`: that
+   * preserves `daysOfWeek` (Weekly's `[6]`) and `everyNDays`, neither of
+   * which this UI can produce, but either of which a synced-in course may
+   * already carry — dropping them here would silently delete e.g. a
+   * Saturday-only constraint the very next time the course is saved.
+   */
+  function computeSchedule(): Schedule {
+    if (mode === "From last dose") return scheduleForIntervalChoice(intervalChoice);
+    if (customTimes !== null && customTimesBase !== null) {
+      return { ...customTimesBase, kind: "fixedTimes", times: customTimes };
+    }
+    return scheduleForFrequencyChoice(frequency);
+  }
+
   async function handleSave() {
     if (!validate()) return;
-    const schedule =
-      mode === "From last dose"
-        ? scheduleForIntervalChoice(intervalChoice)
-        : scheduleForFrequencyChoice(frequency);
+    const schedule = computeSchedule();
     const amountNum = Number(doseAmount);
     const trimmedInstructions = instructions.trim() ? instructions.trim() : null;
 
@@ -222,6 +289,28 @@ export function CourseFormView({
 
   const intervalOrFrequencyChoices = mode === "From last dose" ? INTERVAL_CHOICES : FREQUENCY_CHOICES;
   const saving = saveCourse.isPending || updateCourse.isPending;
+
+  // Live times a `fixedTimes` row set actually shows: the custom edit while
+  // one is in progress, else whatever the frequency chip presets.
+  const fixedTimesValues = customTimes ?? timesForFrequencyChoice(frequency);
+  const fixedTimesOriginals =
+    customTimesBase !== null ? customTimesBase.times : fixedTimesValues;
+
+  // The gap warning (SPEC: warn, never block) only has a "previous" schedule
+  // to compare against once there IS an existing, persisted course — a
+  // brand-new course being created has nothing to have shifted "earlier"
+  // from yet.
+  const doseEventsQuery = useDoseEvents(existingCourse ? { courseId: existingCourse.id } : {});
+  const gapWarning =
+    isEdit && existingCourse && mode === "At set times"
+      ? gapWarningFor({
+          next: computeSchedule(),
+          previous: existingCourse.schedule,
+          events: doseEventsQuery.data ?? [],
+          courseId: existingCourse.id,
+          now: now(),
+        })
+      : null;
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -421,17 +510,38 @@ export function CourseFormView({
           <SegmentedControl
             options={MODE_CHOICES.map((c) => ({ value: c, label: modeChoiceLabel(c, tr) }))}
             value={mode}
-            onChange={(v) => setMode(v as ModeChoice)}
+            onChange={(v) => {
+              setMode(v as ModeChoice);
+              // A stale `times` array from the OLD mode's chip set must not
+              // survive a switch — e.g. a 3-slot custom edit surviving a
+              // switch to a 2-slot preset. See the frequency-chip handler
+              // just below for the identical reset on a chip press.
+              setCustomTimes(null);
+              setCustomTimesBase(null);
+            }}
           />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
             {mode === "From last dose" ? tr.t("courses.intervalLabel") : tr.t("courses.howOften")}
+            {mode === "At set times" && customTimes !== null ? (
+              // SPEC §9: a pressed chip that no longer describes the data
+              // would be a lie, so once `times` has been custom-edited NO
+              // frequency chip below shows `aria-pressed="true"` — this note
+              // takes over as the description of what's actually saved.
+              <span style={{ fontWeight: 400, color: "var(--ink-3)" }}>
+                {" "}
+                · {tr.t("courses.times.customNote")}
+              </span>
+            ) : null}
           </span>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {intervalOrFrequencyChoices.map((o) => {
-              const selected = mode === "From last dose" ? intervalChoice === o : frequency === o;
+              const selected =
+                mode === "From last dose"
+                  ? intervalChoice === o
+                  : customTimes === null && frequency === o;
               const label =
                 mode === "From last dose"
                   ? intervalChoiceLabel(o as IntervalChoice, tr)
@@ -446,6 +556,10 @@ export function CourseFormView({
                       setIntervalChoice(o as IntervalChoice);
                     } else {
                       setFrequency(o as FrequencyChoice);
+                      // Pressing a preset replaces `times` wholesale — see
+                      // the mode handler above for the same reset.
+                      setCustomTimes(null);
+                      setCustomTimesBase(null);
                     }
                   }}
                 >
@@ -476,30 +590,71 @@ export function CourseFormView({
           ) : null}
         </div>
 
-        <Card tone="quiet" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
-            {tr.t("courses.reminders")}
-          </span>
-          {mode === "From last dose" ? (
+        {mode === "From last dose" ? (
+          <Card tone="quiet" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)" }}>
+              {tr.t("courses.reminders")}
+            </span>
             <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.5 }}>
               {tr.t("courses.reminders.fromLastDose", { hours: intervalChoiceHours(intervalChoice) })}
             </div>
-          ) : (
-            timesForFrequencyChoice(frequency).map((t) => (
-              <div
-                key={t}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontSize: 15,
-                  color: "var(--ink-1)",
-                }}
-              >
-                <span>{t}</span>
-              </div>
-            ))
-          )}
-        </Card>
+          </Card>
+        ) : (
+          <Card tone="quiet" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* `TimesEditor` renders its own `courses.times.label` heading, so
+                no separate "Reminders" label is repeated here. */}
+            <TimesEditor
+              times={fixedTimesValues}
+              originalTimes={fixedTimesOriginals}
+              onChange={(next) => {
+                setCustomTimes(next);
+                // Seed the base ONLY on the first custom edit — a later press
+                // must keep referring back to the ORIGINAL preset/prefill,
+                // not the previous press's already-edited value, or a second
+                // press would have nothing stable left to diff the "was
+                // HH:MM" caption against.
+                setCustomTimesBase((base) => {
+                  if (base !== null) return base;
+                  const preset = scheduleForFrequencyChoice(frequency);
+                  return preset.kind === "fixedTimes" ? preset : base;
+                });
+              }}
+            />
+          </Card>
+        )}
+
+        {gapWarning ? (
+          <Card
+            tone="quiet"
+            style={{ display: "flex", alignItems: "flex-start", gap: 10 }}
+          >
+            <span aria-hidden="true" style={{ fontSize: 16, lineHeight: 1.4 }}>
+              ⚠
+            </span>
+            <span style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5 }}>
+              {gapWarning.kind === "tooSoonToLog"
+                ? tr.t("courses.gapWarning.tooSoonToLog", {
+                    gap: tr.t("history.detail.lateDuration", toHoursMinutes(gapWarning.gapMinutes)),
+                  })
+                : gapWarning.sinceTime !== null
+                  ? tr.t("courses.gapWarning.tooSoon", {
+                      gap: tr.t("history.detail.lateDuration", toHoursMinutes(gapWarning.gapMinutes)),
+                      time: gapWarning.sinceTime,
+                      expected: tr.t(
+                        "history.detail.lateDuration",
+                        toHoursMinutes(gapWarning.expectedMinutes),
+                      ),
+                    })
+                  : tr.t("courses.gapWarning.tooSoonInterval", {
+                      gap: tr.t("history.detail.lateDuration", toHoursMinutes(gapWarning.gapMinutes)),
+                      expected: tr.t(
+                        "history.detail.lateDuration",
+                        toHoursMinutes(gapWarning.expectedMinutes),
+                      ),
+                    })}
+            </span>
+          </Card>
+        ) : null}
 
         {isEdit && existingCourse ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

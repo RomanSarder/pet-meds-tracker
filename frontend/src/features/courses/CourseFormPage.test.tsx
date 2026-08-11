@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { fixtures } from "@/domain";
 import { getOccurrences, type EngineContext } from "@/engine";
-import { createMemoryRepo } from "@/data";
+import { createMemoryRepo, type Repo } from "@/data";
 import { CourseFormView } from "./CourseFormPage";
 
 // Fixture ids are not exported from domain/fixtures.ts (only the `fixtures`
@@ -44,6 +44,28 @@ async function clickChip(user: User, label: string) {
 
 async function clickSave(user: User) {
   await user.click(screen.getByRole("button", { name: "Save medication" }));
+}
+
+/**
+ * A `fixedTimes` course whose `times` — `["08:00", "18:00"]` — do not match
+ * ANY of `scheduleForFrequencyChoice`'s four presets (`isPresetSchedule`
+ * false; `choicesForSchedule`'s best-effort nearest-chip lookup falls all
+ * the way back to "Once daily"). This is the exact shape the `customTimes`
+ * state exists for: a schedule the chips cannot describe, only cosmetically
+ * approximate.
+ */
+async function createCustomTimesCourse(repo: Repo) {
+  return repo.createCourse({
+    petId: CLOVER.id,
+    medicationId: METACAM.id,
+    doseAmount: 0.4,
+    doseUnit: "ml",
+    instructions: null,
+    schedule: { kind: "fixedTimes", times: ["08:00", "18:00"] },
+    startDate: "2026-08-01",
+    endDate: null,
+    notes: null,
+  });
 }
 
 describe("saving a course of each schedule kind persists the exact Schedule object", () => {
@@ -338,7 +360,11 @@ describe("SPEC §11 case 4 — pausing", () => {
     const user = userEvent.setup();
 
     async function ctx(): Promise<EngineContext> {
-      return { courses: await repo.listCourses(), events: await repo.listDoseEvents({}) };
+      return {
+        courses: await repo.listCourses(),
+        events: await repo.listDoseEvents({}),
+        courseEvents: await repo.listCourseEvents({}),
+      };
     }
 
     const before = getOccurrences(TODAY, await ctx());
@@ -466,5 +492,120 @@ describe("pets loading state (SPEC §5.5 item 1 — the pet picker is the form's
     // present yet — only the placeholder region should be.
     expect(screen.queryByText("Clover")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Clover" })).not.toBeInTheDocument();
+  });
+});
+
+// The "shift a course's dose times earlier" feature (SPEC's UI half of it) —
+// `customTimes`/`customTimesBase` state, the `TimesEditor` it drives, and the
+// inline `gapWarningFor` banner.
+describe("times editor: the customTimes regression this state exists to prevent", () => {
+  it("saving after changing ONLY the dose amount leaves a non-preset schedule byte-identical", async () => {
+    const repo = createMemoryRepo();
+    const course = await createCustomTimesCourse(repo);
+    renderWithProviders(<CourseFormView courseId={course.id} />, { repo });
+    const user = userEvent.setup();
+
+    const doseInput = await screen.findByLabelText("Dose amount");
+    await waitFor(() => expect(doseInput).toHaveValue("0.4"));
+    await user.clear(doseInput);
+    await user.type(doseInput, "0.6");
+    await clickSave(user);
+
+    const updated = await waitFor(async () => {
+      const found = await repo.getCourse(course.id);
+      expect(found?.doseAmount).toBe(0.6);
+      return found!;
+    });
+    // The regression: pre-`customTimes` code recomputed `schedule` from the
+    // chips unconditionally. `choicesForSchedule` cannot describe
+    // `["08:00", "18:00"]` with any chip (`isPresetSchedule` false), falls
+    // back to "Once daily", and the old save path would have persisted
+    // `{ kind: "fixedTimes", times: ["09:00"] }` here instead.
+    expect(updated.schedule).toEqual({ kind: "fixedTimes", times: ["08:00", "18:00"] });
+  });
+});
+
+describe("times editor: non-preset prefill", () => {
+  it("renders one row per time and leaves no frequency chip aria-pressed", async () => {
+    const repo = createMemoryRepo();
+    const course = await createCustomTimesCourse(repo);
+    renderWithProviders(<CourseFormView courseId={course.id} />, { repo });
+
+    await screen.findByText("08:00");
+    expect(screen.getByText("18:00")).toBeInTheDocument();
+
+    for (const label of ["Once daily", "2× daily", "3× daily", "Weekly"]) {
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
+    }
+    expect(screen.getByText(/Custom times/)).toBeInTheDocument();
+  });
+});
+
+describe("times editor: shifting a preset course's times earlier", () => {
+  async function pressEarlierEightTimes(user: User) {
+    const button = screen.getByRole("button", { name: "15 minutes earlier, dose 2" });
+    for (let i = 0; i < 8; i++) {
+      await user.click(button);
+    }
+  }
+
+  it("8 presses on row 2 (20:00 -> 18:00) raises the mock's own tooSoon warning, and Save stays enabled", async () => {
+    renderWithProviders(<CourseFormView courseId={COURSE_CLOVER_METACAM.id} />);
+    const user = userEvent.setup();
+
+    await screen.findByText("20:00");
+    await pressEarlierEightTimes(user);
+
+    expect(screen.getByText("18:00")).toBeInTheDocument();
+    expect(screen.queryByText("20:00")).not.toBeInTheDocument();
+    expect(screen.getByText("was 20:00")).toBeInTheDocument();
+    expect(
+      screen.getByText("Only 10 h since the 08:00 dose (this course is every 12 h)."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save medication" })).not.toBeDisabled();
+  });
+
+  it("persists times: [\"08:00\", \"18:00\"] exactly on save (the round-trip regression)", async () => {
+    const repo = createMemoryRepo();
+    renderWithProviders(<CourseFormView courseId={COURSE_CLOVER_METACAM.id} />, { repo });
+    const user = userEvent.setup();
+
+    await screen.findByText("20:00");
+    await pressEarlierEightTimes(user);
+    await clickSave(user);
+
+    const updated = await waitFor(async () => {
+      const found = await repo.getCourse(COURSE_CLOVER_METACAM.id);
+      expect(found?.schedule).toEqual({ kind: "fixedTimes", times: ["08:00", "18:00"] });
+      return found!;
+    });
+    expect(updated.schedule).toEqual({ kind: "fixedTimes", times: ["08:00", "18:00"] });
+  });
+
+  it("pressing 3x daily after a custom edit replaces times wholesale and clears the custom state", async () => {
+    const repo = createMemoryRepo();
+    renderWithProviders(<CourseFormView courseId={COURSE_CLOVER_METACAM.id} />, { repo });
+    const user = userEvent.setup();
+
+    await screen.findByText("20:00");
+    await pressEarlierEightTimes(user);
+    expect(screen.getByText("18:00")).toBeInTheDocument();
+
+    await clickChip(user, "3× daily");
+
+    expect(screen.getByRole("button", { name: "3× daily" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("18:00")).not.toBeInTheDocument();
+    expect(screen.queryByText("was 20:00")).not.toBeInTheDocument();
+    expect(screen.getByText("08:00")).toBeInTheDocument();
+    expect(screen.getByText("14:00")).toBeInTheDocument();
+    expect(screen.getByText("20:00")).toBeInTheDocument();
+
+    await clickSave(user);
+    const updated = await waitFor(async () => {
+      const found = await repo.getCourse(COURSE_CLOVER_METACAM.id);
+      expect(found?.schedule).toEqual({ kind: "fixedTimes", times: ["08:00", "14:00", "20:00"] });
+      return found!;
+    });
+    expect(updated.schedule).toEqual({ kind: "fixedTimes", times: ["08:00", "14:00", "20:00"] });
   });
 });

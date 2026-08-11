@@ -253,6 +253,12 @@ export function TodayPage(): ReactElement {
                   pet,
                   course,
                   events: snapshot?.events ?? [],
+                  // Same reasoning as `events` above: `renderCard` only runs
+                  // once `view` is non-null, which only happens once
+                  // `snapshot` is non-null (see the `!view` early return), so
+                  // this fallback is structurally unreachable — not a live
+                  // default of the ledger to empty.
+                  courseEvents: snapshot?.courseEvents ?? [],
                   // The SAME pairing `todayModel.detailFor` uses for an interval
                   // course's clause, so the schedule is never worded twice.
                   scheduleSummary: renderSchedule(describeSchedule(course.schedule), tr),

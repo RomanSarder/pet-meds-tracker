@@ -214,6 +214,7 @@ export function LogAtTimeSheet({
   const consequence = consequenceFor({
     course: context.course,
     events: context.events,
+    courseEvents: context.courseEvents,
     occurrence: dose.occurrence,
     chosen,
   });

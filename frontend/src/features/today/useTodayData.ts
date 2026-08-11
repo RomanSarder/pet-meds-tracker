@@ -17,7 +17,7 @@ export function useTodayQuery(day: LocalDate): UseQueryResult<TodaySnapshot> {
     queryKey: qk.today(day),
     queryFn: async (): Promise<TodaySnapshot> => {
       const repo = getRepo();
-      const [pets, medications, courses, events] = await Promise.all([
+      const [pets, medications, courses, events, courseEvents] = await Promise.all([
         repo.listPets(),
         repo.listMedications(),
         repo.listCourses(),
@@ -27,6 +27,10 @@ export function useTodayQuery(day: LocalDate): UseQueryResult<TodaySnapshot> {
         // Deciding what is relevant to `day` is the engine's job (SPEC §10:
         // "slices 5 and 7 consume it and must not reimplement it").
         repo.listDoseEvents({}),
+        // Same reasoning as `events` above: the engine reconstructs the
+        // schedule in effect at each slot's own due instant from the full
+        // ledger (SPEC §3c), so this is unfiltered too.
+        repo.listCourseEvents({}),
       ]);
       return {
         day,
@@ -34,7 +38,8 @@ export function useTodayQuery(day: LocalDate): UseQueryResult<TodaySnapshot> {
         medications,
         courses,
         events,
-        occurrences: getOccurrences(day, { courses, events }),
+        courseEvents,
+        occurrences: getOccurrences(day, { courses, events, courseEvents }),
       };
     },
   });

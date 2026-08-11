@@ -87,6 +87,12 @@ function snapshotOf(
     medications: data.medications,
     courses: data.courses,
     events: data.doseEvents,
+    // `engineDouble` (this file's `vi.mock("@/engine")`) never reads
+    // `courseEvents` — its `getOccurrences`/`nextDueAt` are lookup-table
+    // stubs driven by `setOccurrences`/`engineStore.nextDue` — so an empty
+    // ledger here is a real, not a defaulted, value: there is no ledger for
+    // this test double to consult.
+    courseEvents: [],
     occurrences,
     ...overrides,
   };

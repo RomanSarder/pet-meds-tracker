@@ -293,7 +293,7 @@ function emptyDetailFor(
   let earliest: Date | null = null;
   for (const course of snapshot.courses) {
     if (course.status !== "active") continue;
-    const due = nextDueAt(course, snapshot.events, now);
+    const due = nextDueAt(course, snapshot.events, snapshot.courseEvents, now);
     if (due === null) continue;
     if (earliest === null || due.getTime() < earliest.getTime()) earliest = due;
   }
@@ -359,6 +359,7 @@ function weeklyTreatmentCandidate(
       ...getOccurrences(day, {
         courses: snapshot.courses,
         events: snapshot.events,
+        courseEvents: snapshot.courseEvents,
       }),
     ].sort(
       (a, b) =>

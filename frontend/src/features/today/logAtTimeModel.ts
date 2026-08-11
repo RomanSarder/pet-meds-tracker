@@ -39,7 +39,7 @@
 // spring-forward day the window [midnight, now] is genuinely one hour shorter
 // in elapsed time than the wall clock suggests, and the clamp is what keeps
 // every offset inside it.
-import type { Course, DoseEvent } from "@/domain";
+import type { Course, CourseEvent, DoseEvent } from "@/domain";
 import { occurrenceKeyFor, parseLocalDay, startOfLocalDay } from "@/domain";
 import type { Occurrence } from "@/engine";
 import { nextDueAt } from "@/engine";
@@ -302,13 +302,14 @@ function lateMinutes(chosen: Date, dueAt: Date | null): number | null {
 export function consequenceFor(args: {
   course: Course;
   events: DoseEvent[];
+  courseEvents: CourseEvent[];
   occurrence: Occurrence;
   chosen: Date;
 }):
   | { kind: "moves"; next: Date; deltaMin: number }
   | { kind: "stays"; next: Date; lateMin: number | null }
   | { kind: "none" } {
-  const { course, events, occurrence, chosen } = args;
+  const { course, events, courseEvents, occurrence, chosen } = args;
   const dueAt = occurrence.dueAt;
 
   if (course.schedule.kind === "fixedTimes") {
@@ -317,7 +318,7 @@ export function consequenceFor(args: {
     // must be invariant under what the user picks. That invariance is the
     // whole point the "stays" wording is making — if this took `chosen`, the
     // preview would wobble as the stepper moved while claiming nothing moves.
-    const next = nextDueAt(course, events, dueAt ?? chosen);
+    const next = nextDueAt(course, events, courseEvents, dueAt ?? chosen);
     if (next === null) return { kind: "none" };
     return { kind: "stays", next, lateMin: lateMinutes(chosen, dueAt) };
   }
@@ -326,13 +327,23 @@ export function consequenceFor(args: {
   // when the candidate is not strictly after `after`, so for an overdue chain
   // — the exact case this sheet exists to serve — `after = now` would report
   // "no next dose" for a chain that plainly has one.
-  const next = nextDueAt(course, [...events, syntheticGiven(course, occurrence, chosen)], chosen);
+  const next = nextDueAt(
+    course,
+    [...events, syntheticGiven(course, occurrence, chosen)],
+    courseEvents,
+    chosen,
+  );
   if (next === null) return { kind: "none" };
 
   const planned =
     dueAt === null
       ? null
-      : nextDueAt(course, [...events, syntheticGiven(course, occurrence, dueAt)], dueAt);
+      : nextDueAt(
+          course,
+          [...events, syntheticGiven(course, occurrence, dueAt)],
+          courseEvents,
+          dueAt,
+        );
   const deltaMin =
     planned === null ? null : Math.round((next.getTime() - planned.getTime()) / MS_PER_MIN);
 

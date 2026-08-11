@@ -81,12 +81,19 @@ const pet: Pet = {
   deletedAt: null,
 };
 
-/** Everything §6.1a's sheet needs beyond `dose` — the row forwards this verbatim as `context`. */
+/**
+ * Everything §6.1a's sheet needs beyond `dose` — the row forwards this
+ * verbatim as `context`. `course` above is a single static fixture, never
+ * edited within this file, so an empty ledger is the real ledger for it —
+ * and this file also mocks `@/engine` (`engineDouble`), whose `nextDueAt`
+ * ignores `courseEvents` entirely.
+ */
 function makeContext(overrides: Partial<LogAtTimeContext> = {}): LogAtTimeContext {
   return {
     pet,
     course,
     events: [],
+    courseEvents: [],
     scheduleSummary: "08:00 · after food",
     ...overrides,
   };
