@@ -63,6 +63,14 @@ export interface TodayDoseRowProps {
   onLogAtTime: (givenAt: Date) => void;
   onOpenCourse: () => void;
   onStartCourse: () => void;
+  /**
+   * A `logDose` write is already in flight somewhere on the page. Disables
+   * Give/Start course so a second tap cannot land while `onMutate`'s async
+   * prefix (`cancelQueries` then `currentActorId()`) still has the row
+   * showing its pre-write button — the window a double-tap used to log two
+   * events for the same give (F2 fix).
+   */
+  giving?: boolean;
 }
 
 function prefersReducedMotionNow(): boolean {
@@ -126,6 +134,7 @@ export function TodayDoseRow({
   onLogAtTime,
   onOpenCourse,
   onStartCourse,
+  giving,
 }: TodayDoseRowProps): ReactElement {
   const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -231,6 +240,7 @@ export function TodayDoseRow({
         <Button
           size="sm"
           variant="primary"
+          disabled={giving}
           onClick={(e) => {
             e.stopPropagation();
             onStartCourse();
@@ -268,6 +278,7 @@ export function TodayDoseRow({
         // SPEC §5.1's one-tap control. The DS default is the English "Give";
         // this is the translated one (I18N-DESIGN.md ADDENDUM A1).
         label={t("today.give")}
+        disabled={giving}
         style={rowStyle}
       />
     );

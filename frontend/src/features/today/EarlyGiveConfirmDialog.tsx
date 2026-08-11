@@ -1,14 +1,19 @@
 // SPEC §3b's early-give confirm: "Allow, but confirm when early." Reached
-// only when a `logDose` write collides with the schedule's grace window AND
-// the occurrence being given was not yet due (`useLogDose.ts`'s `earlyGive`
+// only when a `logDose` write collides with the schedule's grace window on a
+// DIFFERENT occurrence (F2 — never the same one; see `useLogDose.ts`'s
+// `onError`) AND the occurrence being given was not yet due (`earlyGive`
 // routing) — every other collision keeps the flat duplicate-toast rejection.
 //
-// Structure, the `stopBubbling` guard and the popup/backdrop style objects
-// are copied verbatim from `features/household/HouseholdPage.tsx`'s confirm
-// dialogs — the house pattern for a plain Title/Description/Cancel/action
-// confirm reached from a row, as opposed to `LogAtTimeSheet.tsx`'s
-// form-carrying sheet (which this is deliberately NOT: it asks one yes/no
-// question, not a time).
+// The `stopBubbling` guard and the popup/backdrop style objects are copied
+// from `features/household/HouseholdPage.tsx`'s confirm dialogs — the house
+// pattern for a plain Title/Description/Cancel/action confirm reached from a
+// row, as opposed to `LogAtTimeSheet.tsx`'s form-carrying sheet (which this
+// is deliberately NOT: it asks one yes/no question, not a time). NOT copied
+// from there: the affirmative action's variant. The house dialogs use
+// `danger` for their destructive affirmative (removing a member, leaving a
+// household) — this one used `primary` until the F3 fix below, which is
+// wrong for the same reason theirs is `danger`: logging a second dose close
+// to the last one is the same class of action, and deserves the same weight.
 import type { CSSProperties, ReactElement, SyntheticEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@/components/ds";
@@ -94,17 +99,26 @@ export function EarlyGiveConfirmDialog({
             {t("today.earlyGive.title", { medicationName: conflict?.vars.medicationName ?? "" })}
           </Dialog.Title>
           {/*
-            "Already given by Marta at 07:12" / "Already skipped by Marta at
-            07:12" — the SAME strings the flat-rejection toast uses
-            (`useLogDose.ts`'s `onError`), reused verbatim rather than
-            reworded: this dialog exists only to add a choice on top of
-            exactly that fact, not to restate it differently.
+            F4: dedicated dialog copy, not the flat-rejection toast's
+            "Already given by Marta at 07:12" reused verbatim — that phrasing
+            is accurate for the toast (the dose just attempted IS the one on
+            record) but false here, where the collision is BY CONSTRUCTION a
+            DIFFERENT occurrence. States the two facts that actually let
+            someone decide: how long ago the other dose was given/skipped,
+            and how far ahead of ITS OWN due instant this one would land —
+            both pre-rendered by `useLogDose.ts` via `history.detail.lateDuration`
+            ("40 min" / "1 h 30 min"), never a wall-clock time to subtract.
           */}
           <Dialog.Description style={DESCRIPTION_STYLE}>
             {conflict
-              ? conflict.status === "skipped"
-                ? t("today.toast.duplicateSkipped", { name: conflict.name, time: conflict.time })
-                : t("today.toast.duplicateGiven", { name: conflict.name, time: conflict.time })
+              ? t(
+                  conflict.status === "skipped" ? "today.earlyGive.detailSkipped" : "today.earlyGive.detailGiven",
+                  {
+                    name: conflict.name,
+                    sinceLast: t("history.detail.lateDuration", conflict.sinceLast),
+                    early: t("history.detail.lateDuration", conflict.early),
+                  },
+                )
               : ""}
           </Dialog.Description>
           <div style={ACTIONS_STYLE}>
@@ -115,7 +129,8 @@ export function EarlyGiveConfirmDialog({
                 </Button>
               }
             />
-            <Button type="button" size="md" variant="primary" onClick={onConfirm}>
+            {/* F3: `danger`, matching the house dialogs' affirmative — see the header comment. */}
+            <Button type="button" size="md" variant="danger" onClick={onConfirm}>
               {t("today.earlyGive.confirm")}
             </Button>
           </div>

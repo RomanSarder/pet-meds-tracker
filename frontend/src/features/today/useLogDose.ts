@@ -19,10 +19,11 @@ import {
 } from "@tanstack/react-query";
 import type { DoseEvent, DoseEventStatus, IsoDateTime, LocalDate } from "@/domain";
 import { UNDO_WINDOW_MS, displayNameFor, formatHHMM, now, occurrenceKeyFor, qk } from "@/domain";
-import { DuplicateDoseError, getRepo, RetractWindowExpiredError } from "@/data";
+import { DuplicateDoseError, getRepo, RetractWindowExpiredError, TooSoonSinceLastDoseError } from "@/data";
 import { useMembers } from "@/features/household/hooks";
 import { useToast } from "@/app/Toast";
 import { useT } from "@/i18n";
+import { elapsedSince } from "./logAtTimeModel";
 import type { TodaySnapshot } from "./types";
 
 export interface LogDoseVars {
@@ -53,15 +54,25 @@ export interface LogDoseVars {
   allowWithinGrace?: boolean;
 }
 
-/** What an early-give collision hands the caller, to render the confirm dialog. */
+/**
+ * What an early-give collision hands the caller, to render the confirm dialog.
+ *
+ * F4: the dialog states two facts, not a wall-clock time the user must do
+ * arithmetic on — how long ago the colliding (DIFFERENT-occurrence, per F2)
+ * dose was logged, and how far ahead of its own due instant this give is.
+ * Both are already `elapsedSince`-shaped (`./logAtTimeModel`), so the dialog
+ * only ever formats, never computes.
+ */
 export interface EarlyGiveConflict {
   vars: LogDoseVars;
   /** The prior dose's actor, already resolved to a display name. */
   name: string;
-  /** The prior dose's `givenAt`, already formatted HH:MM. */
-  time: string;
   /** Whether the prior dose was given or skipped — the dialog words each differently. */
   status: DoseEventStatus;
+  /** How long ago the colliding dose was given/skipped. */
+  sinceLast: { hours: number; minutes: number };
+  /** How far ahead of its own `dueAt` this give would land. */
+  early: { hours: number; minutes: number };
 }
 
 interface LogDoseContext {
@@ -193,6 +204,21 @@ export function useLogDose(
       if (context?.previous !== undefined) {
         queryClient.setQueryData<TodaySnapshot>(qk.today(day), context.previous);
       }
+      // F1: the hard floor beneath `allowWithinGrace` — thrown INSTEAD of
+      // `DuplicateDoseError` (never alongside it) when the collision is
+      // within `EARLY_GIVE_FLOOR_MIN` of ANY live dose on the course, so it
+      // is caught here, ahead of the `DuplicateDoseError` branch, and always
+      // gets the flat rejection: no dialog is ever offered for a gap this
+      // small, confirmed or not.
+      if (error instanceof TooSoonSinceLastDoseError) {
+        const duration = { hours: Math.floor(error.minutesSinceLast / 60), minutes: error.minutesSinceLast % 60 };
+        show({
+          message: t("today.toast.tooSoonSinceLastDose", {
+            duration: t("history.detail.lateDuration", duration),
+          }),
+        });
+        return;
+      }
       // SPEC §5: "the second log is rejected client-side with 'Already given
       // by Marta at 07:12'" — a named error, not a message match, so the
       // copy is composed from the fields `DuplicateDoseError` carries rather
@@ -209,8 +235,34 @@ export function useLogDose(
         // page decides how to ask, this hook only routes the decision.
         // Everything else (a normal on-time or overdue give, Skip, "log at a
         // different time") keeps the flat rejection below unconditionally.
-        if (vars.earlyGive && opts?.onEarlyGiveConflict) {
-          opts.onEarlyGiveConflict({ vars, name, time, status: error.status });
+        //
+        // F2: `error.scheduledFor !== vars.scheduledFor` is what makes this
+        // the SAME-OCCURRENCE guard's collision, not the grace-window one —
+        // without it, a double-tap (tap 2 sees tap 1's just-written row
+        // before the optimistic flip repaints the button, `onMutate` is
+        // async) hits the exact-match hard block, which `earlyGive` alone
+        // cannot tell apart from a real early-give collision, and would
+        // offer a dialog for a dose already successfully given. That dialog
+        // could never do anything useful either: confirming it re-sends the
+        // identical `scheduledFor`, which the hard block refuses again no
+        // matter how many times it is retried (see `TodayPage.tsx`'s
+        // `confirmEarlyGive`, which also clears `earlyGive` on the retry so
+        // ANY further collision — this one included — falls through to the
+        // flat rejection below instead of silently reopening the dialog).
+        if (
+          vars.earlyGive &&
+          opts?.onEarlyGiveConflict &&
+          error.scheduledFor !== vars.scheduledFor
+        ) {
+          const attemptAt = vars.givenAt ? new Date(vars.givenAt) : now();
+          const dueAt = vars.scheduledFor ? new Date(vars.scheduledFor) : attemptAt;
+          opts.onEarlyGiveConflict({
+            vars,
+            name,
+            status: error.status,
+            sinceLast: elapsedSince(new Date(error.givenAt), attemptAt),
+            early: elapsedSince(attemptAt, dueAt),
+          });
           return;
         }
         show({

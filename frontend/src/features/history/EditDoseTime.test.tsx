@@ -70,10 +70,18 @@ async function seedChain(): Promise<{ repo: Repo; petId: string; course: Course 
     }),
   );
 
+  // `scheduledFor: iso`, not `null`, for BOTH: the same-occurrence dedup
+  // guard now keys on `scheduledFor` unconditionally, including `null`
+  // (repo.types.ts's documented invariant — a course cannot be "started"
+  // twice from the never-started sentinel either), so two `null` events on
+  // one course would collide with EACH OTHER regardless of how far apart
+  // `givenAt` is. `anchorFor` (`@/engine`) only ever reads `givenAt`, never
+  // `scheduledFor`, so giving each dose its own distinct value here changes
+  // nothing this test actually asserts.
   for (const time of ["06:00", "16:00"]) {
     const iso = at(YESTERDAY, time).toISOString();
     await withClock(iso, () =>
-      repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, givenAt: iso, amount: 0.4 }),
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: iso, givenAt: iso, amount: 0.4 }),
     );
   }
 
@@ -232,7 +240,7 @@ describe("editing a past dose's time", () => {
     // ceiling in a handful of presses rather than a hundred.
     const closeIso = at(YESTERDAY, "07:40").toISOString();
     await withClock(closeIso, () =>
-      repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, givenAt: closeIso, amount: 0.4 }),
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: closeIso, givenAt: closeIso, amount: 0.4 }),
     );
 
     renderWithProviders(<HistoryView petId={petId} />, { repo });

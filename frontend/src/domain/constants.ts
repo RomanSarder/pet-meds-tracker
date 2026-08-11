@@ -10,6 +10,16 @@ export const GRACE_FIXED_MIN = 60 as const;
  * still lands on unchanged, exactly as the flat constant did before.
  */
 export const GRACE_INTERVAL_CAP_MIN = 90 as const;
+/**
+ * The hard floor beneath the `allowWithinGrace` bypass (SPEC §3b's
+ * early-give confirm). However a give is confirmed, a second `DoseEvent` on
+ * the same course within this many minutes of any LIVE one already on it is
+ * refused outright — no dialog, no override, checked unconditionally ahead
+ * of the (bypassable) grace-window heuristic. Without this floor, a mis-tap
+ * a minute after a real give could walk through the confirm dialog and log a
+ * second dose seconds later; see `data/errors.ts`'s `TooSoonSinceLastDoseError`.
+ */
+export const EARLY_GIVE_FLOOR_MIN = 10 as const;
 export const DUE_PRE_WINDOW_MIN = 30 as const;
 export const MISSED_AFTER_HOURS = 12 as const;
 export const UNKNOWN_ACTOR_NAME = "Someone" as const;

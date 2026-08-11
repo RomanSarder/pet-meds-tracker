@@ -119,7 +119,10 @@ describe("SuppliesPage", () => {
     const course = courses[0]!;
 
     // Three doses, spaced well outside the fixedTimes grace window so none
-    // is rejected as a duplicate of the last.
+    // is rejected as a duplicate of the last. `scheduledFor: givenAt`, not
+    // `null` — the same-occurrence guard now keys on `scheduledFor`
+    // unconditionally including `null`, so three `null` events on one course
+    // would otherwise collide with EACH OTHER regardless of spacing.
     for (const givenAt of [
       "2026-08-08T01:00:00.000Z",
       "2026-08-08T03:00:00.000Z",
@@ -128,7 +131,7 @@ describe("SuppliesPage", () => {
       await repo.logDose({
         courseId: course.id,
         status: "given",
-        scheduledFor: null,
+        scheduledFor: givenAt,
         givenAt,
         amount: course.doseAmount,
       });

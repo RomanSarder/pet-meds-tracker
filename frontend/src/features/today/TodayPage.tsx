@@ -124,6 +124,15 @@ export function TodayPage(): ReactElement {
 
   const log = useCallback(
     (vars: LogDoseVars) => {
+      // F2: closes the double-tap window `onMutate`'s async prefix
+      // (`cancelQueries` then `currentActorId()`) leaves open — a second tap
+      // landing before the optimistic flip repaints the button used to reach
+      // `logDose.mutate` a second time for the same give, which the
+      // same-occurrence hard block could not always turn into a no-op (see
+      // `useLogDose.ts`'s `onError`). `logDose.isPending` flips true
+      // synchronously the instant `.mutate()` is called, so this closes the
+      // gap without waiting on either async step.
+      if (logDose.isPending) return;
       setKeepResolved((prev) =>
         prev.has(vars.occurrenceKey)
           ? prev
@@ -146,6 +155,18 @@ export function TodayPage(): ReactElement {
         // eligible for the early-give confirm dialog on a grace-window
         // collision — an on-time or overdue collision is a genuine "someone
         // already gave this" and keeps the flat rejection (`useLogDose.ts`).
+        //
+        // F8 (deliberate, kind-agnostic): this eligibility test does not
+        // branch on `course.schedule.kind`, so a `fixedTimes` course gets the
+        // SAME early-give confirm a `fromLastDose` one does — e.g. a taper
+        // dosed at 08:00/09:00 can confirm the 09:00 dose at 08:05. Kept on
+        // purpose for both kinds, not an oversight the interval feature left
+        // behind: the underlying question ("a dose was just given nearby —
+        // give this one too?") is identical either way, and the
+        // `EARLY_GIVE_FLOOR_MIN` hard floor (`@/domain`, enforced in
+        // `idbRepo.ts`/`memoryRepo.ts`) applies to both kinds equally, so a
+        // fixed-times mis-tap gets the same unconditional protection an
+        // interval one does.
         earlyGive: dose.state === "later" || dose.state === "upcoming",
       }),
     [log, t],
@@ -155,7 +176,15 @@ export function TodayPage(): ReactElement {
     if (!earlyGiveConflict) return;
     const { vars } = earlyGiveConflict;
     setEarlyGiveConflict(null);
-    log({ ...vars, allowWithinGrace: true });
+    // F2: `earlyGive: false` on the retry — if this confirmed write STILL
+    // collides (e.g. another device's write landed in between), that
+    // collision must fall through to the flat rejection toast
+    // (`useLogDose.ts`'s `onError`), never reopen this same dialog. Nothing
+    // here could offer a meaningfully different confirmation a second time,
+    // and looping it indefinitely with no write and no explanation is
+    // exactly the "someone already gave it, and nothing else happened"
+    // complaint this dialog exists to fix, rebuilt one layer up.
+    log({ ...vars, allowWithinGrace: true, earlyGive: false });
   }, [earlyGiveConflict, log]);
 
   const skip = useCallback(
@@ -299,6 +328,7 @@ export function TodayPage(): ReactElement {
                       });
                     }}
                     onStartCourse={() => startCourse(dose)}
+                    giving={logDose.isPending}
                   />
                 );
               })}

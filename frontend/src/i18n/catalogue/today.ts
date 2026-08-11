@@ -186,25 +186,56 @@ export interface TodayMessages {
   "today.undo": () => string;
   "today.undo.tooLate": () => string;
   /**
-   * SPEC §5's dedup rule: a second Give/Skip within the grace window is
-   * rejected client-side rather than silently dropped. `name` is already
-   * resolved through `displayNameFor` (never an email — SPEC §12) and `time`
-   * through `formatHHMM` — both interpolated verbatim, never declined.
-   * "Already given by Marta at 07:12" is the exact SPEC §5 copy.
+   * SPEC §5's dedup rule: a SAME-OCCURRENCE collision (the exact-`scheduledFor`
+   * hard block, never bypassable) is rejected client-side rather than
+   * silently dropped. `name` is already resolved through `displayNameFor`
+   * (never an email — SPEC §12) and `time` through `formatHHMM` — both
+   * interpolated verbatim, never declined. "Already given by Marta at 07:12"
+   * is the exact SPEC §5 copy. NOT used by the early-give confirm dialog
+   * (F4) — that collision is BY CONSTRUCTION a DIFFERENT occurrence, so this
+   * copy would assert a falsehood there; see `today.earlyGive.detailGiven`.
    */
   "today.toast.duplicateGiven": (p: { name: string; time: string }) => string;
   /** Same rule, worded accurately when the conflicting event was a skip, not a give. */
   "today.toast.duplicateSkipped": (p: { name: string; time: string }) => string;
   /** Any other `logDose` failure that isn't the duplicate guard — a plain factual toast rather than silence. */
   "today.toast.logFailed": () => string;
+  /**
+   * F1: the hard floor beneath `allowWithinGrace` (`EARLY_GIVE_FLOOR_MIN`,
+   * `@/domain`) — a flat, unconditional rejection with no dialog and no
+   * retry, reached when a give lands within the floor of ANY live dose
+   * already on the course. `duration` is `history.detail.lateDuration`
+   * rendered ("6 min"), never a raw number the reader must interpret.
+   */
+  "today.toast.tooSoonSinceLastDose": (p: { duration: string }) => string;
 
   // --- early-give confirm (SPEC §3b: "allow, but confirm when early") -----
   /**
    * `EarlyGiveConfirmDialog`'s title, reached only when a give collides with
    * the grace window on a dose that was not yet due. `medicationName` is
-   * DATA (SPEC §10a), interpolated verbatim.
+   * DATA (SPEC §10a), interpolated verbatim. Deliberately kind-agnostic
+   * (F8): reached for `fixedTimes` courses exactly as for `fromLastDose`
+   * ones — see `TodayPage.tsx`'s `give` callback for why.
    */
   "today.earlyGive.title": (p: { medicationName: string }) => string;
+  /**
+   * F4: the dialog's own copy — NOT `today.toast.duplicateGiven` (reused
+   * before this fix, which asserted a falsehood: in the toast "already
+   * given" means the dose just attempted IS the one on record; here the
+   * collision is BY CONSTRUCTION a different occurrence, so that phrasing
+   * read as "this was already given" directly above a "Give anyway" button).
+   * States the two facts needed to actually decide: how long ago the OTHER
+   * dose was given, and how far ahead of ITS OWN due instant this one would
+   * land — both already `history.detail.lateDuration`-rendered ("40 min" /
+   * "1 h 30 min"), never a wall-clock time the reader has to subtract.
+   */
+  "today.earlyGive.detailGiven": (p: { name: string; sinceLast: string; early: string }) => string;
+  /**
+   * Same fact pattern, worded for a SKIPPED collision — never "un-skip"
+   * framing. The skipped dose stays skipped; this confirms giving the
+   * DIFFERENT, next occurrence early.
+   */
+  "today.earlyGive.detailSkipped": (p: { name: string; sinceLast: string; early: string }) => string;
   /** Footer's negative action. Withdraws — logs nothing. */
   "today.earlyGive.cancel": () => string;
   /** Footer's positive action — logs the dose now and re-anchors the chain (SPEC §3b). */
@@ -316,8 +347,14 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.toast.duplicateGiven": (p) => `Already given by ${p.name} at ${p.time}`,
   "today.toast.duplicateSkipped": (p) => `Already skipped by ${p.name} at ${p.time}`,
   "today.toast.logFailed": () => "Could not log the dose",
+  "today.toast.tooSoonSinceLastDose": (p) =>
+    `A dose was logged for this course ${p.duration} ago — wait a little before logging another`,
 
   "today.earlyGive.title": (p) => `Give ${p.medicationName} early?`,
+  "today.earlyGive.detailGiven": (p) =>
+    `${p.name} gave the last dose ${p.sinceLast} ago. This one isn't due for another ${p.early}.`,
+  "today.earlyGive.detailSkipped": (p) =>
+    `${p.name} skipped the last dose ${p.sinceLast} ago. This one isn't due for another ${p.early}.`,
   "today.earlyGive.cancel": () => "Cancel",
   "today.earlyGive.confirm": () => "Give anyway",
 });
@@ -457,10 +494,22 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.toast.duplicateGiven": (p) => `Вже дано: ${p.name}, о ${p.time}`,
   "today.toast.duplicateSkipped": (p) => `Вже пропущено: ${p.name}, о ${p.time}`,
   "today.toast.logFailed": () => "Не вдалося записати дозу",
+  "today.toast.tooSoonSinceLastDose": (p) =>
+    `Дозу цього курсу вже введено ${p.duration} тому — зачекайте трохи, перш ніж вводити ще одну`,
 
   // `medicationName` stays nominative and undeclined — DATA (SPEC §10a),
   // same rule `today.toast.duplicateGiven`'s `name` follows above.
   "today.earlyGive.title": (p) => `Дати ${p.medicationName} раніше?`,
+  // Passive voice throughout ("дано"/"пропущено", not "дав"/"дала") —
+  // `name` is DATA of unknown grammatical gender, the same reason
+  // `today.toast.duplicateGiven` above never conjugates a verb to agree with
+  // it. `name` rides along parenthetically rather than as a verb's subject,
+  // so this is genuine dialog prose, not the toast's colon-delimited
+  // "Вже дано: Марта, о 07:12" fragment repurposed.
+  "today.earlyGive.detailGiven": (p) =>
+    `Попередню дозу дано ${p.sinceLast} тому (${p.name}). Ця доза знадобиться ще через ${p.early}.`,
+  "today.earlyGive.detailSkipped": (p) =>
+    `Попередню дозу пропущено ${p.sinceLast} тому (${p.name}). Ця доза знадобиться ще через ${p.early}.`,
   "today.earlyGive.cancel": () => "Скасувати",
   "today.earlyGive.confirm": () => "Все одно дати",
 });
