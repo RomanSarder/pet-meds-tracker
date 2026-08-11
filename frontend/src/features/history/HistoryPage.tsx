@@ -4,7 +4,7 @@
 // brief reproduces it in full) — layout, ordering, spacing and copy come
 // from there; the data source, pagination and export picker are this
 // slice's own, per the brief's explicit instructions.
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { Menu } from "@base-ui/react/menu";
 import { Button, Card, Chip, IconButton, PetAvatar, SectionLabel } from "@/components/ds";
@@ -16,13 +16,21 @@ import {
   startOfLocalDay,
 } from "@/domain";
 import { useNow } from "@/app/useNow";
-import { buildLogEntries, filterEntries, groupByDay, summarise, type LogEntryStatus } from "./logModel";
+import {
+  buildLogEntries,
+  filterEntries,
+  groupByDay,
+  summarise,
+  type LogEntry,
+  type LogEntryStatus,
+} from "./logModel";
 import { exportAsCsv, exportAsText } from "./historyExport";
-import { useCourseEventLog, useDoseEventLog, useUsers } from "./hooks";
+import { EditDoseTimeSheet } from "./EditDoseTimeSheet";
+import { useCorrectDoseTime, useCourseEventLog, useDoseEventLog, useUsers } from "./hooks";
 import { useCourses, useMedications } from "@/features/courses/hooks";
 import { usePet } from "@/features/pets/hooks";
 import { speciesLabel } from "@/features/pets/format";
-import { useTranslator } from "@/i18n";
+import { useT, useTranslator } from "@/i18n";
 import { renderDayHeading, renderDetail, renderLogTitle } from "@/i18n/history";
 
 const DAYS_PER_PAGE = 30;
@@ -53,7 +61,23 @@ const PM_DOT: Record<LogEntryStatus, { dot: string; titleColor: string }> = {
   course: { dot: "var(--accent)", titleColor: "var(--ink-1)" },
 };
 
+/** Shared by the export menu and the per-row overflow. */
+const MENU_POPUP_STYLE = {
+  minWidth: 180,
+  padding: "6px 0",
+  background: "var(--surface)",
+  border: "1px solid var(--line-quiet)",
+  borderRadius: "var(--radius-md, 12px)",
+  fontFamily: "var(--font-sans)",
+} as const;
+
 type Filter = "all" | "doses" | "courses";
+
+/** Which row's "Edit time" sheet is open. `courseId` keys the sheet's own event fetch. */
+interface Editing {
+  eventId: string;
+  courseId: string;
+}
 
 /** Route adapter: reads the URL, renders the view. Not tested directly. */
 export function HistoryPage() {
@@ -91,6 +115,8 @@ export function HistoryView({ petId }: { petId: string }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [pages, setPages] = useState(1);
   const [exportOpen, setExportOpen] = useState(false);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const correctTime = useCorrectDoseTime();
 
   // `useNow()`, not `now()` directly: a bare `now()` call in the render body
   // returns a fresh millisecond-precision Date on every render. Holding the
@@ -139,6 +165,16 @@ export function HistoryView({ petId }: { petId: string }) {
   const doseEvents = useDoseEventLog({ courseIds, from, to }, { enabled: coursesReady });
   const courseEvents = useCourseEventLog({ courseIds, from, to }, { enabled: coursesReady });
 
+  // The edit sheet's own fetch: EVERY dose event of the one course being
+  // edited, unbounded by the visible window. The window above is 30 days per
+  // page, and the sheet has to know the doses either side of the edited one —
+  // a neighbour older than the window would otherwise be invisible to
+  // `boundsForEdit`, which would then offer a range that reorders the log.
+  const editEvents = useDoseEventLog(
+    { courseId: editing?.courseId },
+    { enabled: editing !== null },
+  );
+
   // Busy vs genuinely-empty (SPEC §10 — state is never colour-only, and
   // `aria-busy` is the mechanism for a state with no dedicated copy): while
   // any of these five have not yet produced data, the summary strip must not
@@ -171,6 +207,16 @@ export function HistoryView({ petId }: { petId: string }) {
   const rows = filterEntries(allEntries, filter);
   const groups = groupByDay(rows, today);
   const stats = summarise(allEntries);
+
+  // The three things the edit sheet needs, each looked up by id rather than
+  // captured into state when the menu item was tapped: a snapshot taken then
+  // would keep rendering the pre-edit row after the write invalidated the
+  // queries underneath it.
+  const editingEntry = editing !== null ? allEntries.find((e) => e.id === editing.eventId) : undefined;
+  const editingCourse =
+    editing !== null ? (courses.data ?? []).find((c) => c.id === editing.courseId) : undefined;
+  const editingEvent =
+    editing !== null ? (editEvents.data ?? []).find((e) => e.id === editing.eventId) : undefined;
 
   function handleExport(kind: "text" | "csv") {
     setExportOpen(false);
@@ -281,16 +327,7 @@ export function HistoryView({ petId }: { petId: string }) {
 
         <Menu.Portal>
           <Menu.Positioner sideOffset={4} align="end">
-            <Menu.Popup
-              style={{
-                minWidth: 180,
-                padding: "6px 0",
-                background: "var(--surface)",
-                border: "1px solid var(--line-quiet)",
-                borderRadius: "var(--radius-md, 12px)",
-                fontFamily: "var(--font-sans)",
-              }}
-            >
+            <Menu.Popup style={MENU_POPUP_STYLE}>
               <Menu.Item style={MENU_ITEM_STYLE} onClick={() => handleExport("text")}>
                 {t("history.export.plainText")}
               </Menu.Item>
@@ -434,6 +471,10 @@ export function HistoryView({ petId }: { petId: string }) {
                     >
                       {t("history.byActor", { name: nameFor(entry.actorId) })}
                     </div>
+                    {/* `given` dose rows only — see `LogEntry.canEditTime`. */}
+                    {entry.canEditTime ? (
+                      <RowMenu entry={entry} onEditTime={() => setEditing({ eventId: entry.id, courseId: entry.courseId })} />
+                    ) : null}
                   </div>
                 );
               })}
@@ -446,6 +487,76 @@ export function HistoryView({ petId }: { petId: string }) {
           </Button>
         </div>
       </div>
+
+      {/*
+        Mounted only once all three of its inputs have resolved, rather than
+        rendered closed and fed placeholders: the sheet seeds its state from
+        `event.givenAt` on open (`useEffect` on `[open, event]`), so opening it
+        against a stand-in row and swapping the real one in underneath would
+        seed it from the stand-in.
+      */}
+      {editing !== null && editingEntry && editingCourse && editingEvent ? (
+        <EditDoseTimeSheet
+          open
+          onOpenChange={(next) => {
+            if (!next) setEditing(null);
+          }}
+          pet={petData}
+          course={editingCourse}
+          event={editingEvent}
+          events={editEvents.data ?? []}
+          title={renderLogTitle(editingEntry.title, tr)}
+          onConfirm={(givenAt) => {
+            // Closed before the write, mirroring `TodayDoseRow`'s hand-off to
+            // `LogAtTimeSheet`: the sheet is done the moment the user commits,
+            // and a failure surfaces as a toast over the list rather than
+            // behind a lingering sheet.
+            setEditing(null);
+            correctTime.mutate({
+              eventId: editingEvent.id,
+              givenAt: givenAt.toISOString(),
+              toastMessage: t("history.toast.timeUpdated", {
+                medicationName: editingEntry.title.medicationName,
+              }),
+            });
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * One row's overflow. A `Menu` per row rather than one shared menu with a
+ * moving anchor — the same shape `TodayDoseRow` uses, and what keeps the
+ * trigger's own focus return working without the page tracking which row
+ * opened it.
+ */
+function RowMenu({ entry, onEditTime }: { entry: LogEntry; onEditTime: () => void }): ReactElement {
+  const t = useT();
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        render={
+          <IconButton
+            icon="ellipsis"
+            variant="plain"
+            size={40}
+            // SPEC §10: >= 44x44 hit area.
+            style={{ minWidth: 44, minHeight: 44, flexShrink: 0, marginTop: -6 }}
+            label={t("history.moreOptions", { medicationName: entry.title.medicationName })}
+          />
+        }
+      />
+      <Menu.Portal>
+        <Menu.Positioner sideOffset={4} align="end">
+          <Menu.Popup style={MENU_POPUP_STYLE}>
+            <Menu.Item style={MENU_ITEM_STYLE} onClick={onEditTime}>
+              {t("history.menu.editTime")}
+            </Menu.Item>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }

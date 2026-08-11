@@ -140,6 +140,116 @@ describe("buildLogEntries", () => {
     expect(entries).toEqual([]);
   });
 
+  it("renders a corrected dose once — the superseded row is not a second entry", () => {
+    const original = makeDoseEvent({
+      id: "dose-original",
+      givenAt: "2026-08-05T07:00:00.000Z",
+      loggedAt: "2026-08-05T07:00:00.000Z",
+    });
+    const correction = makeDoseEvent({
+      id: "dose-correction",
+      givenAt: "2026-08-05T05:30:00.000Z",
+      loggedAt: "2026-08-06T09:00:00.000Z",
+      supersedesId: "dose-original",
+    });
+
+    const entries = buildLogEntries(
+      srcOf({
+        courses: [makeCourse()],
+        medications: [makeMedication()],
+        doseEvents: [original, correction],
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["dose-correction"]);
+    // And the summary strip counts one dose, not two.
+    expect(summarise(entries)).toEqual({ given: 1, skipped: 0, missed: 0 });
+  });
+
+  it("says on the row that the time was edited, and what it used to be", () => {
+    const original = makeDoseEvent({ id: "dose-original", givenAt: "2026-08-05T07:00:00.000Z" });
+    const correction = makeDoseEvent({
+      id: "dose-correction",
+      givenAt: "2026-08-05T05:30:00.000Z",
+      supersedesId: "dose-original",
+    });
+
+    const [entry] = buildLogEntries(
+      srcOf({
+        courses: [makeCourse()],
+        medications: [makeMedication()],
+        doseEvents: [original, correction],
+      }),
+    );
+
+    const was = new Date(original.givenAt);
+    const hh = String(was.getHours()).padStart(2, "0");
+    const mm = String(was.getMinutes()).padStart(2, "0");
+    expect(detailOf(entry)).toContain(`time edited from ${hh}:${mm}`);
+  });
+
+  it("does not claim a time edit when the correction changed something else", () => {
+    const original = makeDoseEvent({ id: "dose-original", givenAt: "2026-08-05T07:00:00.000Z" });
+    const correction = makeDoseEvent({
+      id: "dose-correction",
+      givenAt: "2026-08-05T07:00:00.000Z",
+      amount: 0.6,
+      supersedesId: "dose-original",
+    });
+
+    const [entry] = buildLogEntries(
+      srcOf({
+        courses: [makeCourse()],
+        medications: [makeMedication()],
+        doseEvents: [original, correction],
+      }),
+    );
+
+    expect(detailOf(entry)).not.toContain("time edited");
+  });
+
+  it("drops a soft-deleted dose event", () => {
+    const entries = buildLogEntries(
+      srcOf({
+        courses: [makeCourse()],
+        medications: [makeMedication()],
+        doseEvents: [makeDoseEvent({ deletedAt: "2026-08-06T09:00:00.000Z" })],
+      }),
+    );
+    expect(entries).toEqual([]);
+  });
+
+  it("offers Edit time on given doses only", () => {
+    const entries = buildLogEntries(
+      srcOf({
+        courses: [makeCourse()],
+        medications: [makeMedication()],
+        doseEvents: [
+          makeDoseEvent({ id: "given" }),
+          makeDoseEvent({ id: "skipped", status: "skipped" }),
+          makeDoseEvent({ id: "missed", status: "missed" }),
+        ],
+        courseEvents: [makeCourseEvent()],
+      }),
+    );
+
+    expect(
+      Object.fromEntries(entries.map((e) => [e.id, e.canEditTime])),
+    ).toEqual({ given: true, skipped: false, missed: false, "cev-1": false });
+  });
+
+  it("carries the course id on every entry", () => {
+    const entries = buildLogEntries(
+      srcOf({
+        courses: [makeCourse()],
+        medications: [makeMedication()],
+        doseEvents: [makeDoseEvent()],
+        courseEvents: [makeCourseEvent()],
+      }),
+    );
+    expect(entries.every((e) => e.courseId === "course-1")).toBe(true);
+  });
+
   it("orders dose and course entries newest-first, interleaved", () => {
     const course = makeCourse();
     const medication = makeMedication();
