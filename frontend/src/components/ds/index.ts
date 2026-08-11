@@ -18,8 +18,9 @@ export {
   type PetAvatarProps,
   type PetTint,
 } from "./pets/PetAvatar";
-export { DoseRow, type DoseRowProps } from "./pets/DoseRow";
+export { DoseRow, type DoseRowCap, type DoseRowProps } from "./pets/DoseRow";
 export { PetCard, type PetCardProps } from "./pets/PetCard";
+export { DayProgress, type DayProgressProps } from "./pets/DayProgress";
 export { SupplyRow, type SupplyRowProps } from "./pets/SupplyRow";
 export { AlertBanner, type AlertBannerProps } from "./pets/AlertBanner";
 export { ScreenHeader, type ScreenHeaderProps } from "./pets/ScreenHeader";

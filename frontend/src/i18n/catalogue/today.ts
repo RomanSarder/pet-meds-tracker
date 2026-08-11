@@ -16,10 +16,28 @@ export interface TodayMessages {
   "today.greeting.morning": () => string;
   "today.greeting.afternoon": () => string;
   "today.greeting.evening": () => string;
-  /** "3 doses left today" — the first clause of the header subtitle. */
+  /**
+   * "3 doses left today" — the whole header subtitle while doses remain.
+   * SPEC §6.1: the overdue count never repeats here — it moved to the day
+   * progress note (`today.dayProgress.*`) below the header.
+   */
   "today.subtitle": (p: { remaining: number }) => string;
-  /** "1 overdue" — appended after " · " only when M > 0. */
-  "today.subtitle.overdue": (p: { overdue: number }) => string;
+  /** The whole subtitle when nothing remains — SPEC §6.1's zero case. */
+  "today.subtitle.allDone": () => string;
+
+  // --- day progress (SPEC §6.1, directly under the header) ----------------
+  /**
+   * "3 of 5 given today" — the block's large, tabular headline. Counts span
+   * every pet (SPEC §6.1's household scope, distinct from the pet card's
+   * `today.counter` and the row's `today.pill.count`).
+   */
+  "today.dayProgress.headline": (p: { given: number; total: number }) => string;
+  /** Trailing note when at least one dose is overdue — takes precedence over `next`/`allDone`. */
+  "today.dayProgress.overdue": (p: { overdue: number }) => string;
+  /** Trailing note naming the next dose due later today, when nothing is overdue. */
+  "today.dayProgress.next": (p: { time: string }) => string;
+  /** Trailing note when nothing is overdue and nothing else is due today. */
+  "today.dayProgress.allDone": () => string;
 
   // --- pet-card status line ----------------------------------------------
   /** Also the leading clause of a `notStarted` dose's detail line (SPEC §3b). */
@@ -32,6 +50,32 @@ export interface TodayMessages {
   "today.status.nothingScheduled": () => string;
   /** "1 of 2 today" — the per-card counter. */
   "today.counter": (p: { done: number; total: number }) => string;
+
+  // --- per-medication row pill (SPEC §4) -----------------------------------
+  /**
+   * "2 of 3 doses" — every dose row's quiet count pill. `total` is that
+   * COURSE's own rendered occurrences today, never a schedule-derived guess
+   * (SPEC's denominator rule: a `fromLastDose` course's `total` comes from
+   * what is actually on screen, never `24 / intervalHours`). `given` counts
+   * only this course's `given` events today, not `skipped` — the pill
+   * answers "how many times have I given this", not "how many are resolved".
+   * The word is always "doses", never "today" (SPEC §4: that word is reserved
+   * for the pet card's `today.counter`).
+   */
+  "today.pill.count": (p: { given: number; total: number }) => string;
+  /**
+   * "3 of 3 max" — the amber pill SPEC §3b-i's `capped` state replaces
+   * `today.pill.count` with, never alongside it. NOT wired to the engine on
+   * this branch (a concurrent agent owns `capped`/`overMax`/`maxPerDay`); the
+   * prop this renders from is driven directly by the caller until that lands.
+   */
+  "today.pill.cap": (p: { given: number; max: number }) => string;
+  /**
+   * The capped row's ghost action (SPEC §3b-i): "the cap warns, it does not
+   * lock". Logs a normal `given` event flagged `overMax` once wired — this
+   * catalogue entry only supplies the label; nothing here writes anything.
+   */
+  "today.pill.giveAnyway": () => string;
 
   // --- empty state --------------------------------------------------------
   "today.emptyTitle": () => string;
@@ -264,7 +308,12 @@ export const enToday = (f: Formatters): TodayMessages => ({
       one: `${p.remaining} dose left today`,
       other: `${p.remaining} doses left today`,
     }),
-  "today.subtitle.overdue": (p) => `${p.overdue} overdue`,
+  "today.subtitle.allDone": () => "Everything given today",
+
+  "today.dayProgress.headline": (p) => `${p.given} of ${p.total} given today`,
+  "today.dayProgress.overdue": (p) => `${p.overdue} overdue`,
+  "today.dayProgress.next": (p) => `next ${p.time}`,
+  "today.dayProgress.allDone": () => "all done",
 
   "today.notStarted": () => "Not started",
   "today.status.overdueSince": (p) => `Overdue since ${p.time}`,
@@ -273,6 +322,10 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.status.allDoneAt": (p) => `All done · ${p.medicationName} at ${p.time}`,
   "today.status.nothingScheduled": () => "Nothing scheduled",
   "today.counter": (p) => `${p.done} of ${p.total} today`,
+
+  "today.pill.count": (p) => `${p.given} of ${p.total} doses`,
+  "today.pill.cap": (p) => `${p.given} of ${p.max} max`,
+  "today.pill.giveAnyway": () => "Give anyway",
 
   "today.emptyTitle": () => "Nothing due today.",
   "today.nextDose.today": (p) => `Next dose at ${p.time}`,
@@ -386,13 +439,21 @@ export const ukToday = (f: Formatters): TodayMessages => ({
       many: `сьогодні залишилося ${p.remaining} доз`,
       other: `сьогодні залишилося ${p.remaining} дози`,
     }),
-  "today.subtitle.overdue": (p) =>
+  "today.subtitle.allDone": () => "Сьогодні все дано",
+
+  // SPEC §6.1 header never repeats the overdue count — it lives here now, on
+  // the day progress note directly under it. Same one/few/many/other forms
+  // `today.subtitle.overdue` used before this moved.
+  "today.dayProgress.headline": (p) => `Дано ${p.given} з ${p.total} сьогодні`,
+  "today.dayProgress.overdue": (p) =>
     f.plural(p.overdue, {
       one: `${p.overdue} прострочена`,
       few: `${p.overdue} прострочені`,
       many: `${p.overdue} прострочених`,
       other: `${p.overdue} простроченої`,
     }),
+  "today.dayProgress.next": (p) => `далі о ${p.time}`,
+  "today.dayProgress.allDone": () => "усе виконано",
 
   "today.notStarted": () => "Не розпочато",
   "today.status.overdueSince": (p) => `Прострочено з ${p.time}`,
@@ -401,6 +462,20 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.status.allDoneAt": (p) => `Усе виконано · ${p.medicationName} о ${p.time}`,
   "today.status.nothingScheduled": () => "Нічого не заплановано",
   "today.counter": (p) => `${p.done} з ${p.total} сьогодні`,
+
+  // Same one/few/many/other noun declension `today.subtitle` already uses for
+  // "доза" — here it agrees with `total` (M), the count the noun is actually
+  // describing ("N з M доз"), not `given` (N).
+  "today.pill.count": (p) =>
+    f.plural(p.total, {
+      one: `${p.given} з ${p.total} доза`,
+      few: `${p.given} з ${p.total} дози`,
+      many: `${p.given} з ${p.total} доз`,
+      other: `${p.given} з ${p.total} дози`,
+    }),
+  // "макс." is an invariant abbreviation, the same convention `today.logAtTime.offsetMinutes`/`offsetHours` already use — never declined.
+  "today.pill.cap": (p) => `${p.given} з ${p.max} макс.`,
+  "today.pill.giveAnyway": () => "Все одно дати",
 
   "today.emptyTitle": () => "Сьогодні нічого не заплановано.",
   "today.nextDose.today": (p) => `Наступна доза о ${p.time}`,

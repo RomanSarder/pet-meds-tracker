@@ -21,7 +21,14 @@ import {
   type ReactElement,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { AlertBanner, Card, EmptyState, PetCard, ScreenHeader } from "@/components/ds";
+import {
+  AlertBanner,
+  Card,
+  DayProgress,
+  EmptyState,
+  PetCard,
+  ScreenHeader,
+} from "@/components/ds";
 import { localDayKey } from "@/domain";
 import { describeSchedule } from "@/engine";
 import { useNow } from "@/app/useNow";
@@ -365,6 +372,21 @@ export function TodayPage(): ReactElement {
         actionLabel={t("today.addCourse")}
         onAction={onAddCourse}
       />
+
+      {/* SPEC §6.1: exactly one of these per screen, directly under the
+          header — per-pet progress stays in each PetCard's own `count` slot. */}
+      <div style={{ padding: "0 22px 14px" }}>
+        <Card tone="default" pad={16}>
+          <DayProgress
+            given={view.dayProgress.given}
+            total={view.dayProgress.total}
+            overdue={view.dayProgress.overdue}
+            headline={view.dayProgress.headline}
+            note={view.dayProgress.note}
+            noteAlert={view.dayProgress.noteIsOverdue}
+          />
+        </Card>
+      </div>
 
       {count > 0 && earliest ? (
         <div style={{ padding: "0 22px 14px" }}>

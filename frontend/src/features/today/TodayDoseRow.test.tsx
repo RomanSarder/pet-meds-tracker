@@ -63,6 +63,7 @@ function makeDose(state: DoseState, overrides: Partial<TodayDose> = {}): TodayDo
     medicationName: "Metacam",
     detail: "08:00 · after food · day 3 of 7",
     time: state === "notStarted" ? null : "08:00",
+    courseCount: null,
     ...overrides,
   };
 }
@@ -156,6 +157,48 @@ describe("TodayDoseRow", () => {
 
     expect(await screen.findByText("07:12")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Give" })).not.toBeInTheDocument();
+  });
+
+  // SPEC §4's row pill.
+  it("renders the row pill from dose.courseCount, on both a pending and a resolved row", async () => {
+    renderWithProviders(
+      <TodayDoseRow
+        dose={makeDose("due", { courseCount: { given: 1, total: 2 } })}
+        {...handlers()}
+      />,
+    );
+    expect(await screen.findByText("1 of 2 doses")).toBeInTheDocument();
+  });
+
+  it("renders no pill when dose.courseCount is null", async () => {
+    renderWithProviders(
+      <TodayDoseRow dose={makeDose("due", { courseCount: null })} {...handlers()} />,
+    );
+    await screen.findByRole("group");
+    expect(screen.queryByText(/of \d+ doses/)).not.toBeInTheDocument();
+  });
+
+  // SPEC §3b-i's cap variant — NOT wired to the engine anywhere in this
+  // codebase; this drives it directly from the `cap` prop, as a later phase
+  // will once the engine's `capped` state exists.
+  it("replaces the plain pill with the amber cap pill and a ghost Give anyway action", async () => {
+    const user = userEvent.setup();
+    const onGiveAnyway = vi.fn();
+    const props = handlers();
+    renderWithProviders(
+      <TodayDoseRow
+        dose={makeDose("due", { courseCount: { given: 3, total: 5 } })}
+        {...props}
+        cap={{ given: 3, max: 3, onGiveAnyway }}
+      />,
+    );
+
+    expect(await screen.findByText("3 of 3 max")).toBeInTheDocument();
+    expect(screen.queryByText("3 of 5 doses")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Give anyway" }));
+    expect(onGiveAnyway).toHaveBeenCalledTimes(1);
+    expect(props.onGive).not.toHaveBeenCalled();
   });
 
   it("offers Start course instead of Give for a notStarted dose", async () => {
