@@ -20,7 +20,7 @@ import {
 import type { DoseEvent, DoseEventStatus, IsoDateTime, LocalDate } from "@/domain";
 import { UNDO_WINDOW_MS, displayNameFor, formatHHMM, now, occurrenceKeyFor, qk } from "@/domain";
 import { DuplicateDoseError, getRepo, RetractWindowExpiredError, TooSoonSinceLastDoseError } from "@/data";
-import { useMembers } from "@/features/household/hooks";
+import { useAllMembers } from "@/features/household/hooks";
 import { useToast } from "@/app/Toast";
 import { useT } from "@/i18n";
 import { elapsedSince } from "./logAtTimeModel";
@@ -173,10 +173,13 @@ export function useLogDose(
   const { show } = useToast();
   const t = useT();
   const undo = useUndoDose(day);
-  // The same household-members hook `HouseholdPage`/`SettingsPage` already
-  // read through — reused here rather than a new query, so there is exactly
-  // one way a `DuplicateDoseError`'s `actorId` becomes a name.
-  const membersQuery = useMembers();
+  // Removed members INCLUDED — the same roster History and Pet detail resolve
+  // attribution against (SPEC §5/§12: a removed member's name keeps rendering
+  // on their past events). `useMembers()`, the live-only list, was wrong here:
+  // it left the one surface that names an actor on Today — "Already given by
+  // {name} at 07:12", and the early-give dialog — reading "Someone" for a
+  // member History still names correctly on the very same device.
+  const membersQuery = useAllMembers();
 
   return useMutation<DoseEvent, Error, LogDoseVars, LogDoseContext>({
     mutationFn: (vars) =>

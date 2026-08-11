@@ -261,6 +261,13 @@ export interface MetaShape {
    * writer: it diffs the self user's current `aliasIds` against this list on
    * every app-shell navigation and posts only what is missing, so a failed
    * (offline) attempt is retried on the next one rather than lost.
+   *
+   * NOT authoritative: `sync/engine.ts` overwrites it with the server's own
+   * `selfAliasIds` on every pull that reports them. Before that it could only
+   * grow, so a device that recorded an id as pushed which the server never
+   * actually kept — what the pre-`A1` code did on any bare 200 — would never
+   * retry it, and every dose that device logged under that stale id stayed
+   * "Someone" on every other device forever.
    */
   selfAliasIdsPushed: string[] | null;
 }

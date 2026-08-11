@@ -53,6 +53,19 @@ export async function reconcileSelfIdentity(repo: Repo, canonicalId: string): Pr
  * online cannot run this — its aliases, and therefore any ALREADY-PUSHED
  * event it left behind, stay unresolvable on other devices. There is no way
  * around that without a device to run the disclosure from.
+ *
+ * A5 extends A1's self-correction backwards in time. A1 made this stop
+ * marking an id pushed unless the server echoed it, which fixed every FUTURE
+ * disclosure — but `selfAliasIdsPushed` was still a grow-only local claim
+ * nothing ever re-checked, so an install carrying entries written by the
+ * pre-A1 code (which marked every pending id pushed on any bare 200) had
+ * them wrongly excluded from `pending` forever, and the doses it logged
+ * under those stale ids stayed "Someone" on every other device. The claim is
+ * no longer trusted: `sync/engine.ts` overwrites it with the server's own
+ * `selfAliasIds` on every pull, so anything the server turns out not to hold
+ * lands back in `pending` here and is retried — the same "retried until the
+ * server actually confirms it" rule A1 established, now applied to ids this
+ * device only BELIEVED it had delivered.
  */
 export async function pushPendingSelfAliases(repo: Repo): Promise<void> {
   const self = await repo.getCurrentUser();

@@ -1343,14 +1343,24 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       const metaStore = tx.objectStore("meta");
 
       if (b.users) {
-        // A2 (merge-mode extension): a foreign backup's row for THIS
-        // device's own account (same id, e.g. another member's
-        // independently exported backup that happens to include us) could
-        // otherwise LWW-win on `updatedAt` and flip local self's `isSelf`
-        // to `false` — their export legitimately marks us that way from
-        // THEIR point of view. `isSelf` must never flip via merge; every
-        // other field still merges normally.
-        const selfSafeUsers = b.users.map((u) => (u.id === fallbackActorId ? { ...u, isSelf: true } : u));
+        // A2 (merge-mode extension): `isSelf` is a DEVICE-LOCAL flag —
+        // "this row is the account signed in here" — so it is decided
+        // entirely by `fallbackActorId` and never by what the backup says,
+        // in both directions. The backup's row for THIS device's account
+        // could otherwise LWW-win on `updatedAt` and flip local self's
+        // `isSelf` to `false` (their export legitimately marks us that way
+        // from THEIR point of view); and the backup's OWN self row — its
+        // author, another member entirely — used to arrive still flagged
+        // `isSelf: true`, leaving two self rows on this device. That row
+        // was then skipped forever by `sync/mirrorMembers`'s `local.isSelf`
+        // guard, so that member's server-side renames and, worse, their
+        // disclosed `aliasIds` never reached this device again and every
+        // dose they logged under a pre-reconcile id stayed "Someone" here
+        // permanently. It also gave `currentActorId`'s `find(u => u.isSelf)`
+        // fallback a second candidate to pick from. `replace` mode has
+        // always forced this both ways (see its `isThisDevice` put);
+        // `merge` now matches it. Every other field still merges normally.
+        const selfSafeUsers = b.users.map((u) => ({ ...u, isSelf: u.id === fallbackActorId }));
         await mergeRows(
           selfSafeUsers,
           (id) => usersStore.get(id),

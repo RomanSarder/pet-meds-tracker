@@ -119,6 +119,27 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
         const selfChanged = await mergeSelfAliasIds(repo, self, result.selfAliasIds);
         if (selfChanged) changedAnything = true;
       }
+      // A5: the same field, read the other way round — as the server's
+      // authoritative answer to "which of my aliases do you actually hold?".
+      // `selfAliasIdsPushed` used to be a grow-only LOCAL claim that nothing
+      // ever checked, so an id recorded as pushed that the server never kept
+      // was never retried, and the doses this device logged under that stale
+      // id read "Someone" on every other device forever. Overwriting the
+      // claim with the truth puts exactly those ids back in
+      // `pushPendingSelfAliases`'s pending set, where A1's existing "retried
+      // until the server actually confirms it" rule takes over. Absent means
+      // the server holds none — the route omits the field rather than
+      // sending `[]`.
+      const serverAliasIds = result.selfAliasIds ?? [];
+      const claimed = (await repo.getMeta("selfAliasIdsPushed")) ?? [];
+      const claimIsStale =
+        claimed.length !== serverAliasIds.length || claimed.some((id) => !serverAliasIds.includes(id));
+      if (claimIsStale) {
+        // Deliberately NOT `changedAnything`: this writes no user-visible
+        // row, and flipping it would invalidate every query on a cycle that
+        // only corrected bookkeeping.
+        await repo.setMeta("selfAliasIdsPushed", serverAliasIds);
+      }
       cursor = result.cursor;
       await repo.setMeta("syncCursor", cursor);
       if (!result.hasMore) break;
