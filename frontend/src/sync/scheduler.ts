@@ -4,6 +4,15 @@
 // failed sync is never surfaced to the user — offline is the normal case,
 // not an error state. Every timer comes from the injected `timers` object;
 // no bare `setTimeout` anywhere in this file.
+//
+// One failure is NOT a transient one and must not be retried at all: the
+// server saying this client has no session. Backoff exists for an answer
+// that may change on its own (the network comes back); a 401 only changes
+// when the user signs in, and retrying it just fills the network log with
+// requests that cannot succeed. That case is recognised through the
+// injected `isSessionRevoked` predicate rather than by importing the HTTP
+// layer here — sync/** stays free of `shared/api`, exactly as the transport
+// boundary in types.ts already is.
 import type { Clock } from "@/domain";
 import type { SyncEngine, SyncScheduler, SyncStatus, Timers } from "./types";
 
@@ -21,9 +30,19 @@ export interface CreateSyncSchedulerOptions {
    */
   clock: Clock;
   timers: Timers;
+  /**
+   * True when this error means "no session" (a 401), as opposed to any
+   * other failure. Defaults to "never" so an injected fake engine keeps the
+   * pure backoff behaviour the existing scheduler tests assert.
+   */
+  isSessionRevoked?: (error: unknown) => boolean;
 }
 
-export function createSyncScheduler({ engine, timers }: CreateSyncSchedulerOptions): SyncScheduler {
+export function createSyncScheduler({
+  engine,
+  timers,
+  isSessionRevoked = () => false,
+}: CreateSyncSchedulerOptions): SyncScheduler {
   let status: SyncStatus = "idle";
   let started = false;
   let timerHandle: unknown = null;
@@ -54,7 +73,15 @@ export function createSyncScheduler({ engine, timers }: CreateSyncSchedulerOptio
       backoffMs = null;
       status = "idle";
       scheduleNext(POLL_INTERVAL_MS);
-    } catch {
+    } catch (error) {
+      if (isSessionRevoked(error)) {
+        // Full stop, not just "skip this reschedule": the `online` and
+        // `visibilitychange` listeners would otherwise fire another
+        // doomed cycle on the next tab focus. `startBackgroundSync()`
+        // starts a fresh scheduler once a session exists again.
+        stop();
+        return;
+      }
       backoffMs = backoffMs === null ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
       status = "backoff";
       scheduleNext(backoffMs);

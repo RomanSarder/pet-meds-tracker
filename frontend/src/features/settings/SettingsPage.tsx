@@ -6,6 +6,7 @@ import { displayNameFor, qk } from "@/domain";
 import { needsDisplayName, useMembers, useSelf } from "@/features/household/hooks";
 import { apiClient, NetworkError } from "@/shared/api";
 import { clearSessionEstablished } from "@/shared/session";
+import { stopBackgroundSync } from "@/sync";
 import { getRepo } from "@/data";
 import { downloadBackup, readBackupFile } from "@/data/backupFile";
 import { Button, Card, ScreenHeader, SectionLabel, SegmentedControl } from "@/components/ds";
@@ -58,6 +59,7 @@ export function SettingsPage() {
       // Offline or the server is unreachable — sign out locally anyway.
     }
     clearSessionEstablished();
+    stopBackgroundSync();
     queryClient.clear();
     navigate({ to: "/sign-in" });
   };

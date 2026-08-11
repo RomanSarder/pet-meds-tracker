@@ -11,6 +11,7 @@ import {
 } from "./shared/session";
 import { getRepo, localStoreIsDisposable } from "./data";
 import { queryClient } from "./queryClient";
+import { startBackgroundSync } from "./sync";
 import { AppShell } from "./app/AppShell";
 import { SignInPage } from "./auth/SignInPage";
 import { VerifyPage } from "./auth/VerifyPage";
@@ -159,6 +160,11 @@ const appLayoutRoute = createRoute({
     }
 
     markSessionEstablished();
+    // The session is confirmed as of right now, so background sync may run.
+    // Boot-time `startBackgroundSync()` is a no-op for a first-ever sign-in
+    // (nothing was established yet when main.tsx ran); this is what turns it
+    // on without a reload. Idempotent on every later navigation.
+    startBackgroundSync();
   },
 });
 
