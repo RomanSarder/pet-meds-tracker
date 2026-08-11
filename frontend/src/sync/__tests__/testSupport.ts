@@ -40,12 +40,19 @@ interface StoredRow {
  * `sync_seq`. `pullLimit` defaults far above anything a test needs, and can
  * be lowered to exercise `hasMore` pagination.
  */
-export function createFakeServer(opts?: { pullLimit?: number; roster?: MemberDto[] }) {
+export function createFakeServer(opts?: { pullLimit?: number; roster?: MemberDto[]; selfAliasIds?: string[] }) {
   const pullLimit = opts?.pullLimit ?? 500;
   // Mirrors `backend/src/sync/index.ts`'s `pullRoster`: not cursor-gated,
   // just the current full list attached to every pull response. Mutable so a
   // test can grow the household mid-scenario via `setRoster`.
   let roster = opts?.roster ?? [];
+  // Mirrors `SyncPullResult.selfAliasIds` (G1): the caller's OWN aliasIds,
+  // attached to every pull the same way `pullRoster` attaches `changes.users`
+  // — since this fake models a single household with no real per-caller
+  // session, it stands in for "whichever account calls pull is the account
+  // these aliases belong to", which is exactly the scenario G1's test
+  // needs: two DEVICES of the SAME account, one pull each.
+  let selfAliasIds = opts?.selfAliasIds ?? [];
   let seq = 0;
   const tables = new Map<TableKey, Map<string, StoredRow>>(TABLE_KEYS.map((k) => [k, new Map()]));
 
@@ -104,7 +111,12 @@ export function createFakeServer(opts?: { pullLimit?: number; roster?: MemberDto
     if (roster.length > 0) {
       changes.users = roster;
     }
-    return { changes, cursor: String(nextCursor), hasMore: anyTruncated };
+    return {
+      changes,
+      cursor: String(nextCursor),
+      hasMore: anyTruncated,
+      ...(selfAliasIds.length > 0 ? { selfAliasIds } : {}),
+    };
   }
 
   const transport: SyncTransport = {
@@ -112,7 +124,11 @@ export function createFakeServer(opts?: { pullLimit?: number; roster?: MemberDto
     pull: async (cursor) => pull(cursor),
   };
 
-  return { transport, setRoster: (next: MemberDto[]) => (roster = next) };
+  return {
+    transport,
+    setRoster: (next: MemberDto[]) => (roster = next),
+    setSelfAliasIds: (next: string[]) => (selfAliasIds = next),
+  };
 }
 
 /** Wraps a transport so its `push`/`pull` reject until `failures` calls have been made. */

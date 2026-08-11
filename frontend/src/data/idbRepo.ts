@@ -1128,6 +1128,11 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     await metaStore.put({ key: "lastPushedAt", value: null });
     await metaStore.put({ key: "householdId", value: household.id });
     await metaStore.put({ key: "selfUserId", value: user.id });
+    // A4: the fresh self row above has no aliases yet, so whatever this
+    // device previously believed it had "confirmed pushed" for the OLD self
+    // id is meaningless now — stale bookkeeping for an identity this store
+    // no longer has.
+    await metaStore.put({ key: "selfAliasIdsPushed", value: null });
     await tx.done;
 
     // The closure cache must track the identity this reset just installed —
@@ -1207,11 +1212,35 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
         for (const h of b.households) await householdsStore.put(h);
         householdId = b.households[0].id;
       }
-      let selfUserId = fallbackActorId;
+      // A2: this device's OWN self identity must never change as a side
+      // effect of importing a backup. The backup's `isSelf`-flagged row
+      // describes ITS author's device/account, not necessarily this one —
+      // blindly adopting a DIFFERENT id here used to let `reconcileSelfId`
+      // (router.ts, on the very next navigation) alias this account to
+      // another person's identity entirely, permanently misattributing
+      // their real history to this account on every device that later
+      // mirrors the roster. By the time Settings is reachable this device
+      // has always already run `reconcileSelfId` at least once (Settings
+      // sits behind the same app-shell gate `router.ts`'s `beforeLoad`
+      // guards), so `fallbackActorId` is already this account's
+      // authoritative identity and is the one value that must survive
+      // untouched — the common "restore my own backup on a new device"
+      // case is unaffected, since a healthy backup's own self row already
+      // carries this same (already-reconciled) id.
+      const selfUserId = fallbackActorId;
       if (b.users) {
+        const currentSelfRow = await usersStore.get(fallbackActorId);
         await usersStore.clear();
-        for (const u of b.users) await usersStore.put(u);
-        selfUserId = b.users.find((u) => u.isSelf)?.id ?? fallbackActorId;
+        for (const u of b.users) {
+          const isThisDevice = u.id === fallbackActorId;
+          await usersStore.put(isThisDevice ? { ...u, isSelf: true } : { ...u, isSelf: false });
+        }
+        // The backup may not mention this device's own row at all (e.g. a
+        // household this device was never part of) — reinstate it rather
+        // than silently drop this device's own identity.
+        if (currentSelfRow && !b.users.some((u) => u.id === fallbackActorId)) {
+          await usersStore.put(currentSelfRow);
+        }
       }
 
       // Transport the real cursor/sweep-day when the backup carries them
@@ -1267,8 +1296,16 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       const metaStore = tx.objectStore("meta");
 
       if (b.users) {
+        // A2 (merge-mode extension): a foreign backup's row for THIS
+        // device's own account (same id, e.g. another member's
+        // independently exported backup that happens to include us) could
+        // otherwise LWW-win on `updatedAt` and flip local self's `isSelf`
+        // to `false` — their export legitimately marks us that way from
+        // THEIR point of view. `isSelf` must never flip via merge; every
+        // other field still merges normally.
+        const selfSafeUsers = b.users.map((u) => (u.id === fallbackActorId ? { ...u, isSelf: true } : u));
         await mergeRows(
-          b.users,
+          selfSafeUsers,
           (id) => usersStore.get(id),
           (row) => usersStore.put(row),
         );

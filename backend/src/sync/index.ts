@@ -302,18 +302,23 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
  * when the caller has no household, or isn't a user at all — every sync route
  * calls this first and stamps its result as `household_id`, never reading one
  * from the request body (W9-DESIGN §D5).
+ *
+ * Also returns the caller's own `aliasIds`: `/sync/pull` needs it (see
+ * `selfAliasIds` on `SyncPullResult`) and this is the one place both sync
+ * routes already fetch the caller's own row, so exposing it here costs no
+ * extra query. `/sync/push` simply ignores the field.
  */
 async function requireHousehold(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
-): Promise<string | null> {
+): Promise<{ householdId: string; aliasIds: string[] } | null> {
   const [user] = await fastify.db.select().from(users).where(eq(users.id, request.userId));
   if (!user || !user.householdId) {
     reply.notFound();
     return null;
   }
-  return user.householdId;
+  return { householdId: user.householdId, aliasIds: user.aliasIds ?? [] };
 }
 
 /**
@@ -459,8 +464,9 @@ export default fastifyPlugin(async (fastify) => {
     "/sync/push",
     { preHandler: fastify.authenticate },
     async (request, reply): Promise<SyncPushResult | undefined> => {
-      const householdId = await requireHousehold(fastify, request, reply);
-      if (!householdId) return;
+      const resolved = await requireHousehold(fastify, request, reply);
+      if (!resolved) return;
+      const { householdId } = resolved;
 
       const changes = request.body?.changes ?? {};
 
@@ -485,8 +491,9 @@ export default fastifyPlugin(async (fastify) => {
     "/sync/pull",
     { preHandler: fastify.authenticate },
     async (request, reply): Promise<SyncPullResult | undefined> => {
-      const householdId = await requireHousehold(fastify, request, reply);
-      if (!householdId) return;
+      const resolved = await requireHousehold(fastify, request, reply);
+      if (!resolved) return;
+      const { householdId, aliasIds: callerAliasIds } = resolved;
 
       const parsedCursor = Number(request.query.cursor);
       const cursor = Number.isFinite(parsedCursor) ? parsedCursor : 0;
@@ -527,7 +534,17 @@ export default fastifyPlugin(async (fastify) => {
         changes.users = roster;
       }
 
-      return { changes, cursor: String(nextCursor), hasMore: anyTruncated };
+      return {
+        changes,
+        cursor: String(nextCursor),
+        hasMore: anyTruncated,
+        // See `SyncPullResult.selfAliasIds`'s doc comment: `pullRoster`
+        // excludes the caller's own row from `changes.users` by design, so
+        // this is the only way a SECOND device of the same account ever
+        // learns its own account's disclosed aliases without a Household
+        // screen visit.
+        ...(callerAliasIds.length > 0 ? { selfAliasIds: callerAliasIds } : {}),
+      };
     },
   );
 });

@@ -156,6 +156,69 @@ describe("household roster and attribution arrive from background sync alone", (
     expect(displayNameFor(MARTA_STALE_LOCAL_ID, usersAfter)).toBe("Marta");
   });
 
+  // G1 (highest priority): the coordinator's exact reported scenario — NOT
+  // another member's dose, but this SAME account's OWN pre-fix dose,
+  // viewed from a SECOND device of theirs. `pullRoster` (backend) excludes
+  // the caller's own row from `changes.users` by design ("every OTHER
+  // member" — see that function's comment), so `mirrorMembers` alone can
+  // never see this case; it has to arrive through `SyncPullResult`'s
+  // separate `selfAliasIds` field, which `syncOnce()` now merges directly
+  // into the local self row. No `GET /household` visit involved — purely
+  // the background cycle, matching the live repro ("a third browser
+  // profile... still showed 'Someone'").
+  it("G1: a second device of the SAME account resolves that account's own pre-fix dose to their real name, via SyncPullResult.selfAliasIds", async () => {
+    const ROMAN_STALE_LOCAL_ID = "d0000000-0000-4000-8000-00000000a001";
+    const ROMAN_CANONICAL_ID = "d0000000-0000-4000-8000-00000000a002";
+    const { transport, setSelfAliasIds } = createFakeServer();
+
+    // Device 1 (Roman's first device) already reconciled and disclosed its
+    // stale id, AND already pushed a dose it logged before that
+    // reconciliation happened — still carrying the stale id, since ledger
+    // rows are never rewritten.
+    setSelfAliasIds([ROMAN_STALE_LOCAL_ID]);
+    await transport.push({
+      doseEvents: [
+        {
+          id: "d0000000-0000-4000-8000-00000000f003",
+          courseId: COURSE_ID,
+          scheduledFor: null,
+          status: "given",
+          loggedAt: "2026-08-10T08:00:00.000Z",
+          givenAt: "2026-08-10T08:00:00.000Z",
+          amount: 1,
+          note: null,
+          occurrenceKey: `${COURSE_ID}|-3`,
+          supersedesId: null,
+          actorId: ROMAN_STALE_LOCAL_ID,
+          createdAt: "2026-08-10T08:00:00.000Z",
+          updatedAt: "2026-08-10T08:00:00.000Z",
+          deletedAt: null,
+        },
+      ],
+    });
+
+    // Device 2: a SEPARATE device, but signed into the SAME account —
+    // already reconciled to the SAME canonical id (the realistic steady
+    // state; `router.ts`'s `beforeLoad` runs `reconcileSelfId` before any
+    // navigation completes). It has never heard of `ROMAN_STALE_LOCAL_ID`.
+    const deviceTwo = freshDevice();
+    await deviceTwo.reconcileSelfId(ROMAN_CANONICAL_ID);
+    const selfBefore = await deviceTwo.getCurrentUser();
+    expect(selfBefore.aliasIds ?? []).not.toContain(ROMAN_STALE_LOCAL_ID);
+    expect(displayNameFor(ROMAN_STALE_LOCAL_ID, [selfBefore])).toBe("Someone");
+
+    const engine = createSyncEngine({ repo: deviceTwo, transport, clock: systemClock });
+    await engine.syncOnce();
+
+    const pulledDose = (await deviceTwo.listDoseEvents({})).find((e) => e.actorId === ROMAN_STALE_LOCAL_ID);
+    expect(pulledDose).toBeDefined();
+
+    const selfAfter = await deviceTwo.getCurrentUser();
+    expect(selfAfter.aliasIds).toContain(ROMAN_STALE_LOCAL_ID);
+    expect(displayNameFor(ROMAN_STALE_LOCAL_ID, [selfAfter])).toBe(selfAfter.displayName);
+    expect(displayNameFor(ROMAN_STALE_LOCAL_ID, [selfAfter])).not.toBe("Someone");
+  });
+
   it("does not report a change (and does not re-invalidate) on a second, unchanged cycle", async () => {
     const { transport } = createFakeServer({ roster: [martaRosterEntry()] });
     const repo = freshDevice();

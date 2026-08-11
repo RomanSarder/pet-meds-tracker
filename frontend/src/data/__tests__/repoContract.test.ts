@@ -312,9 +312,19 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
 
   // --- 8. export -> import(replace) -> export is byte-identical ----------
 
-  it("export -> importHousehold(replace) into a second empty repo -> export produces a byte-identical JSON string", async () => {
+  it("export -> importHousehold(replace) into a second, ALREADY-RECONCILED-to-the-same-account repo -> export produces a byte-identical JSON string", async () => {
     setClock(fixedClock("2026-08-08T07:00:00.000Z"));
+    // A2: "restore my own backup on a different device" — realistically,
+    // BOTH devices are already signed into the same account and have
+    // already run `reconcileSelfId` to the same canonical id (`router.ts`'s
+    // `beforeLoad` runs it before Settings, the only caller of "replace",
+    // is ever reachable). Simulated here explicitly rather than starting
+    // both repos from independent random self ids, which `importHousehold`
+    // no longer treats as "the same person" — see the dedicated
+    // cross-account test just below for that boundary.
+    const SAME_ACCOUNT_ID = "d0000000-0000-4000-8000-0000000000aa";
     const repo1 = makeRepo();
+    await repo1.reconcileSelfId(SAME_ACCOUNT_ID);
     const { medicationId, courseId } = await setupCourse(repo1);
     await repo1.adjustStock({ medicationId, deltaUnits: 10, reason: "purchase" });
     const dose = await repo1.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
@@ -325,10 +335,45 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     const backup1 = await repo1.exportHousehold();
 
     const repo2 = makeRepo();
+    await repo2.reconcileSelfId(SAME_ACCOUNT_ID);
     await repo2.importHousehold(backup1, "replace");
     const backup2 = await repo2.exportHousehold();
 
     expect(JSON.stringify(backup2)).toBe(JSON.stringify(backup1));
+  });
+
+  // --- 8b. A2: importing a DIFFERENT account's backup must not change this
+  // device's own actor identity ---------------------------------------------
+
+  it("importHousehold(replace) with a DIFFERENT account's backup keeps this device's own self id — does not adopt the backup author's identity", async () => {
+    setClock(fixedClock("2026-08-08T07:00:00.000Z"));
+    const author = makeRepo();
+    const { courseId } = await setupCourse(author);
+    await author.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    const authorSelf = await author.getCurrentUser();
+    const backup = await author.exportHousehold();
+
+    const importer = makeRepo();
+    const importerSelfBefore = await importer.getCurrentUser();
+    expect(importerSelfBefore.id).not.toBe(authorSelf.id);
+
+    await importer.importHousehold(backup, "replace");
+
+    // The importer's OWN identity survived, unchanged — it did not become
+    // the backup author.
+    const importerSelfAfter = await importer.getCurrentUser();
+    expect(importerSelfAfter.id).toBe(importerSelfBefore.id);
+    expect(await importer.currentActorId()).toBe(importerSelfBefore.id);
+
+    // The backup author's own row was imported as a normal (non-self)
+    // member instead — their data (the dose event) is not lost, just not
+    // claimed as this device's own.
+    const allUsers = await importer.listUsers({ includeRemoved: true });
+    const authorRow = allUsers.find((u) => u.id === authorSelf.id);
+    expect(authorRow).toBeDefined();
+    expect(authorRow?.isSelf).toBe(false);
+    const importedDose = (await importer.listDoseEvents({})).find((e) => e.actorId === authorSelf.id);
+    expect(importedDose).toBeDefined();
   });
 
   // --- 9. merge import is last-write-wins on updatedAt --------------------

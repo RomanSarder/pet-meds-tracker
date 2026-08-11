@@ -6,7 +6,7 @@ import type { Repo } from "@/data";
 import type { Clock, DoseEvent, Timestamped } from "@/domain";
 import { RETRACT_GRACE_MS, UNDO_WINDOW_MS } from "@/domain";
 import { domainToPayload, payloadToRemoteChanges } from "./mapping";
-import { mirrorMembers } from "./mirrorMembers";
+import { mergeSelfAliasIds, mirrorMembers } from "./mirrorMembers";
 import type { SyncEngine, SyncTransport } from "./types";
 
 /**
@@ -36,7 +36,30 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
     const backup = await repo.exportHousehold();
     const nowMs = clock.now().getTime();
 
-    const candidateDoseEvents = backup.doseEvents.filter((e) => isPushable(e, lastPushedAt));
+    // A3: the server now stamps every pushed ledger row's `actorId` from
+    // THIS device's own session (`backend/src/sync/index.ts`'s `pushTable`)
+    // — correct for a row this device actually logged, but that
+    // justification ("the pusher and the logger are always the same
+    // person") does not hold for a row this device merely learned about
+    // via `importHousehold` (merge OR replace mode round-trips whatever
+    // this device already has, and `adoptJoinedHousehold`'s replace-mode
+    // round-trip is safe by construction, but merge-mode import can
+    // legitimately bring in ANOTHER member's own dose/course/stock history,
+    // preserving their `actorId` verbatim — see `Repo.applyRemoteChanges`'s
+    // doc comment). Pushing one of those would let the server's stamping
+    // silently reattribute a genuinely-someone-else's-event to whoever
+    // happens to push it next. A ledger row is only ever "this device's to
+    // push" when its `actorId` is the local self id or one of self's own
+    // disclosed aliases — a row that fails that check is simply never
+    // included; if the row's true author's own device comes back online,
+    // IT pushes it correctly (or, per `Repo.reconcileSelfId`'s doc comment,
+    // it stays unremediated if that device never does — the same
+    // already-documented residual gap, not a new one).
+    const self = await repo.getCurrentUser();
+    const ownIds = new Set<string>([self.id, ...(self.aliasIds ?? [])]);
+    const isOwn = (row: { actorId: string }): boolean => ownIds.has(row.actorId);
+
+    const candidateDoseEvents = backup.doseEvents.filter((e) => isPushable(e, lastPushedAt) && isOwn(e));
     const quarantined = candidateDoseEvents.filter((e) => isQuarantined(e, nowMs));
     const pushableDoseEvents = candidateDoseEvents.filter((e) => !isQuarantined(e, nowMs));
 
@@ -45,8 +68,8 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
       medications: backup.medications.filter((r) => isPushable(r, lastPushedAt)),
       courses: backup.courses.filter((r) => isPushable(r, lastPushedAt)),
       doseEvents: pushableDoseEvents,
-      stockAdjustments: backup.stockAdjustments.filter((r) => isPushable(r, lastPushedAt)),
-      courseEvents: (backup.courseEvents ?? []).filter((r) => isPushable(r, lastPushedAt)),
+      stockAdjustments: backup.stockAdjustments.filter((r) => isPushable(r, lastPushedAt) && isOwn(r)),
+      courseEvents: (backup.courseEvents ?? []).filter((r) => isPushable(r, lastPushedAt) && isOwn(r)),
     });
 
     if (Object.keys(pushPayload).length > 0) {
@@ -86,6 +109,18 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
       if (result.changes.users && result.changes.users.length > 0) {
         const membersChanged = await mirrorMembers(repo, result.changes.users);
         if (membersChanged) changedAnything = true;
+      }
+      // G1: `pullRoster` never includes the caller's own row in
+      // `changes.users` (see that function's comment), so a second device
+      // signed into the SAME account would otherwise never learn its own
+      // account's disclosed aliases through the background sync cycle at
+      // all — the exact "still 'Someone' for my own pre-fix dose on another
+      // device of mine" defect. `selfAliasIds` is the separate channel for
+      // it; see `SyncPullResult.selfAliasIds`'s doc comment.
+      if (result.selfAliasIds && result.selfAliasIds.length > 0) {
+        const self = await repo.getCurrentUser();
+        const selfChanged = await mergeSelfAliasIds(repo, self, result.selfAliasIds);
+        if (selfChanged) changedAnything = true;
       }
       cursor = result.cursor;
       await repo.setMeta("syncCursor", cursor);

@@ -1,6 +1,6 @@
 import { FastifyReply } from "fastify";
 import fastifyPlugin from "fastify-plugin";
-import { and, desc, eq, gt, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import {
   AddSelfAliasIdsBody,
   ConfirmationRequiredError,
@@ -25,6 +25,14 @@ import { evaluateJoinCode, generateJoinCode, JOIN_CODE_TTL_MS } from "./joinCode
 type UserRow = typeof users.$inferSelect;
 type HouseholdRow = typeof households.$inferSelect;
 type JoinCodeRow = typeof joinCodes.$inferSelect;
+
+// A4: see `POST /household/me/aliases`'s eviction-rule comment.
+const ALIAS_ID_CAP = 50;
+
+/** A `uuid[]` literal built from bound parameters — never raw string interpolation. */
+function uuidArrayLiteral(ids: string[]) {
+  return sql`ARRAY[${sql.join(ids.map((id) => sql`${id}::uuid`), sql.raw(", "))}]::uuid[]`;
+}
 
 function toHouseholdDto(row: HouseholdRow) {
   return {
@@ -282,6 +290,19 @@ export default fastifyPlugin(async (fastify) => {
   // would then resolve the victim's new dose logs to the attacker's name).
   // Idempotent: re-submitting the same ids changes nothing, since the
   // dedup and the "already alive" filter apply identically every time.
+  //
+  // USER DECISION (authoritative, do not "fix" without raising it again):
+  // this collision check is the ONLY guard. There is deliberately no
+  // uniqueness constraint or normalized alias table preventing two DIFFERENT
+  // accounts from independently claiming the SAME dead, never-claimed id as
+  // their own — household members are trusted with each other's
+  // attribution, not modelled as adversaries of one another (SPEC §5: "no
+  // permissions", any member can already rename or remove any other with no
+  // check at all). A member deliberately claiming a stale id they somehow
+  // learned belonged to another member's history is accepted as out of
+  // scope. What this guard DOES prevent is an account reassigning a REAL,
+  // currently-live account's identity to itself — the only case that is an
+  // accident-proof, not merely a trust-model, concern.
   fastify.post<{ Body: AddSelfAliasIdsBody }>(
     "/household/me/aliases",
     {
@@ -302,27 +323,61 @@ export default fastifyPlugin(async (fastify) => {
         return reply.unauthorized();
       }
 
-      const current = caller.aliasIds ?? [];
       const candidates = Array.from(new Set(request.body.ids.filter((id) => id !== caller.id)));
-
-      const collisions =
-        candidates.length > 0
-          ? await fastify.db.select({ id: users.id }).from(users).where(inArray(users.id, candidates))
-          : [];
-      const claimed = new Set(collisions.map((row) => row.id));
-
-      const additions = candidates.filter((id) => !claimed.has(id) && !current.includes(id));
-      if (additions.length === 0) {
-        return { aliasIds: current };
+      if (candidates.length === 0) {
+        return { aliasIds: caller.aliasIds ?? [] };
       }
+
+      const collisions = await fastify.db.select({ id: users.id }).from(users).where(inArray(users.id, candidates));
+      const claimed = new Set(collisions.map((row) => row.id));
+      const safeCandidates = candidates.filter((id) => !claimed.has(id));
+      if (safeCandidates.length === 0) {
+        return { aliasIds: caller.aliasIds ?? [] };
+      }
+
+      // Atomic, capped append. The new value is computed ENTIRELY from the
+      // column's live value inside one UPDATE statement — never from
+      // `caller.aliasIds` read above — because Postgres locks and evaluates
+      // a single UPDATE's SET expression against the row's current value:
+      // two concurrent reconciliations from two devices of the SAME account
+      // (the reported failure — device 1 adds X, device 2 adds Y, both read
+      // an empty array first) now serialize correctly instead of the second
+      // write silently clobbering the first's addition. `WITH ORDINALITY`
+      // dedups while preserving first-seen order (a plain `DISTINCT` does
+      // not guarantee order), so this is also naturally idempotent:
+      // re-submitting an id already present changes nothing.
+      //
+      // Cap + eviction rule (A4): `aliasIds` can otherwise grow without
+      // bound — `currentActorId()` mints a fresh throwaway local id on every
+      // fresh install, every `resetLocalHousehold`, and every account
+      // switch, and each one gets disclosed here. Capped at
+      // `ALIAS_ID_CAP`; once full, the OLDEST ids (by first-disclosed order)
+      // are evicted to make room for new ones — chosen over refusing new
+      // additions because a device that just reconciled needs ITS current
+      // stale id resolvable, and eviction only ever discards the ids least
+      // likely to still be needed. In practice a real account accumulates a
+      // handful of these, not dozens; hitting the cap is not expected
+      // outside of pathological reset loops.
+      const merged = sql<string[]>`(
+        SELECT ARRAY(
+          SELECT x FROM (
+            SELECT x, MIN(ord) AS first_ord
+            FROM unnest(${users.aliasIds} || ${uuidArrayLiteral(safeCandidates)}) WITH ORDINALITY AS t(x, ord)
+            GROUP BY x
+            ORDER BY first_ord DESC
+            LIMIT ${ALIAS_ID_CAP}
+          ) capped
+          ORDER BY first_ord ASC
+        )
+      )`;
 
       const [updated] = await fastify.db
         .update(users)
-        .set({ aliasIds: [...current, ...additions] })
+        .set({ aliasIds: merged })
         .where(eq(users.id, request.userId))
         .returning();
 
-      return { aliasIds: updated?.aliasIds ?? current };
+      return { aliasIds: updated?.aliasIds ?? caller.aliasIds ?? [] };
     },
   );
 

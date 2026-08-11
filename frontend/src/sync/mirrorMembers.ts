@@ -15,15 +15,12 @@ import { now } from "@/domain";
 
 export interface MirrorMembersOptions {
   /**
-   * A member id to skip even if it appears in `members` — used by the `GET
-   * /household` caller, which knows its own backend-side id (`state.self.id`)
-   * and must not mirror it as a second local row alongside the real local
-   * self row (`self.id` below already guards this from the OTHER direction:
-   * the two ids are never equal, since the local self row is a device-minted
-   * uuid — see `idbRepo`'s `currentActorId` — while `state.self.id` is the
-   * backend auth identity). The `/sync/pull` caller omits this: the server
-   * already excludes the caller's own row from `changes.users`
-   * (`backend/src/sync/index.ts`'s `pullRoster`).
+   * A member id to treat as the caller's own even if `self.id` (below)
+   * somehow disagrees — used by the `GET /household` caller, which knows
+   * its own backend-side id (`state.self.id`) directly. In practice the two
+   * are the same id once `reconcileSelfId` has run (both derive from the
+   * same canonical account), so this mostly exists as a defensive second
+   * source of truth for the entry-is-self check just below.
    */
   excludeId?: string;
 }
@@ -54,7 +51,22 @@ export async function mirrorMembers(
   let changed = false;
 
   for (const member of members) {
+    // The entry describing the caller's own account, when the server sent
+    // one (`GET /household`'s `members` includes the caller; `/sync/pull`'s
+    // `changes.users` never does — see `pullRoster`'s comment). This used
+    // to be a bare `continue` — skipped entirely — which is exactly what
+    // let a member's OWN pre-fix aliases (disclosed from one of their OWN
+    // devices) never reach any of their OTHER devices: `displayNameFor`
+    // could never resolve their own history anywhere but the one device
+    // that ran the disclosure. Still never upserted as a normal member row
+    // below: that would `put()` a `isSelf: false` copy over the real local
+    // self row (both share the same id) and silently unflag it. Only its
+    // `aliasIds` are worth anything here — displayName/tint/id for the
+    // LOCAL self row are already authoritative on this device.
     if (member.id === opts.excludeId || member.id === self.id) {
+      if (await mergeSelfAliasIds(repo, self, member.aliasIds ?? [])) {
+        changed = true;
+      }
       continue;
     }
     const local = byId.get(member.id);
@@ -101,4 +113,29 @@ export async function mirrorMembers(
   }
 
   return changed;
+}
+
+/**
+ * Unions `incomingAliasIds` (learned from the server, about the CALLER's own
+ * account) into the local self row's own `aliasIds` — never touching `id`,
+ * `isSelf`, `displayName` or `tint`, which stay whatever this device already
+ * has for itself. Exported (not folded into the loop above) because
+ * `sync/engine.ts` needs it too, for `SyncPullResult.selfAliasIds` — the
+ * channel `/sync/pull` uses to deliver the caller's own aliases, since
+ * `pullRoster` never includes the caller's own row in `changes.users`.
+ *
+ * Resolves to whether anything changed, for the same cache-invalidation
+ * reason `mirrorMembers` itself does.
+ */
+export async function mergeSelfAliasIds(
+  repo: Repo,
+  self: User,
+  incomingAliasIds: readonly string[],
+): Promise<boolean> {
+  if (incomingAliasIds.length === 0) return false;
+  const current = self.aliasIds ?? [];
+  const missing = incomingAliasIds.filter((id) => !current.includes(id));
+  if (missing.length === 0) return false;
+  await repo.upsertUser({ ...self, aliasIds: [...current, ...missing], updatedAt: now().toISOString() });
+  return true;
 }

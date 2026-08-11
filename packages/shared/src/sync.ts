@@ -195,4 +195,16 @@ export interface SyncPullResult {
   cursor: string;
   /** True when at least one table truncated at the page limit; call again with `cursor`. */
   hasMore: boolean;
+  /**
+   * The caller's OWN current `aliasIds` (see `MemberDto.aliasIds`'s doc
+   * comment) — deliberately NOT delivered through `changes.users`, which
+   * `pullRoster` (backend/src/sync/index.ts) excludes the caller's own row
+   * from by design ("every OTHER member"). A second device signed into the
+   * SAME account never appears in its own `changes.users`, so without this
+   * separate field it could never learn its own account's disclosed
+   * aliases — which is exactly the "still shows 'Someone' for my OWN
+   * pre-fix dose on a second device" defect this closes. Present only when
+   * non-empty, same convention as `changes.users`.
+   */
+  selfAliasIds?: string[];
 }
