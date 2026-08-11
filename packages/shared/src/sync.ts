@@ -49,6 +49,8 @@ export type ScheduleDto =
       kind: "fromLastDose";
       intervalHours: number;
       anchorTime?: LocalTime;
+      /** Mirrors `domain/types.ts` `Schedule`'s `maxPerDay` (SPEC §3b-i). */
+      maxPerDay?: number;
     };
 
 /** Mirrors `domain/types.ts` `CourseSnapshot` — the fields a §6.4 detail line compares. */
@@ -124,6 +126,8 @@ export interface DoseEventDto {
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
   deletedAt: IsoDateTime | null;
+  /** Mirrors `domain/types.ts` `DoseEvent`'s `overMax` (SPEC §3b-i). */
+  overMax?: boolean;
 }
 
 /** Append-only ledger — insert-if-absent, never overwritten (W9-DESIGN §D2). */

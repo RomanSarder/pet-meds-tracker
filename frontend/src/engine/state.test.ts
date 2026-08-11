@@ -136,6 +136,87 @@ describe("getDoseState", () => {
     expect(getDoseState(occ, new Date(2026, 7, 10, 8, 0))).toBe("upcoming");
   });
 
+  // SPEC §3b-i / §12: "an interval course with no maximum set behaves
+  // exactly as before" and "a capped course never appears in the overdue
+  // count or the overdue banner".
+  describe("capped (SPEC §3b-i)", () => {
+    it("returns 'capped' when givenToday reaches maxPerDay, even though dueAt is far enough past to otherwise be overdue", () => {
+      const dueAt = new Date(2026, 7, 10, 8, 0);
+      const occ = makeOccurrence({
+        courseId,
+        dueAt,
+        kind: "fromLastDose",
+        graceMinutes: GRACE_INTERVAL_CAP_MIN,
+        maxPerDay: 3,
+        givenToday: 3,
+      });
+      // Well past due + grace — would be 'overdue' were it not capped.
+      const now = new Date(dueAt.getTime() + GRACE_INTERVAL_CAP_MIN * 60_000 + 60_000);
+      expect(getDoseState(occ, now)).toBe("capped");
+    });
+
+    it("returns 'capped' when givenToday exceeds maxPerDay (a 'Give anyway' dose already pushed the count past it)", () => {
+      const dueAt = new Date(2026, 7, 10, 8, 0);
+      const occ = makeOccurrence({
+        courseId,
+        dueAt,
+        kind: "fromLastDose",
+        graceMinutes: GRACE_INTERVAL_CAP_MIN,
+        maxPerDay: 3,
+        givenToday: 4,
+      });
+      expect(getDoseState(occ, dueAt)).toBe("capped");
+    });
+
+    it("does NOT return 'capped' while givenToday is still under maxPerDay — ordinary due/overdue rules apply unchanged", () => {
+      const dueAt = new Date(2026, 7, 10, 8, 0);
+      const occ = makeOccurrence({
+        courseId,
+        dueAt,
+        kind: "fromLastDose",
+        graceMinutes: GRACE_INTERVAL_CAP_MIN,
+        maxPerDay: 3,
+        givenToday: 2,
+      });
+      const now = new Date(dueAt.getTime() + GRACE_INTERVAL_CAP_MIN * 60_000 + 60_000);
+      expect(getDoseState(occ, now)).toBe("overdue");
+    });
+
+    it("'given'/'skipped' still take precedence over 'capped' when both would apply", () => {
+      const dueAt = new Date(2026, 7, 10, 8, 0);
+      const key = occurrenceKeyFor(courseId, dueAt.toISOString());
+      const occ = makeOccurrence({
+        courseId,
+        dueAt,
+        kind: "fromLastDose",
+        graceMinutes: GRACE_INTERVAL_CAP_MIN,
+        maxPerDay: 3,
+        givenToday: 3,
+        event: makeEvent({ courseId, occurrenceKey: key, status: "given" }),
+      });
+      expect(getDoseState(occ, dueAt)).toBe("given");
+    });
+
+    // SPEC §3b-i's builder checklist / §12: the unset case is a true no-op —
+    // `maxPerDay`/`givenToday` simply absent (never computed for a course
+    // without a cap), so `capped` can never be reached regardless of how far
+    // overdue the occurrence is. This is the CRITICAL SCOPE GUARD for this
+    // feature: it proves the no-op, not merely the cap.
+    it("CRITICAL SCOPE GUARD: with maxPerDay/givenToday both absent, 'capped' is never reached — even a wildly overdue occurrence still reads 'overdue'", () => {
+      const dueAt = new Date(2026, 7, 10, 8, 0);
+      const occ = makeOccurrence({
+        courseId,
+        dueAt,
+        kind: "fromLastDose",
+        graceMinutes: GRACE_INTERVAL_CAP_MIN,
+        // maxPerDay/givenToday intentionally omitted — exactly what
+        // `occurrences.ts` produces for a course with no `maxPerDay` set.
+      });
+      const now = new Date(dueAt.getTime() + 30 * 24 * 60 * 60_000); // 30 days later
+      expect(getDoseState(occ, now)).toBe("overdue");
+    });
+  });
+
   it("a 'missed' DoseEvent leaves the occurrence 'overdue', not a distinct state", () => {
     const dueAt = new Date(2026, 7, 10, 8, 0);
     const key = occurrenceKeyFor(courseId, dueAt.toISOString());
@@ -218,5 +299,26 @@ describe("summariseDay", () => {
 
     const fixedOnly = summariseDay([upcomingFixed], now);
     expect(fixedOnly.remaining).toBe(0);
+  });
+
+  // SPEC §3b-i / §12: "a capped course never appears in the overdue count or
+  // the overdue banner" — it must still count toward `remaining` (it is
+  // still an outstanding, actionable row) but never toward `overdue`.
+  it("counts a capped occurrence toward remaining, never toward overdue or earliestOverdue", () => {
+    const now = new Date(2026, 7, 10, 10, 0);
+    const cappedOcc = makeOccurrence({
+      courseId: "c1",
+      kind: "fromLastDose",
+      graceMinutes: GRACE_INTERVAL_CAP_MIN,
+      dueAt: new Date(2026, 7, 10, 6, 0), // long past due + grace
+      maxPerDay: 3,
+      givenToday: 3,
+    });
+    const overdueOcc = makeOccurrence({ courseId: "c2", dueAt: new Date(2026, 7, 10, 7, 0) });
+
+    const summary = summariseDay([cappedOcc, overdueOcc], now);
+    expect(summary.remaining).toBe(2);
+    expect(summary.overdue).toBe(1);
+    expect(summary.earliestOverdue?.courseId).toBe("c2");
   });
 });

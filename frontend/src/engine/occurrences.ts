@@ -314,6 +314,48 @@ function fixedTimesOccurrences(
   return occurrences;
 }
 
+/** `given` (live: not deleted, not superseded) DoseEvents for one course. */
+function liveGivenEventsForCourse(courseId: string, events: DoseEvent[]): DoseEvent[] {
+  return events.filter(
+    (e) => e.courseId === courseId && e.status === "given" && e.deletedAt === null && !isSuperseded(e.id, events),
+  );
+}
+
+/** SPEC §3b-i/§3d: how many `given` events for this course fall in local calendar day `day`. */
+function countGivenOnDay(courseId: string, day: LocalDate, events: DoseEvent[]): number {
+  return liveGivenEventsForCourse(courseId, events).filter(
+    (e) => localDayKey(new Date(e.givenAt)) === day,
+  ).length;
+}
+
+/**
+ * SPEC §3b-i: the effective next-due instant for a `fromLastDose` chain,
+ * folding in the optional daily cap. `schedule` must be `course.schedule`
+ * narrowed to `fromLastDose` by the caller.
+ *
+ * With no `maxPerDay`, or with the ANCHOR's own calendar day not yet at the
+ * cap, this is exactly `anchor + intervalHours` (SPEC §3b, unchanged). Once
+ * that day's live `given` count reaches `maxPerDay`, the course is "capped
+ * for the rest of the day": the effective due instant becomes
+ * `max(00:00 the day after anchor's day, anchor + intervalHours)` — never
+ * EARLIER than the plain interval math, only ever later, and exported so
+ * `sweep.ts#nextDueAt` folds in the identical rule rather than
+ * re-deriving it.
+ */
+export function fromLastDoseDueAt(
+  course: Course,
+  schedule: Extract<Schedule, { kind: "fromLastDose" }>,
+  anchor: Date,
+  events: DoseEvent[],
+): Date {
+  const rawDueAt = new Date(anchor.getTime() + schedule.intervalHours * 3_600_000);
+  if (schedule.maxPerDay === undefined) return rawDueAt;
+  const anchorDay = localDayKey(anchor);
+  if (countGivenOnDay(course.id, anchorDay, events) < schedule.maxPerDay) return rawDueAt;
+  const nextDayStart = atLocalTime(addLocalDays(anchorDay, 1), "00:00");
+  return rawDueAt.getTime() > nextDayStart.getTime() ? rawDueAt : nextDayStart;
+}
+
 function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEvent[]): Occurrence[] {
   const schedule = course.schedule;
   if (schedule.kind !== "fromLastDose") return [];
@@ -344,8 +386,10 @@ function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEve
     ];
   }
 
-  // Elapsed-millisecond arithmetic (SPEC §3d) — never wall-clock reconstruction.
-  const dueAt = new Date(anchor.getTime() + schedule.intervalHours * 3_600_000);
+  // Elapsed-millisecond arithmetic (SPEC §3d) — never wall-clock
+  // reconstruction. `fromLastDoseDueAt` folds in the optional §3b-i cap; with
+  // no `maxPerDay` set it reduces to plain `anchor + intervalHours`.
+  const dueAt = fromLastDoseDueAt(course, schedule, anchor, events);
   const anchorDay = localDayKey(anchor);
   const dueDay = localDayKey(dueAt);
   // Emitted on every day from the anchor's own day through the due day —
@@ -368,6 +412,18 @@ function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEve
   }
   const scheduledFor = dueAt.toISOString();
   const key = occurrenceKeyFor(course.id, scheduledFor);
+  // SPEC §3b-i: present only when this course's schedule actually carries a
+  // cap — an absent `maxPerDay` here is what keeps `getDoseState` from ever
+  // computing `capped` for an uncapped course (the unset-case no-op).
+  // `givenToday` counts against THIS EMISSION's own `day` (not the anchor's
+  // day) — the same occurrence key can be emitted for both the anchor's day
+  // and the day its due instant lands on, and each must read its own day's
+  // count: "capped" on the day the cap was reached, plain interval state
+  // again once the calendar rolls over and that day's count resets to 0.
+  const capFields =
+    schedule.maxPerDay !== undefined
+      ? { maxPerDay: schedule.maxPerDay, givenToday: countGivenOnDay(course.id, day, events) }
+      : {};
   return [
     {
       key,
@@ -382,6 +438,7 @@ function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEve
       doseUnit: course.doseUnit,
       instructions: course.instructions,
       event: liveEventFor(key, events),
+      ...capFields,
     },
   ];
 }

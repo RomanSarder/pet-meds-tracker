@@ -149,6 +149,14 @@ export interface Repo {
      * `scheduledFor` is always a true duplicate, confirmed or not.
      */
     allowWithinGrace?: boolean;
+    /**
+     * SPEC §3b-i: the ghost "Give anyway" action past a course's `maxPerDay`
+     * cap. Stamps `overMax: true` on the created event; omitted/false stamps
+     * nothing (the event carries no `overMax` key at all — never an explicit
+     * `false`). Never inferred here — the caller (the capped-row wiring) is
+     * the one place that knows the occurrence was actually capped.
+     */
+    overMax?: boolean;
   }): Promise<DoseEvent>;
   correctDose(
     originalId: string,

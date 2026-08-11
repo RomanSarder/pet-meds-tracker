@@ -1,0 +1,1 @@
+ALTER TABLE "dose_events" ADD COLUMN "over_max" boolean DEFAULT false NOT NULL;

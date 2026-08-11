@@ -7,10 +7,21 @@ import { DUE_PRE_WINDOW_MIN, localDayKey, occurrenceKeyFor } from "@/domain";
 import type { DoseState, Occurrence } from "./engine.types";
 
 export function getDoseState(occurrence: Occurrence, now: Date): DoseState {
-  const { event, dueAt, courseId, key, graceMinutes } = occurrence;
+  const { event, dueAt, courseId, key, graceMinutes, maxPerDay, givenToday } = occurrence;
 
   if (event?.status === "given") return "given";
   if (event?.status === "skipped") return "skipped";
+
+  // SPEC §3b-i: data-driven, independent of `dueAt`/`now` — checked ahead of
+  // `overdue`/`due` even though SPEC §4's table prints `overdue` first,
+  // because the prose is explicit and repeated: "a capped dose is never
+  // counted as overdue" (§3b-i) and "a capped course never appears in the
+  // overdue count or the overdue banner" (§12). `maxPerDay`/`givenToday` are
+  // only ever set together (see `occurrences.ts`), and only for a
+  // `fromLastDose` occurrence whose schedule has `maxPerDay` — every other
+  // occurrence has both `undefined` and can never reach this branch, which
+  // is what makes the unset case a true no-op.
+  if (maxPerDay !== undefined && (givenToday ?? 0) >= maxPerDay) return "capped";
 
   // dueAt === null, or this is the `fromLastDose` "chain never started"
   // sentinel occurrence (its scheduledFor is null even when anchorTime
@@ -50,7 +61,12 @@ export function summariseDay(
       ) {
         earliestOverdue = occ;
       }
-    } else if (state === "due" || state === "later") {
+    } else if (state === "due" || state === "later" || state === "capped") {
+      // SPEC §3b-i: a capped occurrence is still outstanding (the ghost
+      // "Give anyway" action can still resolve it) and must never inflate
+      // `overdue`, but dropping it from `remaining` entirely would make the
+      // header undercount against a row the user can still see and act on —
+      // so it joins `due`/`later` here, never the `overdue` branch above.
       remaining += 1;
     } else if (state === "upcoming" && occ.kind === "fromLastDose") {
       // An anchored `fromLastDose` chain's next dose stays a live, giveable

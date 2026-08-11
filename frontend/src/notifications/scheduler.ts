@@ -37,8 +37,11 @@ const MISSED_AFTER_MS = MISSED_AFTER_HOURS * 60 * 60_000;
  *    `due - 30 min`: §4's `due` state opens half an hour early for the UI,
  *    but §7 says the notification fires AT the scheduled time.
  * 3. `state === "overdue"` -> `"overdue"`.
- * 4. Anything else (`given`, `skipped`, `later`, `upcoming`, `notStarted`) ->
- *    `null`.
+ * 4. Anything else (`given`, `skipped`, `later`, `upcoming`, `notStarted`,
+ *    `capped`) -> `null`. `capped` (SPEC §3b-i) needs no special case here:
+ *    `getDoseState` never returns `due`/`overdue` for a capped occurrence in
+ *    the first place, so a capped course notifies nothing until its
+ *    effective due instant rolls into a day the cap no longer blocks.
  * 5. Staleness bound: once a candidate reason has been found above, if
  *    `nowMs - dueAtMs` exceeds the missed-dose threshold (`MISSED_AFTER_HOURS`
  *    from `domain/constants.ts`, reused rather than re-hardcoded), the result

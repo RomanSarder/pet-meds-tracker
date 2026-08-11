@@ -61,6 +61,8 @@ export interface HistoryMessages {
     minutes: number;
   }) => string;
   "history.detail.givenLate": (p: { late: string }) => string;
+  /** SPEC §3b-i: a "Give anyway" dose logged past a course's daily maximum. */
+  "history.detail.overMax": () => string;
   "history.detail.skipped": () => string;
   "history.detail.missed": () => string;
   "history.detail.scheduledAt": (p: { time: string }) => string;
@@ -191,6 +193,7 @@ export const enHistory = (f: Formatters): HistoryMessages => ({
     return p.minutes === 0 ? `${p.hours} h` : `${p.hours} h ${p.minutes} min`;
   },
   "history.detail.givenLate": (p) => `Given ${p.late} late`,
+  "history.detail.overMax": () => "over the daily maximum",
   "history.detail.skipped": () => "Skipped",
   "history.detail.missed": () => "Missed",
   "history.detail.scheduledAt": (p) => `scheduled ${p.time}`,
@@ -290,6 +293,9 @@ export const ukHistory = (f: Formatters): HistoryMessages => ({
       : `${p.hours} год ${p.minutes} хв`;
   },
   "history.detail.givenLate": (p) => `Дано із запізненням на ${p.late}`,
+  // Same "добовий максимум" phrase as `courses.maxPerDayLabel` (pets.ts) —
+  // one term for the concept across the form and history.
+  "history.detail.overMax": () => "понад добовий максимум",
   "history.detail.skipped": () => "Пропущено",
   // Distinct from "Пропущено": a skipped dose was deliberately not given,
   // a missed one was never logged at all.

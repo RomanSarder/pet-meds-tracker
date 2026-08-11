@@ -99,6 +99,12 @@ describe("renderDetail — English is byte-identical to the pre-localization log
       expected: "Given · next due 15:00, every 8h · from last dose",
     },
     {
+      // SPEC §3b-i: "Give anyway" past the cap.
+      label: "given over the daily maximum",
+      clauses: [{ kind: "given" }, { kind: "overMax" }],
+      expected: "Given · over the daily maximum",
+    },
+    {
       label: "given with course progress",
       clauses: [{ kind: "given" }, { kind: "progress", progress: { kind: "dayOfTotal", day: 3, total: 7 } }],
       expected: "Given · day 3 of 7",

@@ -66,6 +66,13 @@ export type Schedule =
       kind: "fromLastDose";
       intervalHours: number;
       anchorTime?: LocalTime;
+      /**
+       * SPEC §3b-i: an optional daily ceiling — absent-or-integer, never
+       * defaulted and never inferred from `intervalHours`. `fixedTimes`
+       * carries no equivalent field: it already states its own daily count
+       * via `times`, so a cap there would be a second source of truth.
+       */
+      maxPerDay?: number;
     };
 
 export interface Course extends Timestamped {
@@ -102,6 +109,15 @@ export interface DoseEvent extends Timestamped {
   supersedesId: string | null;
   /** SPEC §2: userId who logged it; never null. Stamped by the repo from `currentActorId()`. */
   actorId: string;
+  /**
+   * SPEC §3b-i: true only for a `given` event logged past a course's
+   * `maxPerDay` cap via the ghost "Give anyway" action. Absent (never
+   * `false`) for every other event — a course with no `maxPerDay` set can
+   * never produce one, and removing a cap later never rewrites this flag on
+   * events already carrying it (history keeps reading "over the daily
+   * maximum" for that dose).
+   */
+  overMax?: boolean;
 }
 
 /**

@@ -311,7 +311,13 @@ export function TodayDoseRow({
       <DoseRow
         medication={dose.title}
         detail={dose.detail}
-        state={dose.state === "upcoming" ? "later" : dose.state}
+        // TODO(max-per-day wiring): SPEC §3b-i's `capped` state (amber "N of
+        // M max" pill, ghost "Give anyway") has no presentation here yet —
+        // this line is a compile-only placeholder (same fallback already
+        // used for `upcoming`) added solely to keep `npm run typecheck`
+        // green after `DoseState` gained the `capped` member; it is not the
+        // real wiring, which is a separate, later change to this file.
+        state={dose.state === "upcoming" || dose.state === "capped" ? "later" : dose.state}
         onGive={onGive}
         // SPEC §5.1's one-tap control. The DS default is the English "Give";
         // this is the translated one (I18N-DESIGN.md ADDENDUM A1).

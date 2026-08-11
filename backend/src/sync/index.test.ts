@@ -422,6 +422,42 @@ describe("POST /sync/push", () => {
     expect(conflictCall!.args).toHaveLength(0);
   });
 
+  // SPEC §3b-i: the `overMax` flag (a "Give anyway" dose past a course's
+  // daily maximum) must survive the push side of sync onto the new
+  // `dose_events.over_max` column.
+  it("SPEC §3b-i: a dose event's overMax: true survives push into the inserted row", async () => {
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const db = mockDbRecording([await buildSession()], [], [makeUser()], [], [{ syncSeq: 1 }]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: { changes: { doseEvents: [doseSpec.dto({ overMax: true })] } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().accepted).toBe(1);
+
+    const valuesCall = db.calls.find((c: any) => c.method === "values");
+    const insertedRow = valuesCall!.args[0] as any[];
+    expect(insertedRow[0].overMax).toBe(true);
+  });
+
+  it("a dose event with no overMax in the DTO inserts overMax: false, matching the column's NOT NULL default", async () => {
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const db = mockDbRecording([await buildSession()], [], [makeUser()], [], [{ syncSeq: 1 }]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: { changes: { doseEvents: [doseSpec.dto()] } },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const valuesCall = db.calls.find((c: any) => c.method === "values");
+    const insertedRow = valuesCall!.args[0] as any[];
+    expect(insertedRow[0].overMax).toBe(false);
+  });
+
   // --------------------------------------------------------------------
   // actorId trust: household-scoped, not caller-only. A client-supplied
   // actorId is trusted verbatim when it names a member of the CALLER's
@@ -704,6 +740,29 @@ describe("GET /sync/pull", () => {
     expect(body.cursor).toBe("42");
     expect(body.hasMore).toBe(false);
     expect(body.changes).toEqual({});
+  });
+
+  // SPEC §3b-i: `overMax` survives the pull side of sync too — present and
+  // `true` only for a row the column actually flags, omitted (never an
+  // explicit `false`) otherwise, matching `DoseEventDto.overMax`'s optional
+  // contract.
+  it("SPEC §3b-i: a dose event row's overMax survives pull, present only when true", async () => {
+    sessionRow = await buildSession();
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const rows = TABLE_SPECS.map((s) =>
+      s.key === "doseEvents"
+        ? [
+            doseSpec.row(HOUSEHOLD_A, { id: "dose-flagged", syncSeq: 1, overMax: true }),
+            doseSpec.row(HOUSEHOLD_A, { id: "dose-plain", syncSeq: 2, overMax: false }),
+          ]
+        : [],
+    );
+    const db = pullDb(rows);
+    const app = build(db);
+    const res = await authed(app, { method: "GET", url: "/sync/pull" });
+    const [flagged, plain] = res.json().changes.doseEvents;
+    expect(flagged.overMax).toBe(true);
+    expect(plain.overMax).toBeUndefined();
   });
 
   it("maps a DB row back to the wire DTO shape (ISO instants, no leaked household_id)", async () => {
