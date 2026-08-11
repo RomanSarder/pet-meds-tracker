@@ -201,6 +201,33 @@ describe("useLogDose — duplicate-toast wording (SPEC §5)", () => {
     expect(await repo.listDoseEvents({ courseId: course.id })).toEqual(before);
   });
 
+  // SPEC §5/§12: removal ends a membership, it never rewrites history — a
+  // removed member's name must keep rendering on the events they logged.
+  // History and Pet detail always resolved this correctly (they read the
+  // `includeRemoved: true` roster); this hook read the live-only one, so the
+  // SAME actor on the SAME device was named in History and "Someone" here.
+  it("still names a REMOVED member on their conflicting event, not 'Someone'", async () => {
+    const { repo, course, vars } = await seed();
+    const marta = await findMarta(repo);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+    await repo.removeUser(marta.id);
+    // Guard against the fixture drifting into a state where this proves
+    // nothing: Marta must genuinely be gone from the live roster.
+    expect((await repo.listUsers()).some((u) => u.id === marta.id)).toBe(false);
+
+    renderWithProviders(<Harness vars={vars} />, { repo });
+    await waitReady();
+    await clickGive();
+
+    const toast = await screen.findByRole("status");
+    expect(toast).toHaveTextContent("Already given by Marta at 07:30");
+    expect(toast).not.toHaveTextContent("Someone");
+  });
+
   it("says 'skipped', not 'given', when the conflicting event was a skip", async () => {
     const { repo, course, vars } = await seed();
     const marta = await findMarta(repo);

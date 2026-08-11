@@ -381,6 +381,38 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     expect(importedDose).toBeDefined();
   });
 
+  it("importHousehold(merge) imports the backup author as a NORMAL member — never as a second isSelf row", async () => {
+    setClock(fixedClock("2026-08-08T07:00:00.000Z"));
+    const author = makeRepo();
+    const { courseId } = await setupCourse(author);
+    await author.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+    const authorSelf = await author.getCurrentUser();
+    const backup = await author.exportHousehold();
+    // The backup legitimately flags its own author as self — that is what
+    // "self" means from the exporting device's point of view.
+    expect(backup.users?.find((u) => u.id === authorSelf.id)?.isSelf).toBe(true);
+
+    const importer = makeRepo();
+    const importerSelfBefore = await importer.getCurrentUser();
+    expect(importerSelfBefore.id).not.toBe(authorSelf.id);
+
+    await importer.importHousehold(backup, "merge");
+
+    // `isSelf` is DEVICE-LOCAL. Merge used to carry the author's flag in
+    // verbatim, leaving two self rows — which `sync/mirrorMembers` then
+    // skipped forever (its `local.isSelf` guard), so the author's later
+    // renames and their disclosed `aliasIds` never reached this device and
+    // every dose they logged under a pre-reconcile id stayed "Someone" here.
+    const allUsers = await importer.listUsers({ includeRemoved: true });
+    expect(allUsers.filter((u) => u.isSelf).map((u) => u.id)).toEqual([importerSelfBefore.id]);
+    expect(allUsers.find((u) => u.id === authorSelf.id)?.isSelf).toBe(false);
+
+    // This device's own identity is untouched, and the author's data still
+    // arrived — the row is demoted, never dropped.
+    expect(await importer.currentActorId()).toBe(importerSelfBefore.id);
+    expect((await importer.listDoseEvents({})).some((e) => e.actorId === authorSelf.id)).toBe(true);
+  });
+
   // --- 9. merge import is last-write-wins on updatedAt --------------------
 
   it("importHousehold(merge) is last-write-wins on updatedAt: newer wins, older is skipped and counted", async () => {

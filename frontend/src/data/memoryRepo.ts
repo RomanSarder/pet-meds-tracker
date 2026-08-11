@@ -1216,14 +1216,14 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     });
 
     if (b.users) {
-      // A2 (merge-mode extension): a foreign backup's row for THIS
-      // device's own account (same id, e.g. another member's independently
-      // exported backup that happens to include us) could otherwise LWW-win
-      // on `updatedAt` and flip local self's `isSelf` to `false` — their
-      // export legitimately marks us that way from THEIR point of view.
-      // `isSelf` must never flip via merge; every other field still merges
-      // normally.
-      const selfSafeUsers = b.users.map((u) => (u.id === fallbackActorId ? { ...u, isSelf: true } : u));
+      // A2 (merge-mode extension): `isSelf` is a DEVICE-LOCAL flag, decided
+      // entirely by `fallbackActorId` and never by what the backup says, in
+      // both directions — see `idbRepo.ts`'s matching comment for the two
+      // failure modes (local self demoted; the backup author arriving as a
+      // SECOND `isSelf` row, which `sync/mirrorMembers` then skips forever,
+      // stranding that member's `aliasIds` and leaving their doses as
+      // "Someone"). Every other field still merges normally.
+      const selfSafeUsers = b.users.map((u) => ({ ...u, isSelf: u.id === fallbackActorId }));
       users = mergeArray(users, selfSafeUsers).merged;
     }
     if (b.households && b.households[0]) {

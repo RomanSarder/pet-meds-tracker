@@ -219,6 +219,46 @@ describe("household roster and attribution arrive from background sync alone", (
     expect(displayNameFor(ROMAN_STALE_LOCAL_ID, [selfAfter])).not.toBe("Someone");
   });
 
+  // A5: the mirror image of G1. There the device had never HEARD of the
+  // stale id; here it is the disclosing device itself, wrongly convinced it
+  // already delivered one. The pre-A1 `pushPendingSelfAliases` marked every
+  // pending id as pushed on any bare 200, so an install carrying that
+  // poisoned claim excluded the id from `pending` forever and never retried
+  // it — and every dose it logged under that id stayed "Someone" on every
+  // other device, with no member removed and no backup imported. The claim
+  // is now overwritten by what the server actually reports.
+  it("A5: resets a selfAliasIdsPushed claim the server does not back, so the undelivered id is offered again", async () => {
+    const CANONICAL_ID = "d0000000-0000-4000-8000-00000000b002";
+    const { transport, setSelfAliasIds } = createFakeServer();
+
+    const device = freshDevice();
+    // The stale id is the auto-minted local one `reconcileSelfId` displaces
+    // into `aliasIds` — read back rather than hard-coded, since the repo
+    // mints it itself.
+    await device.reconcileSelfId(CANONICAL_ID);
+    const self = await device.getCurrentUser();
+    const staleId = (self.aliasIds ?? [])[0];
+    expect(staleId).toBeDefined();
+
+    // The poisoned state: this device believes it disclosed its stale id,
+    // while the server holds no aliases for this account at all.
+    await device.setMeta("selfAliasIdsPushed", [staleId]);
+    setSelfAliasIds([]);
+
+    const engine = createSyncEngine({ repo: device, transport, clock: systemClock });
+    await engine.syncOnce();
+
+    // Back to pending — `pushPendingSelfAliases` diffs `aliasIds` against
+    // this exact list, so an empty claim is what re-arms the disclosure.
+    expect(await device.getMeta("selfAliasIdsPushed")).toEqual([]);
+
+    // And once the server does hold it, the claim tracks that instead of
+    // being reset every cycle.
+    setSelfAliasIds([staleId]);
+    await engine.syncOnce();
+    expect(await device.getMeta("selfAliasIdsPushed")).toEqual([staleId]);
+  });
+
   it("does not report a change (and does not re-invalidate) on a second, unchanged cycle", async () => {
     const { transport } = createFakeServer({ roster: [martaRosterEntry()] });
     const repo = freshDevice();
