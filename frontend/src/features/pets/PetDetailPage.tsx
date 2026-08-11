@@ -170,6 +170,17 @@ export function PetDetailView({ petId }: { petId: string }) {
         <Menu.Portal>
           <Menu.Positioner sideOffset={4} align="end">
             <Menu.Popup
+              // `DsRoot` mounts inside `#root`, but `Menu.Portal` moves this
+              // popup to the end of `<body>` — outside `.ds-root`. Every DS
+              // token is declared on `.ds-root`, never `:root`
+              // (`components/ds/tokens/colors.css`), so without this class
+              // `var(--surface)` and `var(--line-quiet)` below resolve to
+              // nothing (transparent popup, no border) and `var(--accent)` on
+              // the items falls through to the shadcn layer's near-white
+              // `--foreground`. The menu then rendered as invisible text on
+              // the cream page and read as a dead three-dot button. Same fix,
+              // same reason, as `LogAtTimeSheet.tsx`'s `Dialog.Popup`.
+              className="ds-root"
               style={{
                 minWidth: 180,
                 padding: "6px 0",

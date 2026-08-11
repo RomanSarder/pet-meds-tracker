@@ -640,6 +640,48 @@ describe("PetDetailView", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
   });
 
+  it("keeps the portalled overflow menu inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {
+    const pet = clover();
+    renderWithProviders(<PetDetailView petId={pet.id} />);
+    const user = userEvent.setup();
+    await screen.findByText(pet.name);
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = await screen.findByRole("menu");
+
+    // `Menu.Portal` moves the popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root`, so a popup that lands outside one paints
+    // `var(--surface)`/`var(--accent)` as nothing — which is what made this
+    // menu invisible and the three-dot trigger look dead.
+    expect(menu.closest(".ds-root")).not.toBeNull();
+  });
+
+  it("opens the edit form from the overflow menu", async () => {
+    // Same `LocationProbe` device as the "See all history" test above: the
+    // harness router has no `/pets/$petId/edit` route, so navigation intent is
+    // witnessed through `useRouterState` rather than the DOM.
+    function LocationProbe() {
+      const pathname = useRouterState({ select: (s) => s.location.pathname });
+      return <span data-testid="pathname">{pathname}</span>;
+    }
+
+    const pet = clover();
+    renderWithProviders(
+      <>
+        <PetDetailView petId={pet.id} />
+        <LocationProbe />
+      </>,
+    );
+    const user = userEvent.setup();
+    await screen.findByText(pet.name);
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Edit pet" }));
+
+    expect(screen.getByTestId("pathname")).toHaveTextContent(`/pets/${pet.id}/edit`);
+  });
+
   it("gives the back button an accessible name", async () => {
     const pet = clover();
     renderWithProviders(<PetDetailView petId={pet.id} />);
