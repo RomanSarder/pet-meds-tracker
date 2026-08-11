@@ -267,7 +267,12 @@ describe("getOccurrences — fromLastDose", () => {
     expect(getOccurrences("2026-08-07", ctx)).toHaveLength(0);
   });
 
-  it("2h interval: chain lands 2h after the last given dose", () => {
+  // Generic-arithmetic regression guard, NOT a test of the "Every 2h" UI
+  // choice: `intervalHours` is a plain `number` (domain/types.ts) and this
+  // file's arithmetic was never touched to add that choice — it already
+  // handled 2 before. Kept only to pin the boundary value now that the UI
+  // can produce it; the UI wiring itself is covered in scheduleChoice.test.ts.
+  it("generic fromLastDose arithmetic: intervalHours: 2 lands the chain 2h after the last given dose", () => {
     const course = makeCourse({
       schedule: { kind: "fromLastDose", intervalHours: 2 },
       startDate: "2026-08-01",

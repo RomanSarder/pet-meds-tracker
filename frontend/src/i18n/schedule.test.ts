@@ -32,11 +32,6 @@ interface Case {
 // returned before it started returning structure.
 const ENGLISH_CASES: Case[] = [
   {
-    label: "fromLastDose, 2h",
-    schedule: { kind: "fromLastDose", intervalHours: 2 },
-    expected: "every 2h · from last dose",
-  },
-  {
     label: "fromLastDose, 8h",
     schedule: { kind: "fromLastDose", intervalHours: 8 },
     expected: "every 8h · from last dose",

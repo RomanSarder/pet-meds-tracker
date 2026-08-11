@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { differenceInLocalDays, type Schedule } from "@/domain";
+import { createTranslator } from "@/i18n";
 import {
   FREQUENCY_CHOICES,
   INTERVAL_CHOICES,
   choicesForSchedule,
   endDateForDurationChoice,
+  intervalChoiceHours,
+  intervalChoiceLabel,
   isPresetSchedule,
   scheduleForFrequencyChoice,
   scheduleForIntervalChoice,
 } from "./scheduleChoice";
+
+const en = createTranslator("en");
+const uk = createTranslator("uk");
 
 describe("scheduleForIntervalChoice", () => {
   it.each([
@@ -24,6 +30,28 @@ describe("scheduleForIntervalChoice", () => {
     // anchorTime is optional on fromLastDose — assert it is truly absent, not
     // just falsy, per CONTRACT.md's "emit no anchorTime" rule.
     expect(Object.keys(schedule)).not.toContain("anchorTime");
+  });
+});
+
+describe("INTERVAL_CHOICES ordering", () => {
+  it("starts with the shortest interval, Every 2h", () => {
+    expect(INTERVAL_CHOICES[0]).toBe("Every 2h");
+  });
+
+  it("is sorted ascending by hours — protects future additions too, not just this one", () => {
+    const hours = INTERVAL_CHOICES.map(intervalChoiceHours);
+    const sorted = [...hours].sort((a, b) => a - b);
+    expect(hours).toEqual(sorted);
+  });
+});
+
+describe("intervalChoiceLabel — Every 2h resolves to a real translation, not a missing-key fallback", () => {
+  it("English", () => {
+    expect(intervalChoiceLabel("Every 2h", en)).toBe("Every 2h");
+  });
+
+  it("Ukrainian", () => {
+    expect(intervalChoiceLabel("Every 2h", uk)).toBe("Кожні 2 год");
   });
 });
 
