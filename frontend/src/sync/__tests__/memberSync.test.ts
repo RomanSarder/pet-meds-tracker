@@ -106,6 +106,56 @@ describe("household roster and attribution arrive from background sync alone", (
     expect(users.map((u) => u.displayName)).toContain("Marta");
   });
 
+  it("pins the identity-mismatch fix: a dose logged under Device 1's stale local id resolves to the real name on Device 2, via the roster's aliasIds", async () => {
+    // Marta's stale, locally-generated self id — the id her device stamped
+    // on this dose BEFORE it reconciled with her canonical account id
+    // (MARTA_ID). Some devices' pushed events can only ever carry this
+    // stale id, since ledger rows are never rewritten once pushed — the
+    // roster disclosing it as an alias (via `POST /household/me/aliases`,
+    // simulated here by seeding it directly on the roster DTO) is the
+    // only way a DIFFERENT device ever resolves it.
+    const MARTA_STALE_LOCAL_ID = "d0000000-0000-4000-8000-00000000e001";
+    const { transport } = createFakeServer({
+      roster: [{ ...martaRosterEntry(), aliasIds: [MARTA_STALE_LOCAL_ID] }],
+    });
+
+    await transport.push({
+      doseEvents: [
+        {
+          id: "d0000000-0000-4000-8000-00000000f002",
+          courseId: COURSE_ID,
+          scheduledFor: null,
+          status: "given",
+          loggedAt: "2026-08-10T08:00:00.000Z",
+          givenAt: "2026-08-10T08:00:00.000Z",
+          amount: 1,
+          note: null,
+          occurrenceKey: `${COURSE_ID}|-2`,
+          supersedesId: null,
+          actorId: MARTA_STALE_LOCAL_ID,
+          createdAt: "2026-08-10T08:00:00.000Z",
+          updatedAt: "2026-08-10T08:00:00.000Z",
+          deletedAt: null,
+        },
+      ],
+    });
+
+    // Device 2's starting point: only its own local self row, no other
+    // members, roster arriving purely through the background sync cycle
+    // below — nothing about Marta was ever fetched via `GET /household`.
+    const repo = freshDevice();
+    expect(await repo.listUsers({ includeRemoved: true })).toHaveLength(1);
+
+    const engine = createSyncEngine({ repo, transport, clock: systemClock });
+    await engine.syncOnce();
+
+    const staleDose = (await repo.listDoseEvents({})).find((e) => e.actorId === MARTA_STALE_LOCAL_ID);
+    expect(staleDose).toBeDefined();
+
+    const usersAfter = await repo.listUsers({ includeRemoved: true });
+    expect(displayNameFor(MARTA_STALE_LOCAL_ID, usersAfter)).toBe("Marta");
+  });
+
   it("does not report a change (and does not re-invalidate) on a second, unchanged cycle", async () => {
     const { transport } = createFakeServer({ roster: [martaRosterEntry()] });
     const repo = freshDevice();

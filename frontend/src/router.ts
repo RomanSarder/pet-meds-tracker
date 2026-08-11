@@ -26,6 +26,7 @@ import { SettingsPage } from "./features/settings/SettingsPage";
 import { HistoryPage } from "./features/history/HistoryPage";
 import { HouseholdPage } from "./features/household/HouseholdPage";
 import { JoinHouseholdPage } from "./features/household/JoinHouseholdPage";
+import { pushPendingSelfAliases } from "./features/household/selfIdentity";
 import { FirstRunPage } from "./features/onboarding/FirstRunPage";
 
 // Marks routes that should not render the tab bar / app chrome (full-screen
@@ -158,6 +159,17 @@ const appLayoutRoute = createRoute({
         }
       }
     }
+
+    // Reconciles this device's local self id with the id `/auth/me` just
+    // vouched for — see `features/household/selfIdentity.ts`'s header
+    // comment for the bug this closes. Awaited: it is a local IndexedDB
+    // write only (fast), and it must complete before anything on this
+    // navigation can log a dose or course event under a stale id. The
+    // alias disclosure half is NOT awaited — it is a network call, is
+    // usually a no-op (nothing pending), and is safe to retry on the next
+    // navigation if it fails or the device is offline right now.
+    await getRepo().reconcileSelfId(signedInUser.id);
+    void pushPendingSelfAliases(getRepo());
 
     markSessionEstablished();
     // The session is confirmed as of right now, so background sync may run.

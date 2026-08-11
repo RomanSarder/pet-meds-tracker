@@ -97,6 +97,19 @@ describe("GET /household", () => {
     expect(body.self.id).toBe(self.id);
     expect(body.self.email).toBe(self.email);
   });
+
+  it("carries each member's aliasIds so a stale actorId resolves on every device", async () => {
+    const STALE_ID = "00000000-0000-0000-0000-0000000000ab";
+    const self = makeUser();
+    const other = makeUser({ id: OTHER_ID, displayName: "Ilya", tint: 2, aliasIds: [STALE_ID] });
+    const household = makeHousehold({ name: "Home" });
+    const db = mockDbMulti([await buildSession()], [], [self], [household], [self, other]);
+    const app = build(db);
+    const res = await authed(app, { method: "GET", url: "/household" });
+    const body = res.json();
+    const ilya = body.members.find((m: { id: string }) => m.id === OTHER_ID);
+    expect(ilya.aliasIds).toEqual([STALE_ID]);
+  });
 });
 
 describe("POST /household", () => {
@@ -207,6 +220,92 @@ describe("PATCH /household/me", () => {
     const res = await authed(app, { method: "PATCH", url: "/household/me", payload: { displayName: "  Marta  " } });
     expect(res.statusCode).toBe(200);
     expect(res.json().displayName).toBe("Marta");
+  });
+});
+
+// The reconciliation endpoint for the identity-mismatch fix: a device's
+// local "self" user id used to be a random uuid it minted itself, never the
+// account's canonical `users.id`, so events it logged before the mismatch
+// was caught carry that stale id as `actorId`. This lets the account
+// disclose the stale id as its own so OTHER devices' roster mirrors learn to
+// resolve it — see `users.aliasIds`'s schema comment and `toMemberDto`.
+describe("POST /household/me/aliases", () => {
+  const STALE_ID = "00000000-0000-0000-0000-0000000000aa";
+
+  it("merges a new alias id into the caller's own row and returns the result", async () => {
+    const updated = makeUser({ aliasIds: [STALE_ID] });
+    // session select, session-refresh update, caller select (no existing
+    // aliasIds), collision select (empty — STALE_ID belongs to no account),
+    // the update itself.
+    const db = mockDbMulti([await buildSession()], [], [makeUser({ aliasIds: [] })], [], [updated]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [STALE_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aliasIds).toEqual([STALE_ID]);
+  });
+
+  it("is idempotent: an id already in aliasIds is dropped before ever reaching the DB update", async () => {
+    const db = mockDbMulti([await buildSession()], [], [makeUser({ aliasIds: [STALE_ID] })]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [STALE_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aliasIds).toEqual([STALE_ID]);
+    // No `update` call at all — mockDbMulti would otherwise have nothing
+    // left to hand it and the chain's `.then` would fall back to `[]`,
+    // which `updated?.aliasIds ?? current` already tolerates, but the real
+    // assertion is behavioural: submitting the same id twice never grows
+    // the array, proven by the response staying exactly [STALE_ID].
+  });
+
+  it("never lets a caller alias themselves to another real account's id — the anti-hijack guard", async () => {
+    // STALE_ID here is NOT abandoned — it is OTHER_ID's own, live, canonical
+    // account id. Without the collision check, the caller could claim it as
+    // an "alias" and future events legitimately logged by OTHER_ID would
+    // start resolving to the caller's name instead.
+    const db = mockDbMulti(
+      [await buildSession()],
+      [],
+      [makeUser({ aliasIds: [] })], // caller select
+      [{ id: OTHER_ID }], // collision select: OTHER_ID is a real account
+    );
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [OTHER_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    // Rejected silently (not an error — this is an idempotent merge, and a
+    // stale/garbage id is an expected input, not a client bug), and not
+    // merged in.
+    expect(res.json().aliasIds).toEqual([]);
+  });
+
+  it("drops a caller's own id from the submitted list rather than aliasing an account to itself", async () => {
+    const db = mockDbMulti([await buildSession()], [], [makeUser({ aliasIds: [] })]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/household/me/aliases",
+      payload: { ids: [USER_ID] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aliasIds).toEqual([]);
+  });
+
+  it("401s when unauthenticated", async () => {
+    const db = mockDbMulti();
+    const app = build(db);
+    const res = await app.inject({ method: "POST", url: "/household/me/aliases", payload: { ids: [STALE_ID] } });
+    expect(res.statusCode).toBe(401);
   });
 });
 

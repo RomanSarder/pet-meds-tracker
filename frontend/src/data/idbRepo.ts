@@ -201,6 +201,48 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     return user.id;
   }
 
+  async function reconcileSelfId(canonicalId: string): Promise<{ changed: boolean }> {
+    // Ensures a self row exists before touching anything — same guarantee
+    // every other caller of `currentActorId()` relies on.
+    const localId = await currentActorId();
+    if (localId === canonicalId) {
+      return { changed: false };
+    }
+
+    const conn = await db();
+    const tx = conn.transaction(["users", "meta"], "readwrite");
+    const usersStore = tx.objectStore("users");
+    const metaStore = tx.objectStore("meta");
+
+    // Re-read inside the transaction: a concurrent call (another tab) may
+    // have already reconciled between the check above and here.
+    const rec = await metaStore.get("selfUserId");
+    const liveId = (rec?.value as string | null | undefined) ?? localId;
+    if (liveId === canonicalId) {
+      await tx.done;
+      cachedSelfUserId = canonicalId;
+      return { changed: false };
+    }
+
+    const selfRow = await usersStore.get(liveId);
+    if (selfRow) {
+      const priorAliasIds = selfRow.aliasIds ?? [];
+      const nextAliasIds = priorAliasIds.includes(liveId) ? priorAliasIds : [...priorAliasIds, liveId];
+      await usersStore.delete(liveId);
+      await usersStore.put({
+        ...selfRow,
+        id: canonicalId,
+        aliasIds: nextAliasIds,
+        updatedAt: now().toISOString(),
+      });
+    }
+    await metaStore.put({ key: "selfUserId", value: canonicalId });
+    await tx.done;
+
+    cachedSelfUserId = canonicalId;
+    return { changed: true };
+  }
+
   // --- pets ---------------------------------------------------------------
 
   async function listPets(opts?: { includeArchived?: boolean }): Promise<Pet[]> {
@@ -1463,6 +1505,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     getMeta,
     setMeta,
     currentActorId,
+    reconcileSelfId,
     currentHouseholdId,
     getHousehold,
     getCurrentHousehold,

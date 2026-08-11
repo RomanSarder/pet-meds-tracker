@@ -1,7 +1,8 @@
 import { FastifyReply } from "fastify";
 import fastifyPlugin from "fastify-plugin";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull } from "drizzle-orm";
 import {
+  AddSelfAliasIdsBody,
   ConfirmationRequiredError,
   CreateHouseholdBody,
   HouseholdStateDto,
@@ -13,6 +14,7 @@ import {
   LeaveHouseholdResult,
   MemberDto,
   RedeemJoinCodeBody,
+  SelfAliasesDto,
   SelfDto,
   SetDisplayNameBody,
 } from "@pet-tracker/shared";
@@ -47,6 +49,7 @@ export function toMemberDto(user: UserRow): MemberDto {
     displayName: user.displayName ?? "",
     tint: user.tint as 1 | 2 | 3 | 4,
     joinedAt: (user.joinedAt ?? user.createdAt ?? new Date()).toISOString(),
+    aliasIds: user.aliasIds ?? [],
   };
 }
 
@@ -58,6 +61,7 @@ function toSelfDto(user: UserRow): SelfDto {
     joinedAt: (user.joinedAt ?? user.createdAt ?? new Date()).toISOString(),
     householdId: user.householdId,
     email: user.email,
+    aliasIds: user.aliasIds ?? [],
   };
 }
 
@@ -245,6 +249,80 @@ export default fastifyPlugin(async (fastify) => {
       }
 
       return toSelfDto(user);
+    },
+  );
+
+  // Reconciliation for the pre-fix identity bug (see `users.aliasIds`'s
+  // schema comment): a device's local "self" row used to get a
+  // locally-minted id that was never reconciled with this account's
+  // canonical `users.id`, and any dose/course/stock event it logged before
+  // the mismatch was caught carries that stale id as its `actorId` — some
+  // of them already pushed and sitting in ledger tables that are, by
+  // design, never rewritten (`SYNC_TABLES`'s ledger kind: insert-if-absent,
+  // no update path at all). Rather than rewrite that history, the CLIENT
+  // (which is the only party that ever knew its own stale id — it was
+  // never disclosed to the server before this route existed) discloses it
+  // here, and `toMemberDto`/`toSelfDto` carry the resulting `aliasIds` to
+  // every device via the existing roster pull, so `displayNameFor` can
+  // match an old actorId to this same member without touching a single
+  // historical row.
+  //
+  // Deliberately self-only and NOT a `/sync/push`-style bulk write: this
+  // updates exactly `request.userId`'s own row, the same shape of
+  // self-mutation `PATCH /household/me` above already allows, and never
+  // reads a target-user id from the body. That is what keeps this
+  // different from the roster's deliberately PULL-ONLY `users` write path
+  // (W9-DESIGN §D5) — this never lets a caller name any row but their own.
+  //
+  // `ids` that already belong to a *real* account (any existing
+  // `users.id`, self included) are silently dropped rather than merged: an
+  // alias id must stay a dead, unclaimed value forever, or a member could
+  // alias themselves to another live account's id and hijack that
+  // account's FUTURE events (any device that later re-mirrors the roster
+  // would then resolve the victim's new dose logs to the attacker's name).
+  // Idempotent: re-submitting the same ids changes nothing, since the
+  // dedup and the "already alive" filter apply identically every time.
+  fastify.post<{ Body: AddSelfAliasIdsBody }>(
+    "/household/me/aliases",
+    {
+      preHandler: fastify.authenticate,
+      schema: {
+        body: {
+          type: "object",
+          required: ["ids"],
+          properties: {
+            ids: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 20 },
+          },
+        },
+      },
+    },
+    async (request, reply): Promise<SelfAliasesDto> => {
+      const [caller] = await fastify.db.select().from(users).where(eq(users.id, request.userId));
+      if (!caller) {
+        return reply.unauthorized();
+      }
+
+      const current = caller.aliasIds ?? [];
+      const candidates = Array.from(new Set(request.body.ids.filter((id) => id !== caller.id)));
+
+      const collisions =
+        candidates.length > 0
+          ? await fastify.db.select({ id: users.id }).from(users).where(inArray(users.id, candidates))
+          : [];
+      const claimed = new Set(collisions.map((row) => row.id));
+
+      const additions = candidates.filter((id) => !claimed.has(id) && !current.includes(id));
+      if (additions.length === 0) {
+        return { aliasIds: current };
+      }
+
+      const [updated] = await fastify.db
+        .update(users)
+        .set({ aliasIds: [...current, ...additions] })
+        .where(eq(users.id, request.userId))
+        .returning();
+
+      return { aliasIds: updated?.aliasIds ?? current };
     },
   );
 

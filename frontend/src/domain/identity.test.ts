@@ -47,6 +47,23 @@ describe("displayNameFor", () => {
     expect(displayNameFor("u1", users)).toBe("Marta");
   });
 
+  it("resolves an actorId that matches a user's aliasIds, not just their id", () => {
+    const users = [makeUser({ id: "u1", displayName: "Roman", aliasIds: ["stale-local-id"] })];
+    expect(displayNameFor("stale-local-id", users)).toBe("Roman");
+  });
+
+  it("still returns 'Someone' for an id that matches no user's id or aliasIds", () => {
+    const users = [makeUser({ id: "u1", displayName: "Roman", aliasIds: ["stale-local-id"] })];
+    expect(displayNameFor("some-other-id", users)).toBe(UNKNOWN_ACTOR_NAME);
+  });
+
+  it("a real id always wins over another user's aliasIds, even if they happened to overlap", () => {
+    const impostor = makeUser({ id: "u2", displayName: "Impostor", aliasIds: ["u1"] });
+    const real = makeUser({ id: "u1", displayName: "Roman" });
+    expect(displayNameFor("u1", [impostor, real])).toBe("Roman");
+    expect(displayNameFor("u1", [real, impostor])).toBe("Roman");
+  });
+
   it("never returns a string containing '@' even when email is populated", () => {
     // Not a real email address — just a value containing "@" to prove the
     // function never reads this field for display (CONTRACT.md §0 forbids

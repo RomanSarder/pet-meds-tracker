@@ -197,6 +197,19 @@ export interface User extends Timestamped {
   /** SPEC §2: local flag, exactly one per device. Never indexed — IndexedDB cannot index booleans. */
   isSelf: boolean;
   joinedAt: IsoDateTime;
+  /**
+   * Prior ids this SAME account has been known by — always ids a device once
+   * locally minted for "self" before it learned this account's canonical
+   * server id (see `reconcileSelfId` on `Repo`), never anyone else's.
+   * `displayNameFor` matches an `actorId` against a user's `id` OR any of
+   * these, so a dose/course/stock event already stamped with a stale id
+   * (locally, or already pushed to the server before the mismatch was
+   * fixed) still resolves to the right name — the ledger rows that carry
+   * the stale id are append-only and are never rewritten in place.
+   * Optional so every pre-existing `User` literal across the app and its
+   * tests still type-checks; absent means "no aliases", same as `[]`.
+   */
+  aliasIds?: string[];
 }
 
 /** SPEC §2/§5: six uppercase chars excluding O/0/I/1, 24 h, single use, one live per household. */
@@ -224,6 +237,16 @@ export interface MetaShape {
   syncCursor: string | null;
   /** W9 sync (design §D4): when the push side last succeeded; null until the first successful sync. */
   lastPushedAt: IsoDateTime | null;
+  /**
+   * Ids from the self user's `aliasIds` that have already been disclosed to
+   * the server via `POST /household/me/aliases` — the local record of what
+   * does NOT need re-sending. `null`/absent means none yet. See
+   * `features/household/selfIdentity.ts`'s `reconcileSelfIdentity`, the sole
+   * writer: it diffs the self user's current `aliasIds` against this list on
+   * every app-shell navigation and posts only what is missing, so a failed
+   * (offline) attempt is retried on the next one rather than lost.
+   */
+  selfAliasIdsPushed: string[] | null;
 }
 
 export interface HouseholdBackup {

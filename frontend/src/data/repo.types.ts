@@ -204,6 +204,31 @@ export interface Repo {
   /** The local household id. Same non-null guarantee. */
   currentHouseholdId(): Promise<string>;
 
+  /**
+   * Reconciles the local self `User` row's id to `canonicalId` — the
+   * server-authoritative id `/auth/me` returns for the signed-in session.
+   * `currentActorId()` mints its local id purely client-side, before sign-in
+   * is even known, so the two only ever match by coincidence; every device
+   * must call this the moment the canonical id becomes available (a no-op
+   * once they already match).
+   *
+   * Idempotence key: the local self row's `id` already equalling
+   * `canonicalId`. A second call, or a concurrent one from another tab, is a
+   * no-op — safe to call on every navigation.
+   *
+   * The self row's OLD id is appended to its own `aliasIds` (never dropped)
+   * rather than rewritten into every historical `doseEvents`/`courseEvents`/
+   * `stockAdjustments` row that carries it as `actorId`: those ledgers are
+   * append-only by design (see this interface's own doc comment) and some
+   * rows may already be on the server, where they are provably unwritable
+   * (`ON CONFLICT DO NOTHING`, no update path at all). `displayNameFor`
+   * resolves an old `actorId` through `aliasIds` instead — see
+   * `domain/identity.ts`. Disclosing the new alias to the server (so OTHER
+   * devices' mirrors of this member also pick it up) is the caller's job,
+   * not this method's — see `features/household/selfIdentity.ts`.
+   */
+  reconcileSelfId(canonicalId: string): Promise<{ changed: boolean }>;
+
   getHousehold(id: string): Promise<Household | null>;
   getCurrentHousehold(): Promise<Household>;
   updateHousehold(id: string, patch: Partial<Pick<Household, "name">>): Promise<Household>;

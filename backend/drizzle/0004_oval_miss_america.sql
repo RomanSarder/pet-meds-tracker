@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "alias_ids" uuid[] DEFAULT '{}' NOT NULL;

@@ -146,6 +146,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     courseEventSeq: 0,
     syncCursor: null,
     lastPushedAt: null,
+    selfAliasIdsPushed: null,
   };
 
   /** W9 sync (design §D3): the Lamport counter every `CourseEvent` write allocates from. */
@@ -221,6 +222,25 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     users.push(user);
     meta.selfUserId = user.id;
     return user.id;
+  }
+
+  // See `Repo.reconcileSelfId`'s doc comment (repo.types.ts) for the full
+  // rationale — this mirrors `idbRepo`'s implementation exactly, minus the
+  // transaction machinery an in-memory store doesn't need.
+  async function reconcileSelfId(canonicalId: string): Promise<{ changed: boolean }> {
+    const localId = await currentActorId();
+    if (localId === canonicalId) {
+      return { changed: false };
+    }
+    const idx = users.findIndex((u) => u.id === localId);
+    if (idx !== -1) {
+      const existing = users[idx];
+      const priorAliasIds = existing.aliasIds ?? [];
+      const nextAliasIds = priorAliasIds.includes(localId) ? priorAliasIds : [...priorAliasIds, localId];
+      users[idx] = { ...existing, id: canonicalId, aliasIds: nextAliasIds, updatedAt: stamp() };
+    }
+    meta.selfUserId = canonicalId;
+    return { changed: true };
   }
 
   // --- pets ---------------------------------------------------------------
@@ -1155,6 +1175,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     getMeta,
     setMeta,
     currentActorId,
+    reconcileSelfId,
     currentHouseholdId,
     getHousehold,
     getCurrentHousehold,

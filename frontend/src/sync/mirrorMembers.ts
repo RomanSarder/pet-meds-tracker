@@ -61,11 +61,26 @@ export async function mirrorMembers(
     if (local?.isSelf) {
       continue;
     }
+    const memberAliasIds = member.aliasIds ?? [];
+    const localAliasIds = local?.aliasIds ?? [];
+    const aliasIdsChanged =
+      memberAliasIds.length !== localAliasIds.length ||
+      memberAliasIds.some((id) => !localAliasIds.includes(id));
+
     // Skip the write when nothing the server owns has changed, so a poll on
     // every window focus / background sync tick does not churn `updatedAt`
     // on untouched rows — and, more importantly, does not report a change
-    // that would re-invalidate every consumer's queries forever.
-    if (local && local.displayName === member.displayName && local.tint === member.tint) {
+    // that would re-invalidate every consumer's queries forever. `aliasIds`
+    // is included: a member disclosing a stale id via `POST
+    // /household/me/aliases` after this device already mirrored them once
+    // must still reach this device, or a dose they logged before that
+    // disclosure would keep resolving to "Someone" here forever.
+    if (
+      local &&
+      local.displayName === member.displayName &&
+      local.tint === member.tint &&
+      !aliasIdsChanged
+    ) {
       continue;
     }
     const user: User = {
@@ -79,6 +94,7 @@ export async function mirrorMembers(
       createdAt: local?.createdAt ?? member.joinedAt,
       updatedAt: ts,
       deletedAt: local?.deletedAt ?? null,
+      aliasIds: memberAliasIds,
     };
     await repo.upsertUser(user);
     changed = true;

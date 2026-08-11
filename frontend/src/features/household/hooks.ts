@@ -379,6 +379,7 @@ async function adoptJoinedHousehold(state: HouseholdStateDto, displayName?: stri
       createdAt: m.joinedAt,
       updatedAt: ts,
       deletedAt: null,
+      aliasIds: m.aliasIds ?? [],
     }));
   const serverMemberIds = new Set(serverMembers.map((u) => u.id));
   const otherUsers = users.filter((u) => u.id !== self.id && !serverMemberIds.has(u.id));

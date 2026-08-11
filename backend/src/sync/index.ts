@@ -346,11 +346,27 @@ function excludedSetClause(table: SyncTable): Record<string, SQL> {
  * household's row id would overwrite that row on conflict. Ledger rows can
  * never be overwritten at all, by any household, since `onConflictDoNothing`
  * has no update path to guard.
+ *
+ * `callerId` overrides `actorId` on every ledger row before insert, ignoring
+ * whatever the client's DTO said: the client previously supplied `actorId`
+ * verbatim, which meant any authenticated caller could attribute a dose (or
+ * course/stock event) to an arbitrary id, including one nobody in the
+ * household actually is. Since every `/sync/push` call is authenticated as
+ * exactly the device pushing its OWN previously-created rows, the session's
+ * own id is always the correct attribution regardless of what local id the
+ * row happened to be stamped with client-side — this is also what makes an
+ * offline-then-synced dose land under whoever actually logged it rather
+ * than whoever's device happens to sync first: each device only ever pushes
+ * the rows it itself created, under its own session, so "the pusher" and
+ * "the logger" are the same person for every row that reaches here. Mutable
+ * tables (pets/medications/courses) have no `actorId` column and are
+ * untouched by this.
  */
 async function pushTable(
   db: any,
   spec: SyncTableSpec,
   householdId: string,
+  callerId: string,
   dtoRows: unknown[] | undefined,
 ): Promise<{ count: number; maxSeq: number }> {
   if (!dtoRows || dtoRows.length === 0) {
@@ -358,6 +374,11 @@ async function pushTable(
   }
 
   const values = dtoRows.map((row) => spec.fromDto(row, householdId));
+  if (spec.kind === "ledger") {
+    for (const value of values) {
+      (value as { actorId: string }).actorId = callerId;
+    }
+  }
 
   const written =
     spec.kind === "ledger"
@@ -450,7 +471,7 @@ export default fastifyPlugin(async (fastify) => {
       // or none does (W9-DESIGN §D5).
       await fastify.db.transaction(async (tx: any) => {
         for (const spec of SYNC_TABLES) {
-          const { count, maxSeq } = await pushTable(tx, spec, householdId, changes[spec.key]);
+          const { count, maxSeq } = await pushTable(tx, spec, householdId, request.userId, changes[spec.key]);
           accepted += count;
           cursorSeq = Math.max(cursorSeq, maxSeq);
         }

@@ -416,6 +416,71 @@ describe("POST /sync/push", () => {
     expect(conflictCall!.args).toHaveLength(0);
   });
 
+  it("stamps a ledger row's actorId from the authenticated session, ignoring whatever the client supplied", async () => {
+    // The identity-mismatch fix's other half: the client used to control
+    // `actorId` outright, so any authenticated caller could attribute a
+    // dose to an arbitrary id — including one belonging to nobody, or to
+    // another household's member entirely. Every push is authenticated as
+    // exactly the device pushing its own previously-created rows, so the
+    // session's own id is always the correct attribution regardless of
+    // what the row was stamped with client-side.
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const IMPOSTOR_ACTOR_ID = "99999999-0000-0000-0000-000000000099";
+    const db = mockDbRecording([await buildSession()], [], [makeUser({ householdId: HOUSEHOLD_A })], [{ syncSeq: 4 }]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: { changes: { doseEvents: [doseSpec.dto({ actorId: IMPOSTOR_ACTOR_ID })] } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().accepted).toBe(1);
+
+    const valuesCall = db.calls.find((c: any) => c.method === "values");
+    const insertedRow = valuesCall!.args[0] as any[];
+    expect(insertedRow[0].actorId).toBe(USER_ID);
+    expect(insertedRow[0].actorId).not.toBe(IMPOSTOR_ACTOR_ID);
+  });
+
+  it("stamps actorId from the session even when the impersonated id names a real member of a DIFFERENT household — cross-household attribution isolation", async () => {
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const HOUSEHOLD_B_MEMBER_ID = "88888888-0000-0000-0000-000000000088";
+    // The caller is a member of household A; the payload tries to attribute
+    // the dose to someone else's (household B's) account id entirely.
+    const db = mockDbRecording([await buildSession()], [], [makeUser({ householdId: HOUSEHOLD_A })], [{ syncSeq: 1 }]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: { changes: { doseEvents: [doseSpec.dto({ actorId: HOUSEHOLD_B_MEMBER_ID })] } },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const valuesCall = db.calls.find((c: any) => c.method === "values");
+    const insertedRow = valuesCall!.args[0] as any[];
+    // Written under the caller's own household (already covered by the
+    // householdId test above) AND the caller's own session id — never the
+    // household-B id the payload tried to smuggle in.
+    expect(insertedRow[0].householdId).toBe(HOUSEHOLD_A);
+    expect(insertedRow[0].actorId).toBe(USER_ID);
+    expect(insertedRow[0].actorId).not.toBe(HOUSEHOLD_B_MEMBER_ID);
+  });
+
+  it("leaves mutable-table rows (no actorId column) untouched by the stamping logic", async () => {
+    const petSpec = TABLE_SPECS[0];
+    const db = mockDbRecording([await buildSession()], [], [makeUser()], [{ syncSeq: 1 }]);
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: { changes: { pets: [petSpec.dto()] } },
+    });
+    expect(res.statusCode).toBe(200);
+    const valuesCall = db.calls.find((c: any) => c.method === "values");
+    const insertedRow = valuesCall!.args[0] as any[];
+    expect(insertedRow[0].actorId).toBeUndefined();
+  });
+
   it("commits every table's batch inside one transaction", async () => {
     const petSpec = TABLE_SPECS[0];
     const medSpec = TABLE_SPECS[1];
@@ -632,7 +697,7 @@ describe("GET /sync/pull — household roster (pullRoster)", () => {
     const res = await authed(app, { method: "GET", url: "/sync/pull" });
     expect(res.statusCode).toBe(200);
     expect(res.json().changes.users).toEqual([
-      { id: MARTA_ID, householdId: HOUSEHOLD_A, displayName: "Marta", tint: 2, joinedAt: NOW },
+      { id: MARTA_ID, householdId: HOUSEHOLD_A, displayName: "Marta", tint: 2, joinedAt: NOW, aliasIds: [] },
     ]);
   });
 

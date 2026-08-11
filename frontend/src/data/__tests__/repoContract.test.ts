@@ -1275,4 +1275,79 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
     const events = await repo.listCourseEvents({ courseId, from: sharedAt, to: sharedAt });
     expect(events.map((e) => e.id)).toEqual([lowSeqHighId.id, highSeqLowId.id]);
   });
+
+  // --- 28. reconcileSelfId — the identity-mismatch fix ------------------------
+
+  describe("reconcileSelfId", () => {
+    const CANONICAL_ID = "c0000000-0000-4000-8000-0000000000ca";
+
+    it("a device's self record ends up with the canonical id, not the locally-generated one", async () => {
+      const repo = makeRepo();
+      const localId = await repo.currentActorId();
+      expect(localId).not.toBe(CANONICAL_ID);
+
+      const result = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(result.changed).toBe(true);
+
+      expect(await repo.currentActorId()).toBe(CANONICAL_ID);
+      const self = await repo.getCurrentUser();
+      expect(self.id).toBe(CANONICAL_ID);
+      // The old id is preserved as an alias rather than discarded — it is
+      // what lets already-logged events, still stamped with the old id,
+      // keep resolving to this same user (see the alias-based test below
+      // and `domain/identity.test.ts`).
+      expect(self.aliasIds).toContain(localId);
+    });
+
+    it("a dose logged before reconciliation still resolves to the real name afterwards, via aliasIds — the existing-data remediation, applied locally", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo);
+      const staleId = await repo.currentActorId();
+
+      const dose = await repo.logDose({ courseId, status: "given", scheduledFor: null, amount: 0.4 });
+      expect(dose.actorId).toBe(staleId);
+
+      await repo.reconcileSelfId(CANONICAL_ID);
+
+      // The ledger row itself is untouched — append-only, never rewritten —
+      // but it now resolves to the right name because the self row's
+      // aliasIds picked up the id it used to be.
+      const doseAfter = (await repo.listDoseEvents({ courseId })).find((e) => e.id === dose.id)!;
+      expect(doseAfter.actorId).toBe(staleId);
+      const users = await repo.listUsers({ includeRemoved: true });
+      const canonicalUser = users.find((u) => u.id === CANONICAL_ID);
+      expect(displayNameFor(staleId, users)).toBe(canonicalUser?.displayName);
+    });
+
+    it("is idempotent: calling it twice with the same canonical id changes nothing the second time", async () => {
+      const repo = makeRepo();
+      await repo.currentActorId();
+
+      const first = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(first.changed).toBe(true);
+      const selfAfterFirst = await repo.getCurrentUser();
+
+      const second = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(second.changed).toBe(false);
+      const selfAfterSecond = await repo.getCurrentUser();
+
+      expect(selfAfterSecond.id).toBe(CANONICAL_ID);
+      expect(selfAfterSecond.aliasIds).toEqual(selfAfterFirst.aliasIds);
+      // No duplicate row was created under the old id or anywhere else.
+      const users = await repo.listUsers({ includeRemoved: true });
+      expect(users.filter((u) => u.isSelf)).toHaveLength(1);
+    });
+
+    it("is a no-op when the local id already equals the canonical id (e.g. every navigation after the first)", async () => {
+      const repo = makeRepo();
+      await repo.currentActorId();
+      await repo.reconcileSelfId(CANONICAL_ID);
+
+      const before = await repo.getCurrentUser();
+      const result = await repo.reconcileSelfId(CANONICAL_ID);
+      expect(result.changed).toBe(false);
+      const after = await repo.getCurrentUser();
+      expect(after).toEqual(before);
+    });
+  });
 });
