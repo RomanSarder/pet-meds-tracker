@@ -37,7 +37,11 @@ export interface HistoryMessages {
   /** The only item in that overflow, for a `given` dose. */
   "history.menu.editTime": () => string;
   /** The plain-text export's first line. `from`/`to` are already-formatted dates. */
-  "history.export.header": (p: { petName: string; from: string; to: string }) => string;
+  "history.export.header": (p: {
+    petName: string;
+    from: string;
+    to: string;
+  }) => string;
 
   // --- day headings ---
   "history.day.today": () => string;
@@ -52,7 +56,10 @@ export interface HistoryMessages {
    * "2 h 15 min". `h`/`min` are symbols, not spoken words, so they take no
    * plural form in either language. `hours` may be 0.
    */
-  "history.detail.lateDuration": (p: { hours: number; minutes: number }) => string;
+  "history.detail.lateDuration": (p: {
+    hours: number;
+    minutes: number;
+  }) => string;
   "history.detail.givenLate": (p: { late: string }) => string;
   "history.detail.skipped": () => string;
   "history.detail.missed": () => string;
@@ -69,9 +76,15 @@ export interface HistoryMessages {
   "history.detail.courseFinished": () => string;
   "history.detail.courseEdited": () => string;
   /** Both schedules are already rendered by `renderSchedule`. */
-  "history.detail.intervalChanged": (p: { before: string; after: string }) => string;
+  "history.detail.intervalChanged": (p: {
+    before: string;
+    after: string;
+  }) => string;
   /** Both doses are already rendered by `doseLabel`; amounts never localize. */
-  "history.detail.doseChanged": (p: { before: string; after: string }) => string;
+  "history.detail.doseChanged": (p: {
+    before: string;
+    after: string;
+  }) => string;
   /**
    * A dose whose time was corrected from history. `from` is the clock time it
    * used to carry — interpolated verbatim (SPEC §10a). The row itself shows
@@ -108,7 +121,10 @@ export interface HistoryMessages {
   "history.editTime.helper.upToNow": () => string;
   "history.editTime.helper.afterPrevious": (p: { from: string }) => string;
   "history.editTime.helper.beforeNext": (p: { to: string }) => string;
-  "history.editTime.helper.between": (p: { from: string; to: string }) => string;
+  "history.editTime.helper.between": (p: {
+    from: string;
+    to: string;
+  }) => string;
   /** Consequence headline when the edit moves nothing but this entry. */
   "history.editTime.next.unchanged": () => string;
   "history.editTime.next.unchangedDetail": () => string;
@@ -122,6 +138,14 @@ export interface HistoryMessages {
   "history.editTime.next.moves": (p: { when: string }) => string;
   "history.editTime.next.movesDetailLater": (p: { delta: string }) => string;
   "history.editTime.next.movesDetailEarlier": (p: { delta: string }) => string;
+  /**
+   * `aria-label` on the sheet's scrollable content region. Needed because the
+   * region has no visible heading of its own — SPEC §9's landmark for a
+   * keyboard/screen-reader user to find the scrollable body distinct from the
+   * fixed header/footer around it, at viewports short enough that not
+   * everything fits without scrolling.
+   */
+  "history.editTime.scrollRegion": () => string;
   /** Footer: "Save 08:40". Disabled until the time actually differs. */
   "history.editTime.save": (p: { time: string }) => string;
   /** `medicationName` is DATA — never translated. */
@@ -182,8 +206,10 @@ export const enHistory = (f: Formatters): HistoryMessages => ({
   "history.detail.courseStopped": () => "Course stopped",
   "history.detail.courseFinished": () => "Course finished",
   "history.detail.courseEdited": () => "Course edited",
-  "history.detail.intervalChanged": (p) => `Interval changed · ${p.before} to ${p.after}`,
-  "history.detail.doseChanged": (p) => `Dose changed · ${p.before} to ${p.after}`,
+  "history.detail.intervalChanged": (p) =>
+    `Interval changed · ${p.before} to ${p.after}`,
+  "history.detail.doseChanged": (p) =>
+    `Dose changed · ${p.before} to ${p.after}`,
   "history.detail.timeEdited": (p) => `time edited from ${p.from}`,
 
   "history.editTime.title": () => "Edit dose time",
@@ -198,7 +224,8 @@ export const enHistory = (f: Formatters): HistoryMessages => ({
   "history.editTime.helper.upToNow": () => "Anything up to now.",
   "history.editTime.helper.afterPrevious": (p) =>
     `Anything after the previous dose at ${p.from}, up to now.`,
-  "history.editTime.helper.beforeNext": (p) => `Anything before the next dose at ${p.to}.`,
+  "history.editTime.helper.beforeNext": (p) =>
+    `Anything before the next dose at ${p.to}.`,
   "history.editTime.helper.between": (p) =>
     `Anything between the doses either side — ${p.from} and ${p.to}.`,
   "history.editTime.next.unchanged": () => "Nothing else moves",
@@ -209,6 +236,7 @@ export const enHistory = (f: Formatters): HistoryMessages => ({
     `This is the last dose, and the course counts from the last dose — so the whole chain follows it, ${p.delta} later.`,
   "history.editTime.next.movesDetailEarlier": (p) =>
     `This is the last dose, and the course counts from the last dose — so the whole chain follows it, ${p.delta} earlier.`,
+  "history.editTime.scrollRegion": () => "Edit time details, scrollable",
   "history.editTime.save": (p) => `Save ${p.time}`,
   "history.toast.timeUpdated": (p) => `${p.medicationName} time updated`,
   "history.toast.timeUpdateFailed": () => "That time could not be saved.",
@@ -244,7 +272,8 @@ export const ukHistory = (f: Formatters): HistoryMessages => ({
   "history.export.action": () => "Експортувати історію",
   "history.export.plainText": () => "Звичайний текст",
   "history.export.csv": () => "CSV",
-  "history.export.header": (p) => `${p.petName} — історія з ${p.from} до ${p.to}`,
+  "history.export.header": (p) =>
+    `${p.petName} — історія з ${p.from} до ${p.to}`,
   "history.moreOptions": (p) => `Більше дій для «${p.medicationName}»`,
   "history.menu.editTime": () => "Змінити час",
 
@@ -256,7 +285,9 @@ export const ukHistory = (f: Formatters): HistoryMessages => ({
   // "год"/"хв" are the standard invariant abbreviations — never pluralized.
   "history.detail.lateDuration": (p) => {
     if (p.hours === 0) return `${p.minutes} хв`;
-    return p.minutes === 0 ? `${p.hours} год` : `${p.hours} год ${p.minutes} хв`;
+    return p.minutes === 0
+      ? `${p.hours} год`
+      : `${p.hours} год ${p.minutes} хв`;
   },
   "history.detail.givenLate": (p) => `Дано із запізненням на ${p.late}`,
   "history.detail.skipped": () => "Пропущено",
@@ -279,8 +310,10 @@ export const ukHistory = (f: Formatters): HistoryMessages => ({
   "history.detail.courseStopped": () => "Курс зупинено",
   "history.detail.courseFinished": () => "Курс завершено",
   "history.detail.courseEdited": () => "Курс змінено",
-  "history.detail.intervalChanged": (p) => `Інтервал змінено · ${p.before} на ${p.after}`,
-  "history.detail.doseChanged": (p) => `Дозу змінено · ${p.before} на ${p.after}`,
+  "history.detail.intervalChanged": (p) =>
+    `Інтервал змінено · ${p.before} на ${p.after}`,
+  "history.detail.doseChanged": (p) =>
+    `Дозу змінено · ${p.before} на ${p.after}`,
   "history.detail.timeEdited": (p) => `час змінено з ${p.from}`,
 
   "history.editTime.title": () => "Змінити час дози",
@@ -295,7 +328,8 @@ export const ukHistory = (f: Formatters): HistoryMessages => ({
   "history.editTime.helper.upToNow": () => "Будь-який час до цієї миті.",
   "history.editTime.helper.afterPrevious": (p) =>
     `Будь-який час після попередньої дози о ${p.from} і до цієї миті.`,
-  "history.editTime.helper.beforeNext": (p) => `Будь-який час до наступної дози о ${p.to}.`,
+  "history.editTime.helper.beforeNext": (p) =>
+    `Будь-який час до наступної дози о ${p.to}.`,
   "history.editTime.helper.between": (p) =>
     `Будь-який час між сусідніми дозами — ${p.from} і ${p.to}.`,
   "history.editTime.next.unchanged": () => "Більше нічого не змінюється",
@@ -306,6 +340,8 @@ export const ukHistory = (f: Formatters): HistoryMessages => ({
     `Це остання доза, а курс рахується від останньої дози — тож увесь ланцюжок зсувається за нею, на ${p.delta} пізніше.`,
   "history.editTime.next.movesDetailEarlier": (p) =>
     `Це остання доза, а курс рахується від останньої дози — тож увесь ланцюжок зсувається за нею, на ${p.delta} раніше.`,
+  "history.editTime.scrollRegion": () =>
+    "Деталі зміни часу, можна прокручувати",
   "history.editTime.save": (p) => `Зберегти ${p.time}`,
   "history.toast.timeUpdated": (p) => `Час дози «${p.medicationName}» змінено`,
   "history.toast.timeUpdateFailed": () => "Не вдалося зберегти цей час.",
