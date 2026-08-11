@@ -755,6 +755,42 @@ describe("LogAtTimeSheet", () => {
     }
   });
 
+  // The rolling 24 h backdate floor (widened from local midnight) means the
+  // default 30-min-ago seed can land on the PREVIOUS local day — the label
+  // must say so, compared by calendar day rather than by elapsed hours.
+  it("labels the elapsed time 'yesterday' when the chosen instant falls on the previous local day", async () => {
+    // now = 00:10 local (BST) on 9 Aug — 30 min ago is 23:40 local on 8 Aug.
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
+      now: "2026-08-08T23:10:00.000Z",
+    });
+
+    expect(await headline()).toHaveTextContent("23:40");
+    expect(screen.getByText("yesterday · 30 min ago")).toBeInTheDocument();
+    expect(screen.queryByText(/^today ·/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the elapsed-time label 'today' for a same-day chosen instant, even close to midnight", async () => {
+    // now = 00:20 local on 9 Aug — Just now (0 min ago) stays on 9 Aug.
+    const user = userEvent.setup();
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
+      now: "2026-08-08T23:20:00.000Z",
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Just now" }));
+
+    expect(await headline()).toHaveTextContent("00:20");
+    expect(screen.getByText(/^today ·/)).toBeInTheDocument();
+  });
+
+  it("renders the Ukrainian 'yesterday' label, comparing local calendar days the same way", async () => {
+    renderSheet(makeDose(fixedTimesOccurrence), makeContext(fixedTimesCourse), {
+      now: "2026-08-08T23:10:00.000Z",
+      locale: "uk",
+    });
+
+    expect(await screen.findByText("вчора · 30 хв тому")).toBeInTheDocument();
+  });
+
   it("hides the scheduled row entirely when scheduledChoice returns null", async () => {
     const intervalCourse = makeCourse({ schedule: { kind: "fromLastDose", intervalHours: 8 } });
     const unanchored = makeOccurrence(intervalCourse, DAY, null);

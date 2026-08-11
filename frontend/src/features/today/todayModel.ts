@@ -42,12 +42,25 @@ import type {
   TodayView,
 } from "./types";
 
-/** States that keep a dose in the card body. */
+/**
+ * States that keep a dose in the card body.
+ *
+ * `capped` (SPEC §3b-i) belongs here unconditionally, not behind a
+ * kind/kind-of-upcoming check the way `upcoming` is below it: a capped
+ * occurrence is still outstanding — its ghost **Give anyway** action can
+ * still resolve it — the same reasoning `engine/state.ts`'s `summariseDay`
+ * already states for why `capped` joins `due`/`later` in `remaining` rather
+ * than being dropped. Leaving it out of this set is what silently deleted
+ * every capped row from Today before this fix: `isPendingDose` and
+ * `RESOLVED_STATES` both missed it, so the row fell into neither `pending`
+ * nor `resolved` and never rendered at all — not merely unstyled.
+ */
 const PENDING_STATES: ReadonlySet<DoseState> = new Set<DoseState>([
   "overdue",
   "due",
   "later",
   "notStarted",
+  "capped",
 ]);
 
 /** States that move a dose into the `X of Y today` counter. */
@@ -228,6 +241,16 @@ function toDose(
     // Filled in by `attachCourseCounts` once every dose is built — a single
     // occurrence cannot know its course's day total in isolation.
     courseCount: null,
+    // SPEC §3b-i: `state` already IS the capped condition
+    // (`maxPerDay !== undefined && givenToday >= maxPerDay`, decided by
+    // `getDoseState` — never re-derived here, per this file's PURITY RULE).
+    // `occ.maxPerDay` is guaranteed set whenever `state === "capped"`
+    // (`engine/state.ts`'s own precondition for that state), so the guard
+    // below is belt-and-braces typing, not a live fallback.
+    cap:
+      state === "capped" && occ.maxPerDay !== undefined
+        ? { given: occ.givenToday ?? 0, max: occ.maxPerDay }
+        : null,
   };
 }
 

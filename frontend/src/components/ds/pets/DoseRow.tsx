@@ -3,10 +3,9 @@ import { Badge } from "../core/Badge";
 import { Button } from "../core/Button";
 
 /**
- * SPEC §3b-i's engine `capped` state, presentation half only. NOT wired to
- * the engine on this branch — a concurrent agent owns `capped`/`overMax`/
- * `maxPerDay` there; this is driven entirely by props so a later phase can
- * thread the real numbers in without touching this component again.
+ * SPEC §3b-i's engine `capped` state, presentation half only — driven
+ * entirely by props, never reaching into `@/engine` itself. Wired from
+ * `features/today/TodayPage.tsx` via `TodayDoseRow.tsx`'s own `cap` prop.
  */
 export interface DoseRowCap {
   /** Already-localized "N of M max" pill text (`today.pill.cap`). Amber — replaces `countLabel` entirely, never sits beside it. */

@@ -498,6 +498,96 @@ describe("TodayPage", () => {
     expect(pathname()).toBe("/today");
   });
 
+  // SPEC §3b-i / §12: the amber cap pill replaces the plain count pill, and
+  // Give anyway writes a real `given` event flagged `overMax` — the only way
+  // to log a capped dose, never a silent block (SPEC §3b-i: "the cap warns,
+  // it does not lock").
+  it("renders the amber cap pill for a capped course, and Give anyway writes a given event flagged overMax without leaving the dashboard", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metoclopramide");
+    const occurrence: Occurrence = {
+      ...makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 }),
+      maxPerDay: 3,
+      givenToday: 3,
+    };
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "capped");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+
+    expect(within(card).getByText("3 of 3 max")).toBeInTheDocument();
+    // The cap pill REPLACES the plain "N of M doses" one — never both.
+    expect(within(card).queryByText(/of \d+ doses/)).toBeNull();
+    expect(pathname()).toBe("/today");
+
+    await user.click(within(card).getByRole("button", { name: "Give anyway" }));
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+    const created = newEvents(before, await repo.listDoseEvents({}));
+    expect(created).toHaveLength(1);
+    expect(created[0].courseId).toBe(course.id);
+    expect(created[0].status).toBe("given");
+    expect(created[0].overMax).toBe(true);
+
+    expect(pathname()).toBe("/today");
+  });
+
+  // SPEC §12: "a capped course never appears in the overdue count or the
+  // overdue banner". `scheduledFor` here is well before `FIXTURE_NOW`, which
+  // would read as overdue for any other state — proving the exclusion holds
+  // for `capped` specifically, not merely because nothing is actually late.
+  it("never counts a capped course toward the overdue count or the overdue banner", async () => {
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metoclopramide");
+    const occurrence: Occurrence = {
+      ...makeOccurrence(course, { day: DAY, scheduledFor: AT_0700 }),
+      maxPerDay: 2,
+      givenToday: 2,
+    };
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "capped");
+
+    renderToday(repo);
+    await cardFor("Clover");
+
+    expect(screen.queryByText(/overdue/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Log" })).toBeNull();
+  });
+
+  // SPEC §12's no-op case, "matters most": an interval course with no
+  // `maxPerDay` behaves exactly as before a fourth same-day dose included —
+  // plain pill, no cap affordance, no `overMax` on the logged event.
+  it("no-op: an uncapped interval course logs a dose exactly as before, with the plain pill and no overMax flag", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metoclopramide");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+
+    expect(within(card).queryByText(/max/)).toBeNull();
+    expect(within(card).queryByRole("button", { name: "Give anyway" })).toBeNull();
+
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+    const created = newEvents(before, await repo.listDoseEvents({}));
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("given");
+    expect(created[0].overMax).toBeUndefined();
+  });
+
   // UI-WIRING COVERAGE ONLY — NOT proof of the occurrence-generation fix.
   // This file `vi.mock`s `@/engine` (see the top of the file): `getOccurrences`
   // here is `testEngine.ts`'s lookup table, driven entirely by

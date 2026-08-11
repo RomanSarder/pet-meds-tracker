@@ -80,6 +80,17 @@ export interface TodayDose {
    * this field exists at all.
    */
   courseCount?: { given: number; total: number } | null;
+  /**
+   * SPEC §3b-i's `capped` state, numbers only — `given`/`max` mirror the
+   * occurrence's own `givenToday`/`maxPerDay` verbatim, never recomputed
+   * here (SPEC §10: the engine owns the capped condition; this file only
+   * reads `state`, already decided by `getDoseState`). `null` whenever
+   * `state !== "capped"`, which is also how the no-`maxPerDay` course stays
+   * a true no-op: `TodayPage` renders the amber `today.pill.cap` pill and
+   * the ghost **Give anyway** action only when this is non-null, and the
+   * plain `courseCount` pill above otherwise — never both (SPEC §4).
+   */
+  cap?: { given: number; max: number } | null;
 }
 
 /** One pet's card. */

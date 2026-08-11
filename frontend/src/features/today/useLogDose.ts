@@ -52,6 +52,14 @@ export interface LogDoseVars {
   earlyGive?: boolean;
   /** User-confirmed retry after an `earlyGive` conflict — forwarded to the repo verbatim. */
   allowWithinGrace?: boolean;
+  /**
+   * SPEC §3b-i: set when the caller (`TodayPage.tsx`'s `give`) is logging a
+   * `capped` occurrence — "the cap warns, it does not lock", so this is
+   * never a reason to refuse the write, only to flag it. Forwarded to the
+   * repo verbatim, which stamps `overMax: true` on the created event (never
+   * an explicit `false` — `repo.types.ts`'s own convention).
+   */
+  overMax?: boolean;
 }
 
 /**
@@ -103,6 +111,10 @@ function provisionalEvent(vars: LogDoseVars, actorId: string): DoseEvent {
     createdAt: stamp,
     updatedAt: stamp,
     deletedAt: null,
+    // Same convention as `idbRepo.ts`/`memoryRepo.ts`'s own `logDose`: absent
+    // unless true, never an explicit `false`, so the optimistic row matches
+    // the shape the real write settles into.
+    ...(vars.overMax ? { overMax: true } : {}),
   };
 }
 
@@ -175,6 +187,7 @@ export function useLogDose(
         givenAt: vars.givenAt,
         amount: vars.amount,
         allowWithinGrace: vars.allowWithinGrace,
+        overMax: vars.overMax,
       }),
 
     onMutate: async (vars): Promise<LogDoseContext> => {

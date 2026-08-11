@@ -175,6 +175,15 @@ export function TodayPage(): ReactElement {
         // fixed-times mis-tap gets the same unconditional protection an
         // interval one does.
         earlyGive: dose.state === "later" || dose.state === "upcoming",
+        // SPEC §3b-i: "the cap warns, it does not lock" — writing an
+        // unflagged event past the cap would be worse than a recorded
+        // exception, so ANY give of a `capped` occurrence is flagged
+        // `overMax`, not only the ones reached through the row's ghost
+        // **Give anyway** action. That is what lets `TodayDoseRow`'s cap
+        // object point its `onGiveAnyway` at this SAME `give` callback
+        // (below) rather than a second, parallel write path: there is only
+        // one way to give a capped dose, and it is always correctly flagged.
+        overMax: dose.state === "capped",
       }),
     [log, t],
   );
@@ -336,6 +345,22 @@ export function TodayPage(): ReactElement {
                     }}
                     onStartCourse={() => startCourse(dose)}
                     giving={logDose.isPending}
+                    // SPEC §3b-i: `dose.cap` is set only when the course has
+                    // `maxPerDay` AND `givenToday >= maxPerDay`
+                    // (`todayModel.ts`'s `toDose`, mirroring `getDoseState`'s
+                    // own precondition for `state === "capped"`) — every
+                    // other row passes `undefined`, so `DoseRow` renders its
+                    // plain `countLabel` pill exactly as before (the no-op
+                    // case SPEC §12 asks to be proven). `onGiveAnyway` is the
+                    // SAME `give` this row's own primary button already
+                    // calls: `give` flags `overMax` from `dose.state`
+                    // itself, so there is nothing "give anyway"-specific to
+                    // wire beyond the cap's numbers.
+                    cap={
+                      dose.cap
+                        ? { given: dose.cap.given, max: dose.cap.max, onGiveAnyway: () => give(dose) }
+                        : undefined
+                    }
                   />
                 );
               })}
