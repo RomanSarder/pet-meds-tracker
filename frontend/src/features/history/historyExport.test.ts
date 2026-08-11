@@ -22,6 +22,8 @@ function makeEntry(overrides: Partial<LogEntry> = {}): LogEntry {
     title: { medicationName: "Metacam", amount: 0.4, unit: "ml" },
     detail: GIVEN,
     actorId: "user-1",
+    courseId: "course-1",
+    canEditTime: true,
     ...overrides,
   };
 }

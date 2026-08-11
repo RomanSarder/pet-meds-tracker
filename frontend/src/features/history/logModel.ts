@@ -42,6 +42,7 @@ export type DetailClause =
   | { kind: "scheduledAt"; time: string } // "07:00"
   | { kind: "text"; text: string } // instructions / note — DATA, verbatim
   | { kind: "chainShifted" }
+  | { kind: "timeEdited"; from: string } // "08:12" — the time this dose used to carry
   | { kind: "nextDue"; time: string; schedule: ScheduleDescription }
   | { kind: "progress"; progress: CourseProgress }
   | { kind: "courseStarted"; schedule: ScheduleDescription; totalDays: number | null }
@@ -103,6 +104,20 @@ export interface LogEntry {
   /** The factual detail line, as structure — see the per-kind builders below. */
   detail: DetailClause[];
   actorId: string;
+  /**
+   * The course this row belongs to — for a dose entry the event's own
+   * `courseId`, for a course entry the CourseEvent's. The screen needs it to
+   * find the `Course` behind a row it is about to act on (the edit-time
+   * sheet); nothing renders it.
+   */
+  courseId: string;
+  /**
+   * Whether this row offers "Edit time". `given` dose rows only: a `skipped`
+   * or `missed` row records that a dose did NOT happen, so it has no
+   * administration time to correct, and a course-lifecycle row is a stamped
+   * fact rather than a recollection.
+   */
+  canEditTime: boolean;
 }
 
 export interface LogSource {
@@ -155,6 +170,7 @@ function buildDoseEntry(
   medication: Medication,
   allDoseEvents: DoseEvent[],
   allCourseEvents: CourseEvent[],
+  eventById: Map<string, DoseEvent>,
 ): LogEntry {
   const scheduledFor = de.scheduledFor;
   const givenAtDate = new Date(de.givenAt);
@@ -178,6 +194,18 @@ function buildDoseEntry(
   // Instructions and the user's note are DATA — carried verbatim.
   if (course.instructions) clauses.push({ kind: "text", text: course.instructions });
   if (de.note) clauses.push({ kind: "text", text: de.note });
+
+  // A correction supersedes the row it replaces, and only the correction is
+  // rendered (see `buildLogEntries`) — so without this clause a time edit
+  // would look like the dose had always been at the new time. Silent only
+  // when the superseded row is outside the fetched range, or when the
+  // correction changed something other than the time.
+  if (de.supersedesId !== null) {
+    const original = eventById.get(de.supersedesId);
+    if (original && original.givenAt !== de.givenAt) {
+      clauses.push({ kind: "timeEdited", from: formatHHMM(new Date(original.givenAt)) });
+    }
+  }
 
   if (de.status === "given") {
     if (course.schedule.kind === "fromLastDose") {
@@ -211,6 +239,8 @@ function buildDoseEntry(
     title,
     detail: clauses,
     actorId: de.actorId,
+    courseId: de.courseId,
+    canEditTime: de.status === "given",
   };
 }
 
@@ -278,6 +308,8 @@ function buildCourseEntry(ce: CourseEvent, medication: Medication): LogEntry {
     },
     detail: courseEventDetail(ce),
     actorId: ce.actorId,
+    courseId: ce.courseId,
+    canEditTime: false,
   };
 }
 
@@ -303,18 +335,35 @@ function compareEntriesNewestFirst(a: LogEntry, b: LogEntry): number {
  * Builds every dose and course-lifecycle row for a pet's history, newest
  * first. An event whose course (or that course's medication) cannot be found
  * is silently skipped — never throws.
+ *
+ * SUPERSEDED AND SOFT-DELETED DOSE ROWS ARE NOT RENDERED. `DoseEvent` is an
+ * append-only ledger (SPEC §9): a correction is a NEW row carrying
+ * `supersedesId`, and the row it replaces stays in the table forever. The
+ * ledger is the storage model, not the reading model — showing both would put
+ * one dose on the screen twice and count it twice in the summary strip. This
+ * is the same live-row rule `@/engine`'s `liveEventFor`/`anchorFor` apply, so
+ * history and the scheduler agree on which rows are real.
  */
 export function buildLogEntries(src: LogSource): LogEntry[] {
   const courseById = new Map(src.courses.map((c) => [c.id, c]));
   const medicationById = new Map(src.medications.map((m) => [m.id, m]));
+  const eventById = new Map(src.doseEvents.map((e) => [e.id, e]));
+  const superseded = new Set(
+    src.doseEvents
+      .filter((e) => e.deletedAt === null && e.supersedesId !== null)
+      .map((e) => e.supersedesId as string),
+  );
   const entries: LogEntry[] = [];
 
   for (const de of src.doseEvents) {
+    if (de.deletedAt !== null || superseded.has(de.id)) continue;
     const course = courseById.get(de.courseId);
     if (!course) continue;
     const medication = medicationById.get(course.medicationId);
     if (!medication) continue;
-    entries.push(buildDoseEntry(de, course, medication, src.doseEvents, src.courseEvents));
+    entries.push(
+      buildDoseEntry(de, course, medication, src.doseEvents, src.courseEvents, eventById),
+    );
   }
 
   for (const ce of src.courseEvents) {

@@ -42,6 +42,9 @@ function renderClause(clause: DetailClause, tr: Translator): string {
       return clause.text;
     case "chainShifted":
       return tr.t("history.detail.chainShifted");
+    case "timeEdited":
+      // A clock time — interpolated verbatim, never formatted (SPEC §10a).
+      return tr.t("history.detail.timeEdited", { from: clause.from });
     case "nextDue":
       return tr.t("history.detail.nextDue", {
         time: clause.time,

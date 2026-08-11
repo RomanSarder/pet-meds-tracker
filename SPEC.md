@@ -559,6 +559,30 @@ on today and reads newest first.
 
 - Export the visible range as plain text or CSV for a vet.
 
+- Overflow on a `given` dose row: **Edit time** — the correction path §4 defers to for a dose
+
+  remembered after midnight. It opens a sheet offering offsets from the dose's own recorded
+
+  time and a `− 5 min` / `+ 5 min` stepper, and it writes a correction (§9), never an update.
+
+  - The chosen time is penned strictly between the neighbouring `given` doses of the same
+
+    course, or up to `now` when there is no later one. An edit therefore cannot reorder the
+
+    log, and so cannot change which dose is the newest.
+
+  - **Consequence block**, stated before saving: "Nothing else moves" for every `fixedTimes`
+
+    dose and for any dose that is not the last one; "Next dose moves to HH:MM", with the
+
+    signed shift, for the last dose of a `fromLastDose` course — that dose is the chain's
+
+    anchor (§3b), so the chain follows it.
+
+  - A corrected row shows the new time and carries "time edited from HH:MM". The superseded
+
+    row is never rendered and never counted twice in the summary strip.
+
 **What is logged:** every DoseEvent (given, skipped, missed) and every course lifecycle change
 
 (started, paused, resumed, stopped, schedule or dose edited). Stock updates and household joins
