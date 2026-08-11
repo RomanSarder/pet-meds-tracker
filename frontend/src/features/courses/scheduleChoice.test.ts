@@ -12,6 +12,7 @@ import {
 
 describe("scheduleForIntervalChoice", () => {
   it.each([
+    ["Every 2h", 2],
     ["Every 4h", 4],
     ["Every 6h", 6],
     ["Every 8h", 8],

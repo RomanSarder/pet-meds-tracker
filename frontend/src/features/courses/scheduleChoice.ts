@@ -6,8 +6,15 @@ import type { IsoWeekday, LocalDate, Schedule } from "@/domain";
 import { addLocalDays } from "@/domain";
 import type { Translator } from "@/i18n";
 
-/** The kit's five interval chips, in the kit's order. SPEC §3b's set is 4|6|8|12|24. */
-export const INTERVAL_CHOICES = ["Every 4h", "Every 6h", "Every 8h", "Every 12h", "Every 24h"] as const;
+/** The kit's six interval chips, in the kit's order. SPEC §3b's set is 2|4|6|8|12|24. */
+export const INTERVAL_CHOICES = [
+  "Every 2h",
+  "Every 4h",
+  "Every 6h",
+  "Every 8h",
+  "Every 12h",
+  "Every 24h",
+] as const;
 /** The kit's four frequency chips, in the kit's order. */
 export const FREQUENCY_CHOICES = ["Once daily", "2× daily", "3× daily", "Weekly"] as const;
 /** The kit's segmented control, plus "Custom" per CONTRACT.md §4 item 2. */
@@ -20,6 +27,7 @@ export type DurationChoice = (typeof DURATION_CHOICES)[number];
 export type ModeChoice = (typeof MODE_CHOICES)[number];
 
 const INTERVAL_HOURS: Record<IntervalChoice, number> = {
+  "Every 2h": 2,
   "Every 4h": 4,
   "Every 6h": 6,
   "Every 8h": 8,
@@ -67,6 +75,8 @@ export function scheduleForFrequencyChoice(c: FrequencyChoice): Schedule {
  */
 export function intervalChoiceLabel(c: IntervalChoice, tr: Translator): string {
   switch (c) {
+    case "Every 2h":
+      return tr.t("courses.interval.every2h");
     case "Every 4h":
       return tr.t("courses.interval.every4h");
     case "Every 6h":

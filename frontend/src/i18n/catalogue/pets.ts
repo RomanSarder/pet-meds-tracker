@@ -135,6 +135,7 @@ export interface PetsMessages {
   //     VALUE (e.g. "Every 8h") stays an internal English token used for
   //     state/equality and persisted-schedule mapping; only the rendered
   //     label goes through the catalogue. ------------------------------
+  "courses.interval.every2h": () => string;
   "courses.interval.every4h": () => string;
   "courses.interval.every6h": () => string;
   "courses.interval.every8h": () => string;
@@ -280,6 +281,7 @@ export const enPets = (f: Formatters): PetsMessages => ({
   "courses.resume": () => "Resume",
   "courses.saveMedication": () => "Save medication",
 
+  "courses.interval.every2h": () => "Every 2h",
   "courses.interval.every4h": () => "Every 4h",
   "courses.interval.every6h": () => "Every 6h",
   "courses.interval.every8h": () => "Every 8h",
@@ -459,6 +461,7 @@ export const ukPets = (f: Formatters): PetsMessages => ({
 
   // The chip's persisted VALUE stays the English token (see the interface
   // comment above); only these rendered labels are Ukrainian.
+  "courses.interval.every2h": () => "Кожні 2 год",
   "courses.interval.every4h": () => "Кожні 4 год",
   "courses.interval.every6h": () => "Кожні 6 год",
   "courses.interval.every8h": () => "Кожні 8 год",
