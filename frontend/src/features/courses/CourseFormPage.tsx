@@ -28,7 +28,8 @@ import {
   DURATION_CHOICES,
   FREQUENCY_CHOICES,
   INTERVAL_CHOICES,
-  MAX_PER_DAY_CHOICES,
+  NO_MAX_CHOICE,
+  NUMERIC_MAX_PER_DAY_CHOICES,
   MODE_CHOICES,
   choicesForSchedule,
   durationChoiceLabel,
@@ -676,19 +677,38 @@ export function CourseFormView({
               aria-labelledby="max-per-day-label"
               style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
             >
-              {MAX_PER_DAY_CHOICES.map((o) => {
-                const selected = maxPerDayChoice === o;
-                return (
-                  <Chip
-                    key={o}
-                    selected={selected}
-                    aria-pressed={selected}
-                    onClick={() => setMaxPerDayChoice(o)}
-                  >
-                    {maxPerDayChoiceLabel(o, tr)}
-                  </Chip>
-                );
-              })}
+              <Chip
+                selected={maxPerDayChoice === NO_MAX_CHOICE}
+                aria-pressed={maxPerDayChoice === NO_MAX_CHOICE}
+                onClick={() => setMaxPerDayChoice(NO_MAX_CHOICE)}
+              >
+                {maxPerDayChoiceLabel(NO_MAX_CHOICE, tr)}
+              </Chip>
+              {/*
+                The numerals share a nested flex row so they wrap as a UNIT.
+                Measured at 375px: the opt-out chip (109px) plus the five
+                numerals (222px) needs 339px against 331px of content width —
+                an 8px miss that, in one flat row, pushed "6" alone onto a
+                second line looking like a bug. As one item the whole numeral
+                strip drops to its own line instead, so the break lands on the
+                real boundary (opt out | pick a number) at every width, and
+                stays a single row wherever all seven fit.
+              */}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {NUMERIC_MAX_PER_DAY_CHOICES.map((o) => {
+                  const selected = maxPerDayChoice === o;
+                  return (
+                    <Chip
+                      key={o}
+                      selected={selected}
+                      aria-pressed={selected}
+                      onClick={() => setMaxPerDayChoice(o)}
+                    >
+                      {maxPerDayChoiceLabel(o, tr)}
+                    </Chip>
+                  );
+                })}
+              </div>
             </div>
           </div>
         ) : null}

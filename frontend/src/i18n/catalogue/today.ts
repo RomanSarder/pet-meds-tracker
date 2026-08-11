@@ -282,6 +282,15 @@ export interface TodayMessages {
    */
   "today.giveConfirm.title": (p: { medicationName: string }) => string;
   /**
+   * The same title when the action being confirmed is a SKIP, not a give.
+   * `LogDoseVars.status` picks between them. Skipping right after a dose went
+   * in is worth the same question — it is as likely a mis-tap — but asking it
+   * in give words ("Give Metacam anyway?" over a Skip) states the wrong
+   * action, and the confirm button would then log the opposite of what it
+   * says. Same reason `confirmSkip`/`questionSkip` below exist.
+   */
+  "today.giveConfirm.titleSkip": (p: { medicationName: string }) => string;
+  /**
    * Description sentence 1, grace-window case. NOT `today.toast.duplicateGiven`
    * reused — in the toast "already given" means the dose just attempted IS
    * the one on record; here the collision is BY CONSTRUCTION a different
@@ -310,6 +319,8 @@ export interface TodayMessages {
   "today.giveConfirm.notDueYet": (p: { early: string }) => string;
   /** Sentence 3, always present — the actual question the buttons answer. */
   "today.giveConfirm.question": () => string;
+  /** Sentence 3 for a skip. */
+  "today.giveConfirm.questionSkip": () => string;
   /**
    * The atomic word `useLogDose.ts` substitutes for `lastGiven`/
    * `lastSkipped`'s `name` when the colliding dose's actor is THIS
@@ -327,6 +338,8 @@ export interface TodayMessages {
   "today.giveConfirm.cancel": () => string;
   /** Footer's positive action — logs the dose now and re-anchors the chain (SPEC §3b). */
   "today.giveConfirm.confirm": () => string;
+  /** Footer's positive action for a skip — records the skip, gives nothing. */
+  "today.giveConfirm.confirmSkip": () => string;
 }
 
 export const enToday = (f: Formatters): TodayMessages => ({
@@ -449,14 +462,17 @@ export const enToday = (f: Formatters): TodayMessages => ({
     `A dose was logged for this course ${p.duration} ago — wait a little before logging another`,
 
   "today.giveConfirm.title": (p) => `Give ${p.medicationName} anyway?`,
+  "today.giveConfirm.titleSkip": (p) => `Skip ${p.medicationName} anyway?`,
   "today.giveConfirm.lastGiven": (p) => `${p.name} gave a dose ${p.sinceLast} ago.`,
   "today.giveConfirm.lastSkipped": (p) => `${p.name} skipped a dose ${p.sinceLast} ago.`,
   "today.giveConfirm.lastDose": (p) => `The last dose on this course was ${p.sinceLast} ago.`,
   "today.giveConfirm.notDueYet": (p) => `This one isn't due for another ${p.early}.`,
   "today.giveConfirm.question": () => "Give it and record it anyway?",
+  "today.giveConfirm.questionSkip": () => "Record it as skipped anyway?",
   "today.giveConfirm.you": () => "You",
   "today.giveConfirm.cancel": () => "Cancel",
   "today.giveConfirm.confirm": () => "Give anyway",
+  "today.giveConfirm.confirmSkip": () => "Skip anyway",
 });
 
 export const ukToday = (f: Formatters): TodayMessages => ({
@@ -625,6 +641,7 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   // `medicationName` stays nominative and undeclined — DATA (SPEC §10a),
   // same rule `today.toast.duplicateGiven`'s `name` follows above.
   "today.giveConfirm.title": (p) => `Все одно дати ${p.medicationName}?`,
+  "today.giveConfirm.titleSkip": (p) => `Все одно пропустити ${p.medicationName}?`,
   // Passive voice throughout ("дано"/"пропущено", not "дав"/"дала") —
   // `name` is DATA of unknown grammatical gender, the same reason
   // `today.toast.duplicateGiven` above never conjugates a verb to agree with
@@ -639,6 +656,7 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.giveConfirm.lastDose": (p) => `Останню дозу цього курсу введено ${p.sinceLast} тому.`,
   "today.giveConfirm.notDueYet": (p) => `Ця доза знадобиться ще через ${p.early}.`,
   "today.giveConfirm.question": () => "Все одно дати й записати?",
+  "today.giveConfirm.questionSkip": () => "Все одно записати як пропущену?",
   // "Ви" — the same word `household.memberLine.you` already uses for the
   // self row in the member list, not the literal English "You" that would
   // otherwise land here via `displayNameFor`'s raw, un-renamed self
@@ -646,4 +664,5 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   "today.giveConfirm.you": () => "Ви",
   "today.giveConfirm.cancel": () => "Скасувати",
   "today.giveConfirm.confirm": () => "Все одно дати",
+  "today.giveConfirm.confirmSkip": () => "Все одно пропустити",
 });

@@ -100,12 +100,22 @@ export function EarlyGiveConfirmDialog({
       : t("today.giveConfirm.lastGiven", { name: c.name, sinceLast });
   }
 
+  /**
+   * Which action this dialog is confirming — the one being ATTEMPTED
+   * (`vars.status`), never `conflict.status`, which describes the dose already
+   * on record. Getting those two the wrong way round would title a skip with
+   * give words whenever the thing it collided with was a give.
+   */
+  function isSkip(c: GiveConflict): boolean {
+    return c.vars.status === "skipped";
+  }
+
   function description(c: GiveConflict): string {
     const parts = [collisionSentence(c)];
     if (c.early !== null) {
       parts.push(t("today.giveConfirm.notDueYet", { early: t("history.detail.lateDuration", c.early) }));
     }
-    parts.push(t("today.giveConfirm.question"));
+    parts.push(t(isSkip(c) ? "today.giveConfirm.questionSkip" : "today.giveConfirm.question"));
     return parts.join(" ");
   }
 
@@ -127,7 +137,12 @@ export function EarlyGiveConfirmDialog({
           style={POPUP_STYLE}
         >
           <Dialog.Title style={TITLE_STYLE}>
-            {t("today.giveConfirm.title", { medicationName: conflict?.vars.medicationName ?? "" })}
+            {t(
+              conflict && isSkip(conflict)
+                ? "today.giveConfirm.titleSkip"
+                : "today.giveConfirm.title",
+              { medicationName: conflict?.vars.medicationName ?? "" },
+            )}
           </Dialog.Title>
           {/*
             Dedicated dialog copy, not the flat-rejection toast's "Already
@@ -152,7 +167,11 @@ export function EarlyGiveConfirmDialog({
             />
             {/* F3: `danger`, matching the house dialogs' affirmative — see the header comment. */}
             <Button type="button" size="md" variant="danger" onClick={onConfirm}>
-              {t("today.giveConfirm.confirm")}
+              {t(
+                conflict && isSkip(conflict)
+                  ? "today.giveConfirm.confirmSkip"
+                  : "today.giveConfirm.confirm",
+              )}
             </Button>
           </div>
         </Dialog.Popup>

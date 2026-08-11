@@ -809,6 +809,51 @@ describe("TodayPage", () => {
     expect(pathname()).toBe("/today");
   });
 
+  // Caught in the browser, not by a test: widening the dialog to every log
+  // path meant a SKIP could open it, and it asked "Give Metacam anyway?" with
+  // a "Give anyway" button — the opposite of the action the button performs.
+  // The words come from `vars.status` (what is being attempted), never from
+  // `conflict.status` (what is already on record).
+  it("words the dialog as a SKIP when a skip is what collided, and records a skip when confirmed", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    await cardFor("Clover");
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Skip this dose" }));
+
+    expect(await screen.findByText("Skip Metacam anyway?")).toBeInTheDocument();
+    expect(
+      screen.getByText("Marta gave a dose 30 min ago. Record it as skipped anyway?"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Give Metacam anyway?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Give anyway" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Skip anyway" }));
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
+    const written = (await repo.listDoseEvents({})).find(
+      (e) => !before.some((b) => b.id === e.id),
+    )!;
+    expect(written.status).toBe("skipped");
+  });
+
   it("offers the early-give confirm dialog for a fromLastDose (interval) course too, not only fixedTimes (F8)", async () => {
     // F8: the eligibility test in `TodayPage.tsx`'s `give` callback is
     // deliberately kind-agnostic — this is the interval-schedule path

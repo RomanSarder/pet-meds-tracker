@@ -26,6 +26,15 @@ export const MODE_CHOICES = ["From last dose", "At set times"] as const;
  * `At set times`.
  */
 export const MAX_PER_DAY_CHOICES = ["No maximum", "2", "3", "4", "5", "6"] as const;
+/** The opt-out chip, named so the form can render it apart from the numerals. */
+export const NO_MAX_CHOICE = MAX_PER_DAY_CHOICES[0];
+/**
+ * The value chips alone, in order. Split out because the form lays them out as
+ * their own wrapping row — see `CourseFormPage.tsx` for the measurement. The
+ * slice keeps `MAX_PER_DAY_CHOICES` the single source of the set: adding "7"
+ * there puts it on screen with no second list to remember.
+ */
+export const NUMERIC_MAX_PER_DAY_CHOICES = MAX_PER_DAY_CHOICES.slice(1);
 
 export type IntervalChoice = (typeof INTERVAL_CHOICES)[number];
 export type FrequencyChoice = (typeof FREQUENCY_CHOICES)[number];
