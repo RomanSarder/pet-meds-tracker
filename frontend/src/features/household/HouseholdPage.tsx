@@ -157,7 +157,17 @@ function MemberRow({
           />
           <Menu.Portal>
             <Menu.Positioner anchor={rowRef} sideOffset={4} align="end">
-              <Menu.Popup style={MENU_POPUP_STYLE}>
+              {/*
+                `Menu.Portal` moves this popup to the end of `<body>` —
+                outside the `.ds-root` wrapper it renders under. Every DS token
+                is declared on `.ds-root`, never `:root`
+                (`components/ds/tokens/colors.css`), so without this class
+                `MENU_POPUP_STYLE`'s `var(--surface)` and `var(--line-quiet)`
+                resolve to nothing and the menu paints as bare text over the
+                page. Same fix, same reason, as `PetDetailPage.tsx` and
+                `LogAtTimeSheet.tsx`.
+              */}
+              <Menu.Popup className="ds-root" style={MENU_POPUP_STYLE}>
                 <Menu.Item
                   style={MENU_ITEM_STYLE}
                   onClick={() => {
@@ -410,7 +420,12 @@ export function HouseholdPage(): ReactElement {
       >
         <Dialog.Portal>
           <Dialog.Backdrop style={DIALOG_BACKDROP_STYLE} />
-          <Dialog.Popup style={DIALOG_POPUP_STYLE}>
+          {/*
+            `Dialog.Portal` moves this popup outside `.ds-root`, where every DS
+            token is declared — see the `Menu.Popup` note above. The backdrop
+            needs no class: its colour is a literal `rgba()`, not a token.
+          */}
+          <Dialog.Popup className="ds-root" style={DIALOG_POPUP_STYLE}>
             <Dialog.Title style={DIALOG_TITLE_STYLE}>
               {t("household.removeConfirm.title", { name: removeTargetName })}
             </Dialog.Title>
@@ -446,7 +461,8 @@ export function HouseholdPage(): ReactElement {
       <Dialog.Root open={leaveConfirmOpen} onOpenChange={setLeaveConfirmOpen}>
         <Dialog.Portal>
           <Dialog.Backdrop style={DIALOG_BACKDROP_STYLE} />
-          <Dialog.Popup style={DIALOG_POPUP_STYLE}>
+          {/* Same portal token-scope fix as the remove-member dialog above. */}
+          <Dialog.Popup className="ds-root" style={DIALOG_POPUP_STYLE}>
             <Dialog.Title style={DIALOG_TITLE_STYLE}>{t("household.leaveConfirm.title")}</Dialog.Title>
             <Dialog.Description style={DIALOG_DESCRIPTION_STYLE}>
               {willDeleteHousehold

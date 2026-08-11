@@ -164,6 +164,23 @@ describe("HouseholdPage", () => {
     expect(await screen.findByRole("dialog", { name: "Your name" })).toBeInTheDocument();
   });
 
+  it("keeps the portalled member overflow menu inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {
+    const self = user({ id: "u-self" });
+    const marta = user({ id: "u-marta", displayName: "Marta", isSelf: false, tint: 2 });
+    const repo = repoWith({ users: [self, marta] });
+    renderWithProviders(<HouseholdPage />, { repo });
+
+    const user2 = userEvent.setup();
+    await user2.click(await screen.findByRole("button", { name: "More options for Marta" }));
+    const menu = await screen.findByRole("menu");
+
+    // `Menu.Portal` moves the popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root`, so a popup that lands outside one paints
+    // `var(--surface)`/`var(--line-quiet)` as nothing.
+    expect(menu.closest(".ds-root")).not.toBeNull();
+  });
+
   it("the overflow on another member asks for confirmation before removing, and only removes after it", async () => {
     const self = user({ id: "u-self" });
     const marta = user({ id: "u-marta", displayName: "Marta", isSelf: false, tint: 2 });
@@ -275,6 +292,31 @@ describe("HouseholdPage", () => {
     await user2.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect((await repo.listUsers()).map((u) => u.id)).toContain("u-self");
+  });
+
+  it("keeps both portalled confirmation dialogs inside a .ds-root token scope, so they are not painted with unresolved tokens", async () => {
+    const self = user({ id: "u-self" });
+    const marta = user({ id: "u-marta", displayName: "Marta", isSelf: false, tint: 2 });
+    const repo = repoWith({ users: [self, marta] });
+    renderWithProviders(<HouseholdPage />, { repo });
+
+    const user2 = userEvent.setup();
+
+    // `Dialog.Portal` moves each popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root`, so a popup that lands outside one paints
+    // `var(--surface)`/`var(--line-quiet)` as nothing.
+    await user2.click(await screen.findByRole("button", { name: "More options for Marta" }));
+    await user2.click(await screen.findByRole("menuitem", { name: "Remove from household" }));
+    const removeDialog = await screen.findByRole("dialog", { name: "Remove Marta?" });
+    expect(removeDialog.closest(".ds-root")).not.toBeNull();
+
+    await user2.click(within(removeDialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await user2.click(screen.getByRole("button", { name: "Leave household" }));
+    const leaveDialog = await screen.findByRole("dialog", { name: "Leave household?" });
+    expect(leaveDialog.closest(".ds-root")).not.toBeNull();
   });
 
   it("Leave household states the household will be deleted when this is the last member, and only deletes on confirm", async () => {

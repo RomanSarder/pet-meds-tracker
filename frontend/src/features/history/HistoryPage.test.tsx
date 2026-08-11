@@ -699,6 +699,23 @@ describe("HistoryView", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("keeps the portalled export menu inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {
+    const repo = createMemoryRepo();
+    const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));
+    renderWithProviders(<HistoryView petId={pet.id} />, { repo });
+    const user = userEvent.setup();
+    await screen.findByText("History");
+
+    await user.click(screen.getByRole("button", { name: "Export history" }));
+    const menu = await screen.findByRole("menu");
+
+    // `Menu.Portal` moves the popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root`, so a popup that lands outside one paints
+    // `var(--surface)`/`var(--line-quiet)` as nothing.
+    expect(menu.closest(".ds-root")).not.toBeNull();
+  });
+
   it("dismisses the export menu on a click outside it", async () => {
     const repo = createMemoryRepo();
     const pet = await withClock(FIXTURE_NOW, () => repo.createPet({ name: "Clover", species: "rabbit" }));

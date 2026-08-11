@@ -282,6 +282,14 @@ export function HistoryView({ petId }: { petId: string }) {
         <Menu.Portal>
           <Menu.Positioner sideOffset={4} align="end">
             <Menu.Popup
+              // `Menu.Portal` moves this popup to the end of `<body>` —
+              // outside the `.ds-root` wrapper it renders under. Every DS
+              // token is declared on `.ds-root`, never `:root`
+              // (`components/ds/tokens/colors.css`), so without this class the
+              // `var(--surface)` and `var(--line-quiet)` below resolve to
+              // nothing and the menu paints as bare text over the page. Same
+              // fix, same reason, as `PetDetailPage.tsx` and `LogAtTimeSheet.tsx`.
+              className="ds-root"
               style={{
                 minWidth: 180,
                 padding: "6px 0",

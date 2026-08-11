@@ -188,6 +188,21 @@ describe("TodayDoseRow", () => {
     expect(screen.getByRole("menuitem", { name: "Open course" })).toBeInTheDocument();
   });
 
+  it("keeps the portalled overflow menu inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<TodayDoseRow dose={makeDose("due")} {...handlers()} />);
+
+    await user.click(await screen.findByRole("button", { name: /more options/i }));
+    const menu = await screen.findByRole("menu");
+
+    // `Menu.Portal` moves the popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root`, so a popup that lands outside one paints
+    // `var(--surface)`/`var(--line-quiet)` as nothing — which is what made this
+    // menu read as floating text over a transparent background.
+    expect(menu.closest(".ds-root")).not.toBeNull();
+  });
+
   it("raises onSkip from the menu without bubbling to the card wrapper", async () => {
     const user = userEvent.setup();
     const props = handlers();

@@ -58,6 +58,18 @@ function renderDialog(medication: Medication) {
 // every test below is a `findBy*`, not a `getBy*`.
 
 describe("UpdateStockDialog", () => {
+  it("keeps the portalled dialog inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {
+    renderDialog(liquidMedication());
+
+    const dialog = await screen.findByRole("dialog");
+
+    // `Dialog.Portal` moves the popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root`, so a popup that lands outside one paints
+    // `var(--surface)`/`var(--line-quiet)` as nothing.
+    expect(dialog.closest(".ds-root")).not.toBeNull();
+  });
+
   it("saves a typed units figure as a NEW StockAdjustment and updates medication.stockUnits", async () => {
     const user = userEvent.setup();
     const medication = liquidMedication();
