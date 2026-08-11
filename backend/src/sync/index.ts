@@ -352,26 +352,32 @@ function excludedSetClause(table: SyncTable): Record<string, SQL> {
  * never be overwritten at all, by any household, since `onConflictDoNothing`
  * has no update path to guard.
  *
- * `callerId` overrides `actorId` on every ledger row before insert, ignoring
- * whatever the client's DTO said: the client previously supplied `actorId`
- * verbatim, which meant any authenticated caller could attribute a dose (or
- * course/stock event) to an arbitrary id, including one nobody in the
- * household actually is. Since every `/sync/push` call is authenticated as
- * exactly the device pushing its OWN previously-created rows, the session's
- * own id is always the correct attribution regardless of what local id the
- * row happened to be stamped with client-side — this is also what makes an
- * offline-then-synced dose land under whoever actually logged it rather
- * than whoever's device happens to sync first: each device only ever pushes
- * the rows it itself created, under its own session, so "the pusher" and
- * "the logger" are the same person for every row that reaches here. Mutable
- * tables (pets/medications/courses) have no `actorId` column and are
- * untouched by this.
+ * `actorId` on a ledger row is trusted verbatim ONLY when it names a member
+ * of the CALLER's OWN household — `allowedActorIds` (built once per push
+ * in the route handler below, never per row) is that household's every
+ * member canonical `users.id` UNION every one of their disclosed
+ * `aliasIds`. The user's own decision: household members are mutually
+ * trusted with attribution (SPEC §5, "no permissions"), so one member
+ * pushing a row that legitimately names another member — e.g. a
+ * merge-mode `importHousehold` bringing in someone else's own dose/course/
+ * stock history, still carrying THEIR `actorId` — must not get silently
+ * reattributed to the pusher; the frontend used to solve this by simply
+ * never pushing such a row at all, which meant it was stranded forever the
+ * moment its true author's own device never came back online (worse than
+ * mis-attribution, for a medication tracker: a dose nobody can see was
+ * given invites a duplicate). `callerId` is the fallback for anything
+ * else — an id belonging to nobody, or to a member of a DIFFERENT
+ * household entirely — which is what keeps this from reopening the
+ * cross-household attribution-spoofing hole the earlier, unconditional
+ * version of this stamping closed. Mutable tables (pets/medications/
+ * courses) have no `actorId` column and are untouched by this.
  */
 async function pushTable(
   db: any,
   spec: SyncTableSpec,
   householdId: string,
   callerId: string,
+  allowedActorIds: ReadonlySet<string>,
   dtoRows: unknown[] | undefined,
 ): Promise<{ count: number; maxSeq: number }> {
   if (!dtoRows || dtoRows.length === 0) {
@@ -381,7 +387,8 @@ async function pushTable(
   const values = dtoRows.map((row) => spec.fromDto(row, householdId));
   if (spec.kind === "ledger") {
     for (const value of values) {
-      (value as { actorId: string }).actorId = callerId;
+      const actorId = (value as { actorId: string }).actorId;
+      (value as { actorId: string }).actorId = allowedActorIds.has(actorId) ? actorId : callerId;
     }
   }
 
@@ -455,6 +462,34 @@ async function pullRoster(db: any, householdId: string, callerUserId: string): P
   return rows.map(toMemberDto);
 }
 
+/**
+ * Every actor id `/sync/push` will trust verbatim on a ledger row: the
+ * caller's OWN household's members, by canonical `users.id`, UNION every
+ * one of their disclosed `aliasIds` (see `users.aliasIds`'s schema comment
+ * — a member's pre-fix local id, which their own already-pushed history may
+ * still be stamped with). `householdId` MUST be the session-derived value
+ * `requireHousehold` already resolved — never anything from the request
+ * body — or a client could simply claim membership in a household it
+ * isn't in and launder attribution to one of ITS members instead. One
+ * query for the whole push, not one per row: `pushTable` is called once
+ * per table (six times, at most), and this set is built once up front and
+ * passed to all of them.
+ */
+async function allowedActorIdsForHousehold(db: any, householdId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ id: users.id, aliasIds: users.aliasIds })
+    .from(users)
+    .where(eq(users.householdId, householdId));
+  const allowed = new Set<string>();
+  for (const row of rows as Array<{ id: string; aliasIds: string[] | null }>) {
+    allowed.add(row.id);
+    for (const alias of row.aliasIds ?? []) {
+      allowed.add(alias);
+    }
+  }
+  return allowed;
+}
+
 export default fastifyPlugin(async (fastify) => {
   // MUST be awaited — see household/index.ts for why a bare register() leaves
   // `fastify.authenticate` undefined at route-definition time.
@@ -469,6 +504,9 @@ export default fastifyPlugin(async (fastify) => {
       const { householdId } = resolved;
 
       const changes = request.body?.changes ?? {};
+      // One query for the whole request (not per row, not per table) —
+      // see `allowedActorIdsForHousehold`'s doc comment.
+      const allowedActorIds = await allowedActorIdsForHousehold(fastify.db, householdId);
 
       let accepted = 0;
       let cursorSeq = 0;
@@ -477,7 +515,14 @@ export default fastifyPlugin(async (fastify) => {
       // or none does (W9-DESIGN §D5).
       await fastify.db.transaction(async (tx: any) => {
         for (const spec of SYNC_TABLES) {
-          const { count, maxSeq } = await pushTable(tx, spec, householdId, request.userId, changes[spec.key]);
+          const { count, maxSeq } = await pushTable(
+            tx,
+            spec,
+            householdId,
+            request.userId,
+            allowedActorIds,
+            changes[spec.key],
+          );
           accepted += count;
           cursorSeq = Math.max(cursorSeq, maxSeq);
         }

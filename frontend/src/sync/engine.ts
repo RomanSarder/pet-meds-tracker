@@ -36,30 +36,27 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
     const backup = await repo.exportHousehold();
     const nowMs = clock.now().getTime();
 
-    // A3: the server now stamps every pushed ledger row's `actorId` from
-    // THIS device's own session (`backend/src/sync/index.ts`'s `pushTable`)
-    // — correct for a row this device actually logged, but that
-    // justification ("the pusher and the logger are always the same
-    // person") does not hold for a row this device merely learned about
-    // via `importHousehold` (merge OR replace mode round-trips whatever
-    // this device already has, and `adoptJoinedHousehold`'s replace-mode
-    // round-trip is safe by construction, but merge-mode import can
-    // legitimately bring in ANOTHER member's own dose/course/stock history,
-    // preserving their `actorId` verbatim — see `Repo.applyRemoteChanges`'s
-    // doc comment). Pushing one of those would let the server's stamping
-    // silently reattribute a genuinely-someone-else's-event to whoever
-    // happens to push it next. A ledger row is only ever "this device's to
-    // push" when its `actorId` is the local self id or one of self's own
-    // disclosed aliases — a row that fails that check is simply never
-    // included; if the row's true author's own device comes back online,
-    // IT pushes it correctly (or, per `Repo.reconcileSelfId`'s doc comment,
-    // it stays unremediated if that device never does — the same
-    // already-documented residual gap, not a new one).
-    const self = await repo.getCurrentUser();
-    const ownIds = new Set<string>([self.id, ...(self.aliasIds ?? [])]);
-    const isOwn = (row: { actorId: string }): boolean => ownIds.has(row.actorId);
-
-    const candidateDoseEvents = backup.doseEvents.filter((e) => isPushable(e, lastPushedAt) && isOwn(e));
+    // Every ledger row newer than the watermark is pushed, regardless of
+    // whose `actorId` it carries — including one this device merely
+    // learned about via merge-mode `importHousehold` (which legitimately
+    // brings in ANOTHER member's own dose/course/stock history, preserving
+    // their `actorId` verbatim; see `Repo.applyRemoteChanges`'s doc
+    // comment). An earlier version of this filtered such rows out before
+    // push, on the theory that the server would otherwise reattribute them
+    // to whoever pushes — true at the time, but it meant a row whose true
+    // author's own device never comes back online was stranded in this
+    // device's IndexedDB forever, invisible to the rest of the household.
+    // For a medication tracker that is worse than the mis-attribution it
+    // avoided: a dose nobody can see was given invites a duplicate.
+    // `backend/src/sync/index.ts`'s `pushTable` now resolves this the other
+    // way — it trusts a client-supplied `actorId` verbatim whenever it
+    // names a member of the CALLER's OWN household (by canonical id or
+    // disclosed alias), computed server-side from the session, and only
+    // overrides an id naming nobody in that household (garbage, or a
+    // different household's member — the cross-household spoofing hole
+    // stays closed). So every row this device holds is safe to push
+    // exactly as logged: no filter needed here at all.
+    const candidateDoseEvents = backup.doseEvents.filter((e) => isPushable(e, lastPushedAt));
     const quarantined = candidateDoseEvents.filter((e) => isQuarantined(e, nowMs));
     const pushableDoseEvents = candidateDoseEvents.filter((e) => !isQuarantined(e, nowMs));
 
@@ -68,8 +65,8 @@ export function createSyncEngine({ repo, transport, clock }: CreateSyncEngineOpt
       medications: backup.medications.filter((r) => isPushable(r, lastPushedAt)),
       courses: backup.courses.filter((r) => isPushable(r, lastPushedAt)),
       doseEvents: pushableDoseEvents,
-      stockAdjustments: backup.stockAdjustments.filter((r) => isPushable(r, lastPushedAt) && isOwn(r)),
-      courseEvents: (backup.courseEvents ?? []).filter((r) => isPushable(r, lastPushedAt) && isOwn(r)),
+      stockAdjustments: backup.stockAdjustments.filter((r) => isPushable(r, lastPushedAt)),
+      courseEvents: (backup.courseEvents ?? []).filter((r) => isPushable(r, lastPushedAt)),
     });
 
     if (Object.keys(pushPayload).length > 0) {

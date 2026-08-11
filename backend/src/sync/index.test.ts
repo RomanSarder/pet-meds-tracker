@@ -341,7 +341,13 @@ describe("auth and household gates", () => {
 describe("POST /sync/push", () => {
   it("ignores a householdId supplied in the body, stamping the session's household instead", async () => {
     const petSpec = TABLE_SPECS[0];
-    const db = mockDbRecording([await buildSession()], [], [makeUser({ householdId: HOUSEHOLD_A })], [{ syncSeq: 2 }]);
+    const db = mockDbRecording(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: HOUSEHOLD_A })],
+      [], // allowedActorIdsForHousehold's household roster select
+      [{ syncSeq: 2 }],
+    );
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -365,7 +371,7 @@ describe("POST /sync/push", () => {
     const petSpec = TABLE_SPECS[0];
     // Simulates Postgres skipping the update because `excluded.updated_at >
     // table.updated_at` was false — no row comes back from RETURNING.
-    const db = mockDbRecording([await buildSession()], [], [makeUser()], []);
+    const db = mockDbRecording([await buildSession()], [], [makeUser()], [], []);
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -384,7 +390,7 @@ describe("POST /sync/push", () => {
 
   it("LWW: a newer updatedAt wins (guard passes, DB returns the updated row)", async () => {
     const petSpec = TABLE_SPECS[0];
-    const db = mockDbRecording([await buildSession()], [], [makeUser()], [{ syncSeq: 9 }]);
+    const db = mockDbRecording([await buildSession()], [], [makeUser()], [], [{ syncSeq: 9 }]);
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -399,7 +405,7 @@ describe("POST /sync/push", () => {
   it("ledger rows are never overwritten, even resent under the same household", async () => {
     const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
     // Simulates the id already existing: ON CONFLICT DO NOTHING returns no row.
-    const db = mockDbRecording([await buildSession()], [], [makeUser()], []);
+    const db = mockDbRecording([await buildSession()], [], [makeUser()], [], []);
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -416,17 +422,87 @@ describe("POST /sync/push", () => {
     expect(conflictCall!.args).toHaveLength(0);
   });
 
-  it("stamps a ledger row's actorId from the authenticated session, ignoring whatever the client supplied", async () => {
+  // --------------------------------------------------------------------
+  // actorId trust: household-scoped, not caller-only. A client-supplied
+  // actorId is trusted verbatim when it names a member of the CALLER's
+  // OWN household (canonical id or disclosed alias) — this is what lets a
+  // merge-imported row genuinely authored by another member keep its real
+  // attribution when pushed, rather than being stranded forever (the
+  // earlier fix's frontend-side filter) or silently reattributed to
+  // whoever pushes it (the original bug). Anything else — an id naming
+  // nobody, or a member of a DIFFERENT household — is still overridden
+  // with the caller's own session id, which is what keeps the
+  // cross-household spoofing hole closed.
+  // --------------------------------------------------------------------
+
+  const HOUSEHOLD_A_MEMBER_ID = "77777777-0000-0000-0000-000000000077";
+  const HOUSEHOLD_A_MEMBER_ALIAS_ID = "77777777-0000-0000-0000-000000000078";
+
+  it("keeps a client-supplied actorId that names another member of the caller's OWN household (by canonical id)", async () => {
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const db = mockDbRecording(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: HOUSEHOLD_A })],
+      // allowedActorIdsForHousehold: the caller plus one other member.
+      [{ id: USER_ID, aliasIds: [] }, { id: HOUSEHOLD_A_MEMBER_ID, aliasIds: [] }],
+      [{ syncSeq: 1 }],
+    );
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: { changes: { doseEvents: [doseSpec.dto({ actorId: HOUSEHOLD_A_MEMBER_ID })] } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().accepted).toBe(1);
+
+    const valuesCall = db.calls.find((c: any) => c.method === "values");
+    const insertedRow = valuesCall!.args[0] as any[];
+    expect(insertedRow[0].actorId).toBe(HOUSEHOLD_A_MEMBER_ID);
+  });
+
+  it("keeps a client-supplied actorId that matches another household member's DISCLOSED ALIAS id", async () => {
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const db = mockDbRecording(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: HOUSEHOLD_A })],
+      [
+        { id: USER_ID, aliasIds: [] },
+        { id: HOUSEHOLD_A_MEMBER_ID, aliasIds: [HOUSEHOLD_A_MEMBER_ALIAS_ID] },
+      ],
+      [{ syncSeq: 1 }],
+    );
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: { changes: { doseEvents: [doseSpec.dto({ actorId: HOUSEHOLD_A_MEMBER_ALIAS_ID })] } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().accepted).toBe(1);
+
+    const valuesCall = db.calls.find((c: any) => c.method === "values");
+    const insertedRow = valuesCall!.args[0] as any[];
+    // Not overridden to USER_ID, and not left as some OTHER value either —
+    // exactly the alias id, unchanged.
+    expect(insertedRow[0].actorId).toBe(HOUSEHOLD_A_MEMBER_ALIAS_ID);
+  });
+
+  it("stamps a ledger row's actorId from the authenticated session when it names nobody in the caller's household — a garbage/unknown id", async () => {
     // The identity-mismatch fix's other half: the client used to control
     // `actorId` outright, so any authenticated caller could attribute a
-    // dose to an arbitrary id — including one belonging to nobody, or to
-    // another household's member entirely. Every push is authenticated as
-    // exactly the device pushing its own previously-created rows, so the
-    // session's own id is always the correct attribution regardless of
-    // what the row was stamped with client-side.
+    // dose to an arbitrary id — including one belonging to nobody at all.
     const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
     const IMPOSTOR_ACTOR_ID = "99999999-0000-0000-0000-000000000099";
-    const db = mockDbRecording([await buildSession()], [], [makeUser({ householdId: HOUSEHOLD_A })], [{ syncSeq: 4 }]);
+    const db = mockDbRecording(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: HOUSEHOLD_A })],
+      [{ id: USER_ID, aliasIds: [] }], // the caller's household roster — IMPOSTOR_ACTOR_ID belongs to no one in it
+      [{ syncSeq: 4 }],
+    );
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -442,12 +518,23 @@ describe("POST /sync/push", () => {
     expect(insertedRow[0].actorId).not.toBe(IMPOSTOR_ACTOR_ID);
   });
 
-  it("stamps actorId from the session even when the impersonated id names a real member of a DIFFERENT household — cross-household attribution isolation", async () => {
+  it("stamps actorId from the session when the impersonated id names a real member of a DIFFERENT household — the isolation test", async () => {
     const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
     const HOUSEHOLD_B_MEMBER_ID = "88888888-0000-0000-0000-000000000088";
     // The caller is a member of household A; the payload tries to attribute
     // the dose to someone else's (household B's) account id entirely.
-    const db = mockDbRecording([await buildSession()], [], [makeUser({ householdId: HOUSEHOLD_A })], [{ syncSeq: 1 }]);
+    // `allowedActorIdsForHousehold` is scoped to HOUSEHOLD_A only (via
+    // `eq(users.householdId, householdId)`, session-derived) — the
+    // HOUSEHOLD_B_MEMBER_ID row would only ever appear in this query's
+    // result if that scoping were removed or a client-supplied household
+    // id were honoured instead, which is exactly what this test guards.
+    const db = mockDbRecording(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: HOUSEHOLD_A })],
+      [{ id: USER_ID, aliasIds: [] }], // household A's own roster — no HOUSEHOLD_B_MEMBER_ID here
+      [{ syncSeq: 1 }],
+    );
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -464,11 +551,67 @@ describe("POST /sync/push", () => {
     expect(insertedRow[0].householdId).toBe(HOUSEHOLD_A);
     expect(insertedRow[0].actorId).toBe(USER_ID);
     expect(insertedRow[0].actorId).not.toBe(HOUSEHOLD_B_MEMBER_ID);
+
+    // Decisive on its own, not merely coincidental with the mock's queued
+    // rows (mockDbRecording serves those positionally regardless of the
+    // real predicate — see A5): the roster select's own WHERE clause is
+    // asserted directly. It is the 4th `.where()` call in sequence:
+    // session lookup, session-refresh, `requireHousehold`'s caller select,
+    // then this one.
+    const rosterSelectWhere = db.calls.filter((c: any) => c.method === "where")[3];
+    expect(rosterSelectWhere).toBeDefined();
+    const { sql: rosterSql, params: rosterParams } = renderSql(rosterSelectWhere.args[0]);
+    expect(rosterSql).toContain("household_id");
+    expect(rosterParams).toContain(HOUSEHOLD_A);
+    expect(rosterParams).not.toContain(HOUSEHOLD_B);
+  });
+
+  it("resolves the allowed-actor set with exactly ONE query per push, scoped by the session's own household — never a client-supplied one, and never once per row", async () => {
+    const doseSpec = TABLE_SPECS.find((s) => s.key === "doseEvents")!;
+    const db = mockDbRecording(
+      [await buildSession()],
+      [],
+      [makeUser({ householdId: HOUSEHOLD_A })],
+      [{ id: USER_ID, aliasIds: [] }],
+      [{ syncSeq: 1 }],
+      [{ syncSeq: 2 }],
+      [{ syncSeq: 3 }],
+    );
+    const app = build(db);
+    const res = await authed(app, {
+      method: "POST",
+      url: "/sync/push",
+      payload: {
+        householdId: HOUSEHOLD_B,
+        changes: {
+          doseEvents: [
+            doseSpec.dto({ id: "40000000-0000-0000-0000-000000000011" }),
+            doseSpec.dto({ id: "40000000-0000-0000-0000-000000000012" }),
+            doseSpec.dto({ id: "40000000-0000-0000-0000-000000000013" }),
+          ],
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Exactly two `select`s total: the auth plugin's session lookup and
+    // `requireHousehold`'s caller lookup — no, three: those two plus the
+    // ONE `allowedActorIdsForHousehold` roster select, regardless of the
+    // three-row batch just pushed.
+    const selectCalls = db.calls.filter((c: any) => c.method === "select");
+    expect(selectCalls).toHaveLength(3);
+    const rosterSelectWhere = db.calls.filter((c: any) => c.method === "where")[3];
+    const { sql, params } = renderSql(rosterSelectWhere.args[0]);
+    expect(sql).toContain("household_id");
+    // Scoped to the caller's OWN session-derived household — HOUSEHOLD_A —
+    // never the HOUSEHOLD_B the payload tried to supply.
+    expect(params).toContain(HOUSEHOLD_A);
+    expect(params).not.toContain(HOUSEHOLD_B);
   });
 
   it("leaves mutable-table rows (no actorId column) untouched by the stamping logic", async () => {
     const petSpec = TABLE_SPECS[0];
-    const db = mockDbRecording([await buildSession()], [], [makeUser()], [{ syncSeq: 1 }]);
+    const db = mockDbRecording([await buildSession()], [], [makeUser()], [], [{ syncSeq: 1 }]);
     const app = build(db);
     const res = await authed(app, {
       method: "POST",
@@ -488,6 +631,7 @@ describe("POST /sync/push", () => {
       [await buildSession()],
       [],
       [makeUser()],
+      [],
       [{ syncSeq: 2 }],
       [{ syncSeq: 3 }],
     );
