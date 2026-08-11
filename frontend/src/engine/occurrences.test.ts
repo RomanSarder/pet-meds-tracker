@@ -267,6 +267,30 @@ describe("getOccurrences — fromLastDose", () => {
     expect(getOccurrences("2026-08-07", ctx)).toHaveLength(0);
   });
 
+  // Generic-arithmetic regression guard, NOT a test of the "Every 2h" UI
+  // choice: `intervalHours` is a plain `number` (domain/types.ts) and this
+  // file's arithmetic was never touched to add that choice — it already
+  // handled 2 before. Kept only to pin the boundary value now that the UI
+  // can produce it; the UI wiring itself is covered in scheduleChoice.test.ts.
+  it("generic fromLastDose arithmetic: intervalHours: 2 lands the chain 2h after the last given dose", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 2 },
+      startDate: "2026-08-01",
+    });
+    const given = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      status: "given",
+      givenAt: "2026-08-06T10:00:00.000Z",
+      loggedAt: "2026-08-06T10:00:00.000Z",
+    });
+    const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
+    // Anchor 2026-08-06T10:00Z + 2h = 2026-08-06T12:00Z, same day.
+    const occs = getOccurrences("2026-08-06", ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe("2026-08-06T12:00:00.000Z");
+  });
+
   it("anchors from resumedAt when it is later than the last given event", () => {
     const course = makeCourse({
       schedule: { kind: "fromLastDose", intervalHours: 8 },
