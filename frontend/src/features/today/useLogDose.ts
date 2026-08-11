@@ -256,9 +256,24 @@ export function useLogDose(
         ) {
           const attemptAt = vars.givenAt ? new Date(vars.givenAt) : now();
           const dueAt = vars.scheduledFor ? new Date(vars.scheduledFor) : attemptAt;
+          // The dialog's OWN name resolution — not `name` above. `displayNameFor`
+          // returns the actor's raw, stored `displayName` VERBATIM (SPEC §10a:
+          // names are DATA, never translated) — for an un-renamed self-user
+          // that literal string IS "You" (`DEFAULT_SELF_DISPLAY_NAME`,
+          // `@/domain`), which stayed untranslated inside Ukrainian dialog
+          // prose. `HouseholdPage`'s member list solves the identical
+          // problem for the self row the same way: `isSelf`, not the raw
+          // name, decides whether to substitute a genuinely localized "you"
+          // (`household.memberLine.you` there; `today.earlyGive.you` here —
+          // this template's own atomic word, since it needs just the noun,
+          // not a whole phrase). Every OTHER `displayNameFor` call site
+          // (the flat toast a few lines below included) still shows the
+          // raw, untranslated "You" — a pre-existing, wider issue this fix
+          // deliberately does not touch.
+          const isSelf = (membersQuery.data ?? []).find((u) => u.id === error.actorId)?.isSelf ?? false;
           opts.onEarlyGiveConflict({
             vars,
-            name,
+            name: isSelf ? t("today.earlyGive.you") : name,
             status: error.status,
             sinceLast: elapsedSince(new Date(error.givenAt), attemptAt),
             early: elapsedSince(attemptAt, dueAt),

@@ -130,6 +130,13 @@ function martaOf(data: FixtureData): { id: string } {
   return marta;
 }
 
+/** THIS device's own member — picked by `isSelf`, not by name (the fixture's self user is "Roman"). */
+function selfOf(data: FixtureData): { id: string } {
+  const self = data.users.find((u) => u.isSelf);
+  if (!self) throw new Error("fixture drift: no isSelf member");
+  return self;
+}
+
 /**
  * Inserts a live `DoseEvent` for `course`, attributed to someone other than
  * the signed-in device, without going through `logDose` — which always
@@ -646,6 +653,54 @@ describe("TodayPage", () => {
     expect(await screen.findByText("Already given by Marta at 08:45")).toBeInTheDocument();
     expect(screen.queryByText(/early\?$/)).not.toBeInTheDocument();
     expect(await repo.listDoseEvents({})).toEqual(before);
+  });
+
+  // Live-UI regression: the dialog's Ukrainian body read "...(You)." — the
+  // English word untranslated inside otherwise-Ukrainian prose — whenever the
+  // colliding dose's actor was THIS device's own. Root cause: `displayNameFor`
+  // returns a self-user's raw, stored `displayName` VERBATIM (SPEC §10a),
+  // and an un-renamed self-user's stored name literally IS the English
+  // "You" (`DEFAULT_SELF_DISPLAY_NAME`). Fixed the same way
+  // `household.memberLine.you` already handles the self ROW in the member
+  // list: `isSelf`, not the raw name, decides — the fixture's self user is
+  // named "Roman" (`selfOf`, picked by `isSelf`, not by name), so this test
+  // would still see "Roman" leak through untranslated if the fix ever
+  // regressed to keying off the literal string "You" instead of `isSelf`.
+  it("localises the actor token inside the Ukrainian early-give dialog when the colliding dose was logged by THIS device", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: LATER_TODAY });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "later");
+
+    const self = selfOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: self.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    renderWithProviders(
+      <>
+        <TodayPage />
+        <LocationProbe />
+      </>,
+      { repo, route: "/today", locale: "uk" },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Дати" }));
+
+    expect(await screen.findByText("Дати Metacam раніше?")).toBeInTheDocument();
+    // "Ви" (SPEC-consistent with `household.memberLine.you`'s self-row
+    // wording), never the raw stored "You" or the self user's real name
+    // ("Roman") that `displayNameFor` would otherwise have surfaced.
+    const description = await screen.findByText(
+      "Попередню дозу дано 30 хв тому (Ви). Ця доза знадобиться ще через 45 хв.",
+    );
+    expect(description).toBeInTheDocument();
+    expect(description).not.toHaveTextContent(/\bYou\b/);
+    expect(description).not.toHaveTextContent("Roman");
   });
 
   it("keeps the portalled early-give confirm dialog inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {

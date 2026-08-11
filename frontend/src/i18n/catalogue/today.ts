@@ -236,6 +236,19 @@ export interface TodayMessages {
    * DIFFERENT, next occurrence early.
    */
   "today.earlyGive.detailSkipped": (p: { name: string; sinceLast: string; early: string }) => string;
+  /**
+   * The atomic word `useLogDose.ts` substitutes for `detailGiven`/
+   * `detailSkipped`'s `name` when the colliding dose's actor is THIS
+   * device's own self user. `displayNameFor` (`@/domain`) returns a
+   * self-user's raw, stored `displayName` verbatim — SPEC §10a: names are
+   * DATA, never translated — and an un-renamed self-user's stored name
+   * literally IS the English word "You" (`DEFAULT_SELF_DISPLAY_NAME`),
+   * which stayed untranslated inside Ukrainian dialog prose otherwise. Same
+   * fix `household.memberLine.you` already applies for the self row in the
+   * member list — `isSelf`, not the raw name, decides — just this
+   * template's own bare noun rather than a whole phrase.
+   */
+  "today.earlyGive.you": () => string;
   /** Footer's negative action. Withdraws — logs nothing. */
   "today.earlyGive.cancel": () => string;
   /** Footer's positive action — logs the dose now and re-anchors the chain (SPEC §3b). */
@@ -355,6 +368,7 @@ export const enToday = (f: Formatters): TodayMessages => ({
     `${p.name} gave the last dose ${p.sinceLast} ago. This one isn't due for another ${p.early}.`,
   "today.earlyGive.detailSkipped": (p) =>
     `${p.name} skipped the last dose ${p.sinceLast} ago. This one isn't due for another ${p.early}.`,
+  "today.earlyGive.you": () => "You",
   "today.earlyGive.cancel": () => "Cancel",
   "today.earlyGive.confirm": () => "Give anyway",
 });
@@ -510,6 +524,11 @@ export const ukToday = (f: Formatters): TodayMessages => ({
     `Попередню дозу дано ${p.sinceLast} тому (${p.name}). Ця доза знадобиться ще через ${p.early}.`,
   "today.earlyGive.detailSkipped": (p) =>
     `Попередню дозу пропущено ${p.sinceLast} тому (${p.name}). Ця доза знадобиться ще через ${p.early}.`,
+  // "Ви" — the same word `household.memberLine.you` already uses for the
+  // self row in the member list, not the literal English "You" that would
+  // otherwise land here via `displayNameFor`'s raw, un-renamed self
+  // `displayName` (`useLogDose.ts` substitutes this key instead, `isSelf`-gated).
+  "today.earlyGive.you": () => "Ви",
   "today.earlyGive.cancel": () => "Скасувати",
   "today.earlyGive.confirm": () => "Все одно дати",
 });
