@@ -309,9 +309,9 @@ describe("createMemoryRepo — logDose concurrent-log dedup guard", () => {
 
   // Latent fix: the same-occurrence hard block now keys on `scheduledFor`
   // unconditionally, including `null` (the "chain never started" sentinel)
-  // — `repo.types.ts`'s doc always said `allowWithinGrace` never bypasses
+  // — `repo.types.ts`'s doc always said `confirmedGive` never bypasses
   // it, but the guard used to carve `null` out of it silently.
-  it("fromLastDose: scheduledFor: null is the SAME occurrence every time — rejected at any gap, even with allowWithinGrace", async () => {
+  it("fromLastDose: scheduledFor: null is the SAME occurrence every time — rejected at any gap, even with confirmedGive", async () => {
     setClock(fixedClock("2026-08-08T07:00:00.000Z"));
     const repo = createMemoryRepo();
     const course = fixtures.courses.find(
@@ -327,7 +327,7 @@ describe("createMemoryRepo — logDose concurrent-log dedup guard", () => {
       repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1 }),
     ).rejects.toBeInstanceOf(DuplicateDoseError);
     await expect(
-      repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1, allowWithinGrace: true }),
+      repo.logDose({ courseId: course.id, status: "given", scheduledFor: null, amount: 1, confirmedGive: true }),
     ).rejects.toBeInstanceOf(DuplicateDoseError);
 
     expect(await repo.listDoseEvents({ courseId: course.id })).toHaveLength(1);

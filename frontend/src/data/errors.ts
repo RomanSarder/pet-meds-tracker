@@ -24,11 +24,11 @@ export class RetractWindowExpiredError extends Error {
  *
  * `scheduledFor` is the colliding event's own occurrence key half — the caller needs it to tell
  * apart the two guards that both throw this SAME error: an exact `scheduledFor` match (the
- * same-occurrence hard block, never bypassable) from a grace-window hit on a DIFFERENT occurrence
- * (bypassable via `allowWithinGrace`, and the one the early-give confirm dialog is for). Without
- * it, a caller offering that dialog whenever `earlyGive` is set cannot distinguish "give this
- * anyway?" from "this exact dose was already given" — see the F2 fix in `useLogDose.ts`'s
- * `onError`, which gates the dialog on `error.scheduledFor !== vars.scheduledFor`.
+ * same-occurrence hard block, never bypassable — a double-tap of one row) from a grace-window hit
+ * on a DIFFERENT occurrence (answered by the give-confirm dialog, and retried with
+ * `confirmedGive`). Without it, a caller cannot distinguish "give this anyway?" from "this exact
+ * dose was already given" — see `useLogDose.ts`'s `onError`, which gates the dialog on
+ * `error.scheduledFor !== vars.scheduledFor`.
  */
 export class DuplicateDoseError extends Error {
   readonly existingEventId: string;
@@ -48,11 +48,14 @@ export class DuplicateDoseError extends Error {
 }
 
 /**
- * The hard floor beneath `allowWithinGrace` (`EARLY_GIVE_FLOOR_MIN`, `@/domain`): thrown instead
- * of `DuplicateDoseError` when the attempted `givenAt` lands within the floor of ANY live dose
- * already on the course, so the caller can tell it apart and refuse flatly — no early-give
- * dialog, no retry path, because none exists for this one. Checked unconditionally, before the
- * bypassable grace-window heuristic, so `allowWithinGrace: true` cannot route around it either.
+ * The very-recent-dose guard (`EARLY_GIVE_FLOOR_MIN`, `@/domain`): thrown instead of
+ * `DuplicateDoseError` when the attempted `givenAt` lands within the floor of ANY live dose
+ * already on the course. A separate type because the two need different words — this one has no
+ * occurrence to compare against and no actor worth naming, only "a dose went in N minutes ago".
+ *
+ * SPEC §5: like the grace-window guard, this one ASKS. It used to be an unbypassable refusal with
+ * no retry path at all, which meant a carer told to give another dose simply could not record it.
+ * `confirmedGive` now clears it.
  */
 export class TooSoonSinceLastDoseError extends Error {
   readonly minutesSinceLast: number;

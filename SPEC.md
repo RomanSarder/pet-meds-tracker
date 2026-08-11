@@ -487,9 +487,25 @@ point is answering "has this already been given?", not watching each other.
 
 **Conflicts.** Two people logging the same dose within the grace window produce one
 
-`DoseEvent`; the second log is rejected client-side with "Already given by Marta at 07:12".
+`DoseEvent`. Re-submitting the *identical* occurrence is a double-tap and is rejected
 
-Elsewhere, last-write-wins per entity (§9) is sufficient.
+client-side with "Already given by Marta at 07:12" — that dose is already on record and the row
+
+already says so. Elsewhere, last-write-wins per entity (§9) is sufficient.
+
+**Nothing refuses a dose.** Every other guard on logging is a heuristic — a dose landing within
+
+the grace window of a *different* occurrence, or within `EARLY_GIVE_FLOOR_MIN` of any dose on the
+
+course — and a heuristic **asks**, showing what it collided with and offering to record the dose
+
+anyway. This holds for every state a row can be in and every way to log one: Give, Skip, "log at
+
+a different time", **Start course**. It is the same reasoning §3b-i's cap already follows: a
+
+carer told by a vet to give another dose must be able to, and a dose the app refused is a dose
+
+that got given and never recorded — strictly worse than a recorded exception.
 
 **Sync.** Sharing requires a server, which makes §9's "design for a later server sync" a v1
 

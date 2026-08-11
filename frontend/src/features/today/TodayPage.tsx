@@ -39,7 +39,7 @@ import { TodayDoseRow } from "./TodayDoseRow";
 import { buildTodayView, greetingFor, scheduledForOf } from "./todayModel";
 import type { LogAtTimeContext, TodayDose, TodayPetGroup } from "./types";
 import { useDailySweep } from "./useDailySweep";
-import { useLogDose, type EarlyGiveConflict, type LogDoseVars } from "./useLogDose";
+import { useLogDose, type GiveConflict, type LogDoseVars } from "./useLogDose";
 import { useTodayQuery } from "./useTodayData";
 
 const SCREEN_STYLE = {
@@ -78,7 +78,7 @@ const COMING_UP_STYLE = {
  */
 function identityOf(dose: TodayDose): Pick<
   LogDoseVars,
-  "occurrenceKey" | "courseId" | "amount" | "scheduledFor" | "medicationName"
+  "occurrenceKey" | "courseId" | "amount" | "scheduledFor" | "medicationName" | "dueAt"
 > {
   return {
     occurrenceKey: dose.key,
@@ -86,6 +86,12 @@ function identityOf(dose: TodayDose): Pick<
     amount: dose.occurrence.doseAmount,
     scheduledFor: scheduledForOf(dose.occurrence),
     medicationName: dose.medicationName,
+    // Carried on EVERY log path, not just the ones that might be early: the
+    // give-confirm dialog decides whether to mention earliness from the
+    // duration itself (`useLogDose.ts`'s `earlyBy`), so a path that omitted
+    // this would silently lose the sentence rather than opt out of it.
+    // `null` for a `fromLastDose` chain that has never started.
+    dueAt: dose.occurrence.dueAt?.toISOString(),
   };
 }
 
@@ -101,12 +107,14 @@ export function TodayPage(): ReactElement {
   useDailySweep(now);
   const { data: snapshot, isPending } = useTodayQuery(day);
 
-  // SPEC §3b: "Allow, but confirm when early." A give that collides with the
-  // grace window AND was not yet due (`earlyGive`, set below) lands here
-  // instead of the flat duplicate toast — `EarlyGiveConfirmDialog` below is
-  // the single instance for the whole page, not one per row.
-  const [earlyGiveConflict, setEarlyGiveConflict] = useState<EarlyGiveConflict | null>(null);
-  const logDose = useLogDose(day, { onEarlyGiveConflict: setEarlyGiveConflict });
+  // SPEC §5: nothing refuses a give. Every heuristic collision — the grace
+  // window and the very-recent-dose floor alike — lands here instead of a
+  // flat toast, whatever state the row was in. `EarlyGiveConfirmDialog` below
+  // is the single instance for the whole page, not one per row, so every log
+  // path (give, skip, log-at-time, start course) is covered by wiring this
+  // once rather than per call site.
+  const [giveConflict, setGiveConflict] = useState<GiveConflict | null>(null);
+  const logDose = useLogDose(day, { onGiveConflict: setGiveConflict });
 
   // Occurrence keys resolved while this screen has been mounted. Only ever
   // added to: an undone dose loses its event and comes back as pending on its
@@ -158,23 +166,6 @@ export function TodayPage(): ReactElement {
         toastMessage: t("today.toast.logged", {
           medicationName: dose.medicationName,
         }),
-        // SPEC §3b: only a dose that is not yet due (`later`/`upcoming`) is
-        // eligible for the early-give confirm dialog on a grace-window
-        // collision — an on-time or overdue collision is a genuine "someone
-        // already gave this" and keeps the flat rejection (`useLogDose.ts`).
-        //
-        // F8 (deliberate, kind-agnostic): this eligibility test does not
-        // branch on `course.schedule.kind`, so a `fixedTimes` course gets the
-        // SAME early-give confirm a `fromLastDose` one does — e.g. a taper
-        // dosed at 08:00/09:00 can confirm the 09:00 dose at 08:05. Kept on
-        // purpose for both kinds, not an oversight the interval feature left
-        // behind: the underlying question ("a dose was just given nearby —
-        // give this one too?") is identical either way, and the
-        // `EARLY_GIVE_FLOOR_MIN` hard floor (`@/domain`, enforced in
-        // `idbRepo.ts`/`memoryRepo.ts`) applies to both kinds equally, so a
-        // fixed-times mis-tap gets the same unconditional protection an
-        // interval one does.
-        earlyGive: dose.state === "later" || dose.state === "upcoming",
         // SPEC §3b-i: "the cap warns, it does not lock" — writing an
         // unflagged event past the cap would be worse than a recorded
         // exception, so ANY give of a `capped` occurrence is flagged
@@ -188,20 +179,18 @@ export function TodayPage(): ReactElement {
     [log, t],
   );
 
-  const confirmEarlyGive = useCallback(() => {
-    if (!earlyGiveConflict) return;
-    const { vars } = earlyGiveConflict;
-    setEarlyGiveConflict(null);
-    // F2: `earlyGive: false` on the retry — if this confirmed write STILL
-    // collides (e.g. another device's write landed in between), that
-    // collision must fall through to the flat rejection toast
-    // (`useLogDose.ts`'s `onError`), never reopen this same dialog. Nothing
-    // here could offer a meaningfully different confirmation a second time,
-    // and looping it indefinitely with no write and no explanation is
-    // exactly the "someone already gave it, and nothing else happened"
-    // complaint this dialog exists to fix, rebuilt one layer up.
-    log({ ...vars, allowWithinGrace: true, earlyGive: false });
-  }, [earlyGiveConflict, log]);
+  const confirmGive = useCallback(() => {
+    if (!giveConflict) return;
+    const { vars } = giveConflict;
+    setGiveConflict(null);
+    // `confirmedGive` clears both heuristic guards at the repo, so this retry
+    // cannot come back with either of them — the only collision left is the
+    // same-occurrence hard block, which `useLogDose`'s `onError` sends to the
+    // flat toast rather than back to this dialog. That is what stops a
+    // confirmed give from looping the dialog with no write and no
+    // explanation, which would rebuild the very complaint it exists to fix.
+    log({ ...vars, confirmedGive: true });
+  }, [giveConflict, log]);
 
   const skip = useCallback(
     (dose: TodayDose) =>
@@ -467,11 +456,11 @@ export function TodayPage(): ReactElement {
       </div>
 
       <EarlyGiveConfirmDialog
-        conflict={earlyGiveConflict}
+        conflict={giveConflict}
         onOpenChange={(open) => {
-          if (!open) setEarlyGiveConflict(null);
+          if (!open) setGiveConflict(null);
         }}
-        onConfirm={confirmEarlyGive}
+        onConfirm={confirmGive}
       />
     </div>
   );

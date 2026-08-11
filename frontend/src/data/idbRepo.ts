@@ -665,7 +665,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     givenAt?: IsoDateTime;
     amount: number;
     note?: string;
-    allowWithinGrace?: boolean;
+    confirmedGive?: boolean;
     overMax?: boolean;
   }): Promise<DoseEvent> {
     const actorId = await currentActorId();
@@ -694,7 +694,7 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     const liveEvents = liveDoseEventsForCourse(courseEvents);
 
     // Same-occurrence hard block (SPEC §5) — unconditional, never bypassed by
-    // `allowWithinGrace`, and keyed on `scheduledFor` alone, INCLUDING when it
+    // `confirmedGive`, and keyed on `scheduledFor` alone, INCLUDING when it
     // is `null` (the "chain never started" sentinel): a course cannot be
     // started twice from that sentinel either. See `memoryRepo.ts`'s
     // identical guard for the full reasoning, including the Defect 1 /
@@ -710,11 +710,12 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     // identical guard for the full reasoning. An `overMax` write skips both
     // the floor and the grace-window heuristic outright; the same-occurrence
     // hard block above is untouched.
-    if (!input.overMax) {
-      // F1: the hard floor beneath `allowWithinGrace` — see `memoryRepo.ts`'s
-      // identical guard and `errors.ts`'s `TooSoonSinceLastDoseError`.
-      // Strictly LESS than the floor — see `memoryRepo.ts`'s identical guard
-      // for why the boundary itself must not be floor-blocked.
+    // SPEC §5: both guards are heuristics that ask rather than refuse — see
+    // `memoryRepo.ts`'s identical guard for the full reasoning.
+    if (!input.overMax && !input.confirmedGive) {
+      // The floor — see `memoryRepo.ts`'s identical guard and `errors.ts`'s
+      // `TooSoonSinceLastDoseError`. Strictly LESS than the floor, so the
+      // boundary itself falls through to the grace-window rules below.
       const tooSoon = liveEvents.find(
         (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
       );
@@ -725,16 +726,12 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       }
 
       // The grace-window heuristic — a collision with a DIFFERENT occurrence
-      // logged recently — is exactly what a confirmed early give (SPEC §3b:
-      // "logging a dose early ... is intended") is allowed to bypass; the two
-      // guards above never are.
-      if (!input.allowWithinGrace) {
-        const duplicate = liveEvents.find(
-          (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
-        );
-        if (duplicate) {
-          throw new DuplicateDoseError(duplicate);
-        }
+      // logged recently.
+      const duplicate = liveEvents.find(
+        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
+      );
+      if (duplicate) {
+        throw new DuplicateDoseError(duplicate);
       }
     }
 

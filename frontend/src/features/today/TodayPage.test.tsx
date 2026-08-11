@@ -750,9 +750,9 @@ describe("TodayPage", () => {
     // (FIXTURE_NOW 07:00 minus CONFLICTING_GIVEN_AT 06:30 = 30 min) and how
     // far ahead of due this give would land (LATER_TODAY 07:45 minus
     // FIXTURE_NOW 07:00 = 45 min), not a wall-clock time to subtract.
-    expect(await screen.findByText("Give Metacam early?")).toBeInTheDocument();
+    expect(await screen.findByText("Give Metacam anyway?")).toBeInTheDocument();
     expect(
-      screen.getByText("Marta gave the last dose 30 min ago. This one isn't due for another 45 min."),
+      screen.getByText("Marta gave a dose 30 min ago. This one isn't due for another 45 min. Give it and record it anyway?"),
     ).toBeInTheDocument();
     expect(await repo.listDoseEvents({})).toEqual(before);
 
@@ -760,10 +760,52 @@ describe("TodayPage", () => {
     // row stays actionable, and the tap never left Today.
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => {
-      expect(screen.queryByText("Give Metacam early?")).not.toBeInTheDocument();
+      expect(screen.queryByText("Give Metacam anyway?")).not.toBeInTheDocument();
     });
     expect(await repo.listDoseEvents({})).toEqual(before);
     expect(within(card).getByRole("button", { name: "Give" })).toBeInTheDocument();
+    expect(pathname()).toBe("/today");
+  });
+
+  // SPEC §5, the widening. The dialog used to be offered ONLY for a dose that
+  // was not yet due (`later`/`upcoming`); a grace-window collision on a dose
+  // that was already due got "Already given by Marta at 07:30" and no way
+  // through. Same collision, same question worth asking — the row's state was
+  // never a reason to refuse.
+  it("offers the confirm dialog on a grace-window collision for an already-DUE dose, which used to be refused flat", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    // `AT_0800` is exactly `FIXTURE_NOW`, which is what makes this genuinely
+    // `due` rather than a hand-fed state the engine would disagree with.
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    const card = await cardFor("Clover");
+    await user.click(within(card).getByRole("button", { name: "Give" }));
+
+    expect(await screen.findByText("Give Metacam anyway?")).toBeInTheDocument();
+    // No "isn't due for another …" sentence: the dose IS due, so the clause
+    // is dropped rather than rendered as "0 min".
+    expect(
+      screen.getByText("Marta gave a dose 30 min ago. Give it and record it anyway?"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Already given by Marta/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Give anyway" }));
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
     expect(pathname()).toBe("/today");
   });
 
@@ -796,9 +838,9 @@ describe("TodayPage", () => {
 
     await user.click(within(card).getByRole("button", { name: "Give" }));
 
-    expect(await screen.findByText("Give Metoclopramide early?")).toBeInTheDocument();
+    expect(await screen.findByText("Give Metoclopramide anyway?")).toBeInTheDocument();
     expect(
-      screen.getByText("Marta gave the last dose 30 min ago. This one isn't due for another 45 min."),
+      screen.getByText("Marta gave a dose 30 min ago. This one isn't due for another 45 min. Give it and record it anyway?"),
     ).toBeInTheDocument();
     expect(await repo.listDoseEvents({})).toEqual(before);
   });
@@ -823,7 +865,7 @@ describe("TodayPage", () => {
     const card = await cardFor("Clover");
 
     await user.click(within(card).getByRole("button", { name: "Give" }));
-    await screen.findByText("Give Metacam early?");
+    await screen.findByText("Give Metacam anyway?");
 
     await user.click(screen.getByRole("button", { name: "Give anyway" }));
 
@@ -915,12 +957,12 @@ describe("TodayPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "Дати" }));
 
-    expect(await screen.findByText("Дати Metacam раніше?")).toBeInTheDocument();
+    expect(await screen.findByText("Все одно дати Metacam?")).toBeInTheDocument();
     // "Ви" (SPEC-consistent with `household.memberLine.you`'s self-row
     // wording), never the raw stored "You" or the self user's real name
     // ("Roman") that `displayNameFor` would otherwise have surfaced.
     const description = await screen.findByText(
-      "Попередню дозу дано 30 хв тому (Ви). Ця доза знадобиться ще через 45 хв.",
+      "Попередню дозу дано 30 хв тому (Ви). Ця доза знадобиться ще через 45 хв. Все одно дати й записати?",
     );
     expect(description).toBeInTheDocument();
     expect(description).not.toHaveTextContent(/\bYou\b/);
@@ -963,7 +1005,7 @@ describe("TodayPage", () => {
     const card = await cardFor("Clover");
     await user.click(within(card).getByRole("button", { name: "Give" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Give Metacam early?" });
+    const dialog = await screen.findByRole("dialog", { name: "Give Metacam anyway?" });
     const appRoot = container.querySelector(".ds-root");
     expect(appRoot).not.toBeNull();
     // The dialog is NOT inside the app's own DsRoot subtree — proof the
@@ -1226,7 +1268,10 @@ describe("TodayPage", () => {
   // "do not add a guard in the UI for this" — the sheet closes on confirm
   // (TodayDoseRow.tsx wraps `onConfirm` to close it before logging) and
   // `useLogDose.onError` is what surfaces the rejection.
-  it("rejects a sheet confirmation landing on the SAME instant as another live event (F1's floor, below the grace window), leaving the ledger unchanged", async () => {
+  // SPEC §5: this used to be a flat refusal with no way through — the "log at
+  // a different time" sheet was the worst place for it, because the user had
+  // already chosen a deliberate time and the app simply said no.
+  it("a sheet confirmation inside the floor ASKS instead of refusing, and cancelling leaves the ledger unchanged", async () => {
     const user = userEvent.setup();
     const { data, repo } = household();
     const course = courseOf(data, "Clover", "Metacam");
@@ -1252,17 +1297,59 @@ describe("TodayPage", () => {
 
     // The sheet's default 30-minutes-ago offset (07:30 local) lands exactly on
     // `CONFLICTING_GIVEN_AT` (06:30 UTC = 07:30 local) — a ZERO-minute gap, so
-    // this trips `EARLY_GIVE_FLOOR_MIN` (F1's hard floor, 10 min), not merely
-    // the 60-minute fixedTimes grace window it is also well inside. The floor
-    // is checked first and is never bypassable, so the flat rejection here is
-    // the floor's message, not the generic duplicate one.
+    // this trips `EARLY_GIVE_FLOOR_MIN` (10 min), not merely the 60-minute
+    // fixedTimes grace window it is also well inside. The floor is checked
+    // first, which is why the dialog uses the impersonal "The last dose on
+    // this course…" wording rather than naming Marta: that guard compares
+    // against any live dose and carries no actor.
     await user.click(screen.getByRole("button", { name: "Log at 07:30" }));
 
+    expect(await screen.findByText("Give Metacam anyway?")).toBeInTheDocument();
     expect(
-      await screen.findByText("A dose was logged for this course 0 min ago — wait a little before logging another"),
+      screen.getByText(
+        "The last dose on this course was 0 min ago. This one isn't due for another 30 min. Give it and record it anyway?",
+      ),
     ).toBeInTheDocument();
 
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Give Metacam anyway?")).not.toBeInTheDocument();
+    });
+
     expect(await repo.listDoseEvents({})).toEqual(before);
+    expect(pathname()).toBe("/today");
+  });
+
+  it("confirming that sheet dialog writes the dose the floor used to refuse outright", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metacam");
+    const occurrence = makeOccurrence(course, { day: DAY, scheduledFor: AT_0800 });
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "due");
+
+    const marta = martaOf(data);
+    await seedConflictingEvent(repo, course, {
+      actorId: marta.id,
+      status: "given",
+      givenAt: CONFLICTING_GIVEN_AT,
+    });
+
+    const before = await repo.listDoseEvents({});
+    renderToday(repo);
+    await cardFor("Clover");
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Log at a different time" }));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Log at 07:30" }));
+
+    await screen.findByText("Give Metacam anyway?");
+    await user.click(screen.getByRole("button", { name: "Give anyway" }));
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
+    });
     expect(pathname()).toBe("/today");
   });
 

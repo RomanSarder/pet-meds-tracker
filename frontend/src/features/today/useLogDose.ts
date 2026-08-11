@@ -43,15 +43,17 @@ export interface LogDoseVars {
    */
   toastMessage: string;
   /**
-   * Set by the caller when the occurrence being logged is NOT yet due (SPEC
-   * §3b: `dose.state` is `"later"` or `"upcoming"`) — the one condition under
-   * which a grace-window collision means "give this early?" rather than
-   * "someone already gave this". Absent (or false) everywhere else, so a
-   * collision on an already-due dose keeps rejecting flat, exactly as before.
+   * The occurrence's own due instant, when it has one. Used only to word the
+   * confirm dialog ("not due for another 40 min"); the decision to show that
+   * dialog does not depend on it. Absent for a `fromLastDose` chain that has
+   * never started, which has no due instant to be early against.
    */
-  earlyGive?: boolean;
-  /** User-confirmed retry after an `earlyGive` conflict — forwarded to the repo verbatim. */
-  allowWithinGrace?: boolean;
+  dueAt?: IsoDateTime;
+  /**
+   * User-confirmed retry after a give conflict — forwarded to the repo
+   * verbatim, where it clears both heuristic guards (`repo.types.ts`).
+   */
+  confirmedGive?: boolean;
   /**
    * SPEC §3b-i: set when the caller (`TodayPage.tsx`'s `give`) is logging a
    * `capped` occurrence — "the cap warns, it does not lock", so this is
@@ -63,24 +65,50 @@ export interface LogDoseVars {
 }
 
 /**
- * What an early-give collision hands the caller, to render the confirm dialog.
+ * What a give conflict hands the caller, to render the confirm dialog.
  *
- * F4: the dialog states two facts, not a wall-clock time the user must do
- * arithmetic on — how long ago the colliding (DIFFERENT-occurrence, per F2)
- * dose was logged, and how far ahead of its own due instant this give is.
- * Both are already `elapsedSince`-shaped (`./logAtTimeModel`), so the dialog
- * only ever formats, never computes.
+ * SPEC §5: EVERY heuristic guard arrives here — there is no path where one of
+ * them refuses on its own. The dialog states facts, not a wall-clock time the
+ * user must do arithmetic on: how long ago the colliding dose was logged, and
+ * (when it applies) how far ahead of its own due instant this give is. Both
+ * are already `elapsedSince`-shaped (`./logAtTimeModel`), so the dialog only
+ * ever formats, never computes.
  */
-export interface EarlyGiveConflict {
+export interface GiveConflict {
   vars: LogDoseVars;
-  /** The prior dose's actor, already resolved to a display name. */
-  name: string;
-  /** Whether the prior dose was given or skipped — the dialog words each differently. */
-  status: DoseEventStatus;
+  /**
+   * Which guard fired. `recentDose` is a grace-window collision with a
+   * DIFFERENT occurrence and names the actor who logged it; `tooSoon` is the
+   * `EARLY_GIVE_FLOOR_MIN` floor, which knows only that a dose went in very
+   * recently — hence the nullable `name`/`status` below.
+   */
+  reason: "recentDose" | "tooSoon";
+  /** The prior dose's actor, already resolved to a display name. `null` for `tooSoon`. */
+  name: string | null;
+  /** Whether the prior dose was given or skipped. `null` for `tooSoon`. */
+  status: DoseEventStatus | null;
   /** How long ago the colliding dose was given/skipped. */
   sinceLast: { hours: number; minutes: number };
-  /** How far ahead of its own `dueAt` this give would land. */
-  early: { hours: number; minutes: number };
+  /** How far ahead of its own `dueAt` this give would land — `null` once it is due. */
+  early: { hours: number; minutes: number } | null;
+}
+
+/**
+ * How far ahead of its own due instant this give would land, or `null` when
+ * it is already due (or has no due instant at all — a `fromLastDose` chain
+ * that has never started). The dialog drops its "not due for another …"
+ * sentence on `null` rather than printing "0 min", which would read as a
+ * warning about nothing.
+ *
+ * `elapsedSince` floors at zero, so an already-due dose comes back as
+ * `{hours: 0, minutes: 0}` and has to be recognised here rather than by the
+ * dialog eyeballing both fields.
+ */
+function earlyBy(vars: LogDoseVars): { hours: number; minutes: number } | null {
+  if (vars.dueAt === undefined) return null;
+  const attemptAt = vars.givenAt ? new Date(vars.givenAt) : now();
+  const early = elapsedSince(attemptAt, new Date(vars.dueAt));
+  return early.hours === 0 && early.minutes === 0 ? null : early;
 }
 
 interface LogDoseContext {
@@ -158,11 +186,16 @@ export function useUndoDose(day: LocalDate): (eventId: string) => Promise<void> 
 
 export interface UseLogDoseOptions {
   /**
-   * A collision falling under `earlyGive` reaches here instead of the flat
-   * duplicate toast — the caller (`TodayPage`) owns the confirm dialog; this
-   * hook only decides WHICH doses are eligible to ask, never how to ask.
+   * Every heuristic collision reaches here — the caller (`TodayPage`) owns
+   * the confirm dialog; this hook only routes, never words the question.
+   *
+   * Optional in the TYPE only. A caller that omits it falls back to the flat
+   * rejection toast, which is the behaviour SPEC §5 no longer wants, so the
+   * omission is a bug rather than a mode — it exists so a caller that has
+   * genuinely no way to render a dialog degrades to saying something rather
+   * than to silence.
    */
-  onEarlyGiveConflict?: (conflict: EarlyGiveConflict) => void;
+  onGiveConflict?: (conflict: GiveConflict) => void;
 }
 
 export function useLogDose(
@@ -189,7 +222,7 @@ export function useLogDose(
         scheduledFor: vars.scheduledFor,
         givenAt: vars.givenAt,
         amount: vars.amount,
-        allowWithinGrace: vars.allowWithinGrace,
+        confirmedGive: vars.confirmedGive,
         overMax: vars.overMax,
       }),
 
@@ -220,14 +253,32 @@ export function useLogDose(
       if (context?.previous !== undefined) {
         queryClient.setQueryData<TodaySnapshot>(qk.today(day), context.previous);
       }
-      // F1: the hard floor beneath `allowWithinGrace` — thrown INSTEAD of
-      // `DuplicateDoseError` (never alongside it) when the collision is
-      // within `EARLY_GIVE_FLOOR_MIN` of ANY live dose on the course, so it
-      // is caught here, ahead of the `DuplicateDoseError` branch, and always
-      // gets the flat rejection: no dialog is ever offered for a gap this
-      // small, confirmed or not.
+      // The very-recent-dose floor — thrown INSTEAD of `DuplicateDoseError`
+      // (never alongside it) when the collision is within
+      // `EARLY_GIVE_FLOOR_MIN` of ANY live dose on the course, so it is
+      // caught here, ahead of the `DuplicateDoseError` branch.
+      //
+      // SPEC §5: this now ASKS. It used to be the one guard with no retry
+      // path at all — a flat toast and nothing else — which meant a carer who
+      // genuinely needed to give another dose ten minutes later could not
+      // record it. A dose given and not recorded is worse than a recorded
+      // exception, which is the same reasoning §3b-i's cap already follows.
       if (error instanceof TooSoonSinceLastDoseError) {
         const duration = { hours: Math.floor(error.minutesSinceLast / 60), minutes: error.minutesSinceLast % 60 };
+        if (opts?.onGiveConflict) {
+          opts.onGiveConflict({
+            vars,
+            reason: "tooSoon",
+            // The floor guard compares against ANY live dose on the course
+            // and carries no actor or status — there is nothing honest to
+            // name here, so the dialog words this case without a name.
+            name: null,
+            status: null,
+            sinceLast: duration,
+            early: earlyBy(vars),
+          });
+          return;
+        }
         show({
           message: t("today.toast.tooSoonSinceLastDose", {
             duration: t("history.detail.lateDuration", duration),
@@ -245,33 +296,25 @@ export function useLogDose(
       if (error instanceof DuplicateDoseError) {
         const name = displayNameFor(error.actorId, membersQuery.data ?? []);
         const time = formatHHMM(new Date(error.givenAt));
-        // `earlyGive` (SPEC §3b, "allow, but confirm when early"): the
-        // occurrence being logged was not yet due, so a collision here means
-        // "give this early anyway?", not "someone already gave this" — the
-        // page decides how to ask, this hook only routes the decision.
-        // Everything else (a normal on-time or overdue give, Skip, "log at a
-        // different time") keeps the flat rejection below unconditionally.
+        // A grace-window collision with a DIFFERENT occurrence: someone gave
+        // a nearby dose recently, and this is a second one. SPEC §5 says ask,
+        // whatever state the row was in — an on-time or overdue give, a Skip
+        // and "log at a different time" all reach the dialog now. The
+        // previous not-yet-due gate limited it to `later`/`upcoming` rows,
+        // which left every other collision as a flat refusal.
         //
-        // F2: `error.scheduledFor !== vars.scheduledFor` is what makes this
-        // the SAME-OCCURRENCE guard's collision, not the grace-window one —
-        // without it, a double-tap (tap 2 sees tap 1's just-written row
-        // before the optimistic flip repaints the button, `onMutate` is
-        // async) hits the exact-match hard block, which `earlyGive` alone
-        // cannot tell apart from a real early-give collision, and would
-        // offer a dialog for a dose already successfully given. That dialog
-        // could never do anything useful either: confirming it re-sends the
-        // identical `scheduledFor`, which the hard block refuses again no
-        // matter how many times it is retried (see `TodayPage.tsx`'s
-        // `confirmEarlyGive`, which also clears `earlyGive` on the retry so
-        // ANY further collision — this one included — falls through to the
-        // flat rejection below instead of silently reopening the dialog).
-        if (
-          vars.earlyGive &&
-          opts?.onEarlyGiveConflict &&
-          error.scheduledFor !== vars.scheduledFor
-        ) {
+        // `error.scheduledFor !== vars.scheduledFor` is what keeps this the
+        // GRACE-WINDOW guard's collision rather than the same-occurrence hard
+        // block: a double-tap (tap 2 sees tap 1's just-written row before the
+        // optimistic flip repaints the button, `onMutate` is async) hits the
+        // exact-match block, and there is nothing to ask about — that dose is
+        // already given, and confirming would re-send the identical
+        // `scheduledFor` the block refuses no matter how often it is retried
+        // (see `TodayPage.tsx`'s `confirmGive`, which also sets
+        // `confirmedGive` on the retry so any FURTHER collision falls through
+        // to the flat toast instead of silently reopening the dialog).
+        if (opts?.onGiveConflict && error.scheduledFor !== vars.scheduledFor) {
           const attemptAt = vars.givenAt ? new Date(vars.givenAt) : now();
-          const dueAt = vars.scheduledFor ? new Date(vars.scheduledFor) : attemptAt;
           // The dialog's OWN name resolution — not `name` above. `displayNameFor`
           // returns the actor's raw, stored `displayName` VERBATIM (SPEC §10a:
           // names are DATA, never translated) — for an un-renamed self-user
@@ -280,19 +323,20 @@ export function useLogDose(
           // prose. `HouseholdPage`'s member list solves the identical
           // problem for the self row the same way: `isSelf`, not the raw
           // name, decides whether to substitute a genuinely localized "you"
-          // (`household.memberLine.you` there; `today.earlyGive.you` here —
+          // (`household.memberLine.you` there; `today.giveConfirm.you` here —
           // this template's own atomic word, since it needs just the noun,
           // not a whole phrase). Every OTHER `displayNameFor` call site
           // (the flat toast a few lines below included) still shows the
           // raw, untranslated "You" — a pre-existing, wider issue this fix
           // deliberately does not touch.
           const isSelf = (membersQuery.data ?? []).find((u) => u.id === error.actorId)?.isSelf ?? false;
-          opts.onEarlyGiveConflict({
+          opts.onGiveConflict({
             vars,
-            name: isSelf ? t("today.earlyGive.you") : name,
+            reason: "recentDose",
+            name: isSelf ? t("today.giveConfirm.you") : name,
             status: error.status,
             sinceLast: elapsedSince(new Date(error.givenAt), attemptAt),
-            early: elapsedSince(attemptAt, dueAt),
+            early: earlyBy(vars),
           });
           return;
         }

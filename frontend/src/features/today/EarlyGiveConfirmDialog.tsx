@@ -1,8 +1,15 @@
-// SPEC §3b's early-give confirm: "Allow, but confirm when early." Reached
-// only when a `logDose` write collides with the schedule's grace window on a
-// DIFFERENT occurrence (F2 — never the same one; see `useLogDose.ts`'s
-// `onError`) AND the occurrence being given was not yet due (`earlyGive`
-// routing) — every other collision keeps the flat duplicate-toast rejection.
+// SPEC §5's give confirm: nothing refuses a dose, so every heuristic guard
+// ends up here. Reached when a `logDose` write lands within the schedule's
+// grace window of a DIFFERENT occurrence, or within `EARLY_GIVE_FLOOR_MIN` of
+// any live dose on the course. The only collision that does NOT reach here is
+// the same-occurrence hard block (a double-tap of one row), which has nothing
+// to ask about — see `useLogDose.ts`'s `onError`.
+//
+// The description is COMPOSED from whole sentences rather than selected from
+// one key per case: reason × given/skipped × early-or-not is eight
+// permutations, and eight near-identical strings per locale rot the moment
+// one of them is edited. Each fragment is a complete sentence, so the
+// composition survives a locale whose clause order differs.
 //
 // The `stopBubbling` guard and the popup/backdrop style objects are copied
 // from `features/household/HouseholdPage.tsx`'s confirm dialogs — the house
@@ -18,7 +25,7 @@ import type { CSSProperties, ReactElement, SyntheticEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@/components/ds";
 import { useT } from "@/i18n";
-import type { EarlyGiveConflict } from "./useLogDose";
+import type { GiveConflict } from "./useLogDose";
 
 /**
  * Keeps the dialog's interactions inside the dialog. See
@@ -66,7 +73,7 @@ const ACTIONS_STYLE: CSSProperties = { display: "flex", justifyContent: "flex-en
 
 export interface EarlyGiveConfirmDialogProps {
   /** `null` closes the dialog. One instance lives at the page level, not per row. */
-  conflict: EarlyGiveConflict | null;
+  conflict: GiveConflict | null;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }
@@ -77,6 +84,30 @@ export function EarlyGiveConfirmDialog({
   onConfirm,
 }: EarlyGiveConfirmDialogProps): ReactElement {
   const t = useT();
+
+  /**
+   * Sentence 1 — what this collides with. The floor guard (`tooSoon`) knows
+   * no actor, so it gets the impersonal form rather than a "Someone" that
+   * would imply the app looked and found a person it could not name.
+   */
+  function collisionSentence(c: GiveConflict): string {
+    const sinceLast = t("history.detail.lateDuration", c.sinceLast);
+    if (c.reason === "tooSoon" || c.name === null) {
+      return t("today.giveConfirm.lastDose", { sinceLast });
+    }
+    return c.status === "skipped"
+      ? t("today.giveConfirm.lastSkipped", { name: c.name, sinceLast })
+      : t("today.giveConfirm.lastGiven", { name: c.name, sinceLast });
+  }
+
+  function description(c: GiveConflict): string {
+    const parts = [collisionSentence(c)];
+    if (c.early !== null) {
+      parts.push(t("today.giveConfirm.notDueYet", { early: t("history.detail.lateDuration", c.early) }));
+    }
+    parts.push(t("today.giveConfirm.question"));
+    return parts.join(" ");
+  }
 
   return (
     <Dialog.Root open={conflict !== null} onOpenChange={onOpenChange}>
@@ -96,42 +127,32 @@ export function EarlyGiveConfirmDialog({
           style={POPUP_STYLE}
         >
           <Dialog.Title style={TITLE_STYLE}>
-            {t("today.earlyGive.title", { medicationName: conflict?.vars.medicationName ?? "" })}
+            {t("today.giveConfirm.title", { medicationName: conflict?.vars.medicationName ?? "" })}
           </Dialog.Title>
           {/*
-            F4: dedicated dialog copy, not the flat-rejection toast's
-            "Already given by Marta at 07:12" reused verbatim — that phrasing
-            is accurate for the toast (the dose just attempted IS the one on
+            Dedicated dialog copy, not the flat-rejection toast's "Already
+            given by Marta at 07:12" reused verbatim — that phrasing is
+            accurate for the toast (the dose just attempted IS the one on
             record) but false here, where the collision is BY CONSTRUCTION a
-            DIFFERENT occurrence. States the two facts that actually let
-            someone decide: how long ago the other dose was given/skipped,
-            and how far ahead of ITS OWN due instant this one would land —
-            both pre-rendered by `useLogDose.ts` via `history.detail.lateDuration`
-            ("40 min" / "1 h 30 min"), never a wall-clock time to subtract.
+            different occurrence, or no occurrence at all. States the facts
+            that actually let someone decide, as durations pre-rendered via
+            `history.detail.lateDuration` ("40 min" / "1 h 30 min"), never a
+            wall-clock time to subtract.
           */}
           <Dialog.Description style={DESCRIPTION_STYLE}>
-            {conflict
-              ? t(
-                  conflict.status === "skipped" ? "today.earlyGive.detailSkipped" : "today.earlyGive.detailGiven",
-                  {
-                    name: conflict.name,
-                    sinceLast: t("history.detail.lateDuration", conflict.sinceLast),
-                    early: t("history.detail.lateDuration", conflict.early),
-                  },
-                )
-              : ""}
+            {conflict ? description(conflict) : ""}
           </Dialog.Description>
           <div style={ACTIONS_STYLE}>
             <Dialog.Close
               render={
                 <Button type="button" size="md" variant="secondary">
-                  {t("today.earlyGive.cancel")}
+                  {t("today.giveConfirm.cancel")}
                 </Button>
               }
             />
             {/* F3: `danger`, matching the house dialogs' affirmative — see the header comment. */}
             <Button type="button" size="md" variant="danger" onClick={onConfirm}>
-              {t("today.earlyGive.confirm")}
+              {t("today.giveConfirm.confirm")}
             </Button>
           </div>
         </Dialog.Popup>

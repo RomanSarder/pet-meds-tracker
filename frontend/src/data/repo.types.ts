@@ -141,14 +141,23 @@ export interface Repo {
     amount: number;
     note?: string;
     /**
-     * User-confirmed early give (SPEC §3b: "logging a dose early ... is
-     * intended"). Bypasses ONLY the grace-window collision heuristic — a
-     * live event on this course logged within the schedule's grace window —
-     * never the exact-same-occurrence check just above it in the dedup
-     * guard, which stays a hard block regardless: re-logging the identical
-     * `scheduledFor` is always a true duplicate, confirmed or not.
+     * The user was shown what this dose collides with and chose to give it
+     * anyway. Bypasses BOTH heuristic guards: the `EARLY_GIVE_FLOOR_MIN`
+     * floor and the grace-window collision check.
+     *
+     * SPEC §5: nothing refuses a give. Both guards exist to catch a mis-tap,
+     * and a mis-tap is answered by asking, not by refusing — a carer told by
+     * a vet to give another dose must be able to, and a dose the app blocked
+     * is a dose that got given and never recorded, which is strictly worse
+     * than a recorded exception. The floor used to be unbypassable; that is
+     * the behaviour this flag removes.
+     *
+     * Never bypasses the exact-same-occurrence check above it in the dedup
+     * guard, which stays a hard block regardless: re-submitting the identical
+     * `scheduledFor` is a double-tap, not a second dose. The row it came from
+     * already reads as given, so there is nothing to confirm.
      */
-    allowWithinGrace?: boolean;
+    confirmedGive?: boolean;
     /**
      * SPEC §3b-i: the ghost "Give anyway" action past a course's `maxPerDay`
      * cap. Stamps `overMax: true` on the created event; omitted/false stamps
@@ -158,8 +167,11 @@ export interface Repo {
      *
      * "The cap warns, it does not lock": `overMax: true` also makes this
      * write skip the `EARLY_GIVE_FLOOR_MIN` floor and the grace-window
-     * duplicate heuristic outright — no dialog, no possible refusal, unlike
-     * `allowWithinGrace` above. The same-occurrence hard block (this
+     * duplicate heuristic outright — no dialog at all, where `confirmedGive`
+     * above reaches the same place via one the user can still cancel. The
+     * cap row has already had its conversation with the user (the amber pill
+     * and the ghost action), so a second one would be noise. The
+     * same-occurrence hard block (this
      * course's `scheduledFor`) still applies, but only against another
      * live `overMax` row at that exact key — never against the real
      * (non-`overMax`) occurrence that key legitimately becomes once the cap

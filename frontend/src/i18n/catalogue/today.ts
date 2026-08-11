@@ -256,7 +256,7 @@ export interface TodayMessages {
    * interpolated verbatim, never declined. "Already given by Marta at 07:12"
    * is the exact SPEC §5 copy. NOT used by the early-give confirm dialog
    * (F4) — that collision is BY CONSTRUCTION a DIFFERENT occurrence, so this
-   * copy would assert a falsehood there; see `today.earlyGive.detailGiven`.
+   * copy would assert a falsehood there; see `today.giveConfirm.lastGiven`.
    */
   "today.toast.duplicateGiven": (p: { name: string; time: string }) => string;
   /** Same rule, worded accurately when the conflicting event was a skip, not a give. */
@@ -264,44 +264,55 @@ export interface TodayMessages {
   /** Any other `logDose` failure that isn't the duplicate guard — a plain factual toast rather than silence. */
   "today.toast.logFailed": () => string;
   /**
-   * F1: the hard floor beneath `allowWithinGrace` (`EARLY_GIVE_FLOOR_MIN`,
-   * `@/domain`) — a flat, unconditional rejection with no dialog and no
-   * retry, reached when a give lands within the floor of ANY live dose
-   * already on the course. `duration` is `history.detail.lateDuration`
-   * rendered ("6 min"), never a raw number the reader must interpret.
+   * The `EARLY_GIVE_FLOOR_MIN` guard's FALLBACK copy, for a caller that wired
+   * no `onGiveConflict` handler and so cannot show the dialog SPEC §5 wants.
+   * Unreachable from Today, which wires one for every log path — kept so the
+   * degraded path says something rather than nothing. `duration` is
+   * `history.detail.lateDuration` rendered ("6 min"), never a raw number.
    */
   "today.toast.tooSoonSinceLastDose": (p: { duration: string }) => string;
 
-  // --- early-give confirm (SPEC §3b: "allow, but confirm when early") -----
+  // --- give confirm (SPEC §5: nothing refuses a dose, guards ask) --------
   /**
-   * `EarlyGiveConfirmDialog`'s title, reached only when a give collides with
-   * the grace window on a dose that was not yet due. `medicationName` is
-   * DATA (SPEC §10a), interpolated verbatim. Deliberately kind-agnostic
-   * (F8): reached for `fixedTimes` courses exactly as for `fromLastDose`
-   * ones — see `TodayPage.tsx`'s `give` callback for why.
+   * `EarlyGiveConfirmDialog`'s title. `medicationName` is DATA (SPEC §10a),
+   * interpolated verbatim. One title for every conflict reason: the question
+   * is always "give it anyway?", and the description below carries what makes
+   * this particular give worth asking about. Deliberately kind-agnostic (F8):
+   * reached for `fixedTimes` courses exactly as for `fromLastDose` ones.
    */
-  "today.earlyGive.title": (p: { medicationName: string }) => string;
+  "today.giveConfirm.title": (p: { medicationName: string }) => string;
   /**
-   * F4: the dialog's own copy — NOT `today.toast.duplicateGiven` (reused
-   * before this fix, which asserted a falsehood: in the toast "already
-   * given" means the dose just attempted IS the one on record; here the
-   * collision is BY CONSTRUCTION a different occurrence, so that phrasing
-   * read as "this was already given" directly above a "Give anyway" button).
-   * States the two facts needed to actually decide: how long ago the OTHER
-   * dose was given, and how far ahead of ITS OWN due instant this one would
-   * land — both already `history.detail.lateDuration`-rendered ("40 min" /
-   * "1 h 30 min"), never a wall-clock time the reader has to subtract.
+   * Description sentence 1, grace-window case. NOT `today.toast.duplicateGiven`
+   * reused — in the toast "already given" means the dose just attempted IS
+   * the one on record; here the collision is BY CONSTRUCTION a different
+   * occurrence, so that phrasing would read as "this was already given"
+   * directly above a "Give anyway" button. `sinceLast` arrives already
+   * rendered by `history.detail.lateDuration` ("40 min" / "1 h 30 min"),
+   * never a wall-clock time the reader has to subtract.
    */
-  "today.earlyGive.detailGiven": (p: { name: string; sinceLast: string; early: string }) => string;
+  "today.giveConfirm.lastGiven": (p: { name: string; sinceLast: string }) => string;
   /**
-   * Same fact pattern, worded for a SKIPPED collision — never "un-skip"
-   * framing. The skipped dose stays skipped; this confirms giving the
-   * DIFFERENT, next occurrence early.
+   * Same, worded for a SKIPPED collision — never "un-skip" framing. The
+   * skipped dose stays skipped; this is about the DIFFERENT dose being given.
    */
-  "today.earlyGive.detailSkipped": (p: { name: string; sinceLast: string; early: string }) => string;
+  "today.giveConfirm.lastSkipped": (p: { name: string; sinceLast: string }) => string;
   /**
-   * The atomic word `useLogDose.ts` substitutes for `detailGiven`/
-   * `detailSkipped`'s `name` when the colliding dose's actor is THIS
+   * Same slot, for the `EARLY_GIVE_FLOOR_MIN` floor. Impersonal on purpose:
+   * that guard compares against any live dose on the course and carries no
+   * actor, so naming one — even as "Someone" — would claim knowledge the
+   * error does not have.
+   */
+  "today.giveConfirm.lastDose": (p: { sinceLast: string }) => string;
+  /**
+   * Optional sentence 2, added only when the dose is genuinely not due yet.
+   * Dropped entirely once it is due, rather than rendering "0 min".
+   */
+  "today.giveConfirm.notDueYet": (p: { early: string }) => string;
+  /** Sentence 3, always present — the actual question the buttons answer. */
+  "today.giveConfirm.question": () => string;
+  /**
+   * The atomic word `useLogDose.ts` substitutes for `lastGiven`/
+   * `lastSkipped`'s `name` when the colliding dose's actor is THIS
    * device's own self user. `displayNameFor` (`@/domain`) returns a
    * self-user's raw, stored `displayName` verbatim — SPEC §10a: names are
    * DATA, never translated — and an un-renamed self-user's stored name
@@ -311,11 +322,11 @@ export interface TodayMessages {
    * member list — `isSelf`, not the raw name, decides — just this
    * template's own bare noun rather than a whole phrase.
    */
-  "today.earlyGive.you": () => string;
+  "today.giveConfirm.you": () => string;
   /** Footer's negative action. Withdraws — logs nothing. */
-  "today.earlyGive.cancel": () => string;
+  "today.giveConfirm.cancel": () => string;
   /** Footer's positive action — logs the dose now and re-anchors the chain (SPEC §3b). */
-  "today.earlyGive.confirm": () => string;
+  "today.giveConfirm.confirm": () => string;
 }
 
 export const enToday = (f: Formatters): TodayMessages => ({
@@ -437,14 +448,15 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.toast.tooSoonSinceLastDose": (p) =>
     `A dose was logged for this course ${p.duration} ago — wait a little before logging another`,
 
-  "today.earlyGive.title": (p) => `Give ${p.medicationName} early?`,
-  "today.earlyGive.detailGiven": (p) =>
-    `${p.name} gave the last dose ${p.sinceLast} ago. This one isn't due for another ${p.early}.`,
-  "today.earlyGive.detailSkipped": (p) =>
-    `${p.name} skipped the last dose ${p.sinceLast} ago. This one isn't due for another ${p.early}.`,
-  "today.earlyGive.you": () => "You",
-  "today.earlyGive.cancel": () => "Cancel",
-  "today.earlyGive.confirm": () => "Give anyway",
+  "today.giveConfirm.title": (p) => `Give ${p.medicationName} anyway?`,
+  "today.giveConfirm.lastGiven": (p) => `${p.name} gave a dose ${p.sinceLast} ago.`,
+  "today.giveConfirm.lastSkipped": (p) => `${p.name} skipped a dose ${p.sinceLast} ago.`,
+  "today.giveConfirm.lastDose": (p) => `The last dose on this course was ${p.sinceLast} ago.`,
+  "today.giveConfirm.notDueYet": (p) => `This one isn't due for another ${p.early}.`,
+  "today.giveConfirm.question": () => "Give it and record it anyway?",
+  "today.giveConfirm.you": () => "You",
+  "today.giveConfirm.cancel": () => "Cancel",
+  "today.giveConfirm.confirm": () => "Give anyway",
 });
 
 export const ukToday = (f: Formatters): TodayMessages => ({
@@ -612,22 +624,26 @@ export const ukToday = (f: Formatters): TodayMessages => ({
 
   // `medicationName` stays nominative and undeclined — DATA (SPEC §10a),
   // same rule `today.toast.duplicateGiven`'s `name` follows above.
-  "today.earlyGive.title": (p) => `Дати ${p.medicationName} раніше?`,
+  "today.giveConfirm.title": (p) => `Все одно дати ${p.medicationName}?`,
   // Passive voice throughout ("дано"/"пропущено", not "дав"/"дала") —
   // `name` is DATA of unknown grammatical gender, the same reason
   // `today.toast.duplicateGiven` above never conjugates a verb to agree with
   // it. `name` rides along parenthetically rather than as a verb's subject,
   // so this is genuine dialog prose, not the toast's colon-delimited
   // "Вже дано: Марта, о 07:12" fragment repurposed.
-  "today.earlyGive.detailGiven": (p) =>
-    `Попередню дозу дано ${p.sinceLast} тому (${p.name}). Ця доза знадобиться ще через ${p.early}.`,
-  "today.earlyGive.detailSkipped": (p) =>
-    `Попередню дозу пропущено ${p.sinceLast} тому (${p.name}). Ця доза знадобиться ще через ${p.early}.`,
+  //
+  // Each fragment is a whole sentence, so the dialog joining them with a
+  // space does not depend on English clause order.
+  "today.giveConfirm.lastGiven": (p) => `Попередню дозу дано ${p.sinceLast} тому (${p.name}).`,
+  "today.giveConfirm.lastSkipped": (p) => `Попередню дозу пропущено ${p.sinceLast} тому (${p.name}).`,
+  "today.giveConfirm.lastDose": (p) => `Останню дозу цього курсу введено ${p.sinceLast} тому.`,
+  "today.giveConfirm.notDueYet": (p) => `Ця доза знадобиться ще через ${p.early}.`,
+  "today.giveConfirm.question": () => "Все одно дати й записати?",
   // "Ви" — the same word `household.memberLine.you` already uses for the
   // self row in the member list, not the literal English "You" that would
   // otherwise land here via `displayNameFor`'s raw, un-renamed self
   // `displayName` (`useLogDose.ts` substitutes this key instead, `isSelf`-gated).
-  "today.earlyGive.you": () => "Ви",
-  "today.earlyGive.cancel": () => "Скасувати",
-  "today.earlyGive.confirm": () => "Все одно дати",
+  "today.giveConfirm.you": () => "Ви",
+  "today.giveConfirm.cancel": () => "Скасувати",
+  "today.giveConfirm.confirm": () => "Все одно дати",
 });

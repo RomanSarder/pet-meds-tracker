@@ -586,7 +586,7 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     givenAt?: IsoDateTime;
     amount: number;
     note?: string;
-    allowWithinGrace?: boolean;
+    confirmedGive?: boolean;
     overMax?: boolean;
   }): Promise<DoseEvent> {
     const course = requireAlive(courses, input.courseId, "Course");
@@ -604,14 +604,17 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     const liveEvents = liveDoseEventsForCourse(input.courseId);
 
     // Same-occurrence hard block (SPEC §5) — unconditional, never bypassed by
-    // `allowWithinGrace`, and keyed on `scheduledFor` alone, INCLUDING when it
+    // `confirmedGive`, and keyed on `scheduledFor` alone, INCLUDING when it
     // is `null` (the "chain never started" sentinel): a course cannot be
     // started twice from that sentinel either. `repo.types.ts`'s `logDose`
-    // doc states this holds regardless of `allowWithinGrace`; it used to be
+    // doc states this holds regardless of `confirmedGive`; it used to be
     // silently guarded by `input.scheduledFor !== null`, a no-op for a null
     // `scheduledFor` specifically that made the code not match its own stated
-    // invariant (unreached in production only because a null `scheduledFor`
-    // never coincides with `earlyGive` today).
+    // invariant.
+    //
+    // This is the ONE guard that still refuses, and it is not refusing a
+    // dose — it is refusing a second write of a dose already on record, which
+    // the row the tap came from is already displaying as given.
     //
     // SPEC §3b-i's Defect 1 fix: an `overMax` write's `scheduledFor` is the
     // CAPPED occurrence's own (pushed-to-midnight) key — the same key that
@@ -642,23 +645,24 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
     // scoped to one occurrence), which is exactly what makes them wrong for a
     // deliberate over-cap dose: reaching the cap means a dose was JUST given,
     // so the very next "Give anyway" tap is almost always inside both the
-    // floor and the grace window of that dose. Unlike `allowWithinGrace`
-    // (which only bypasses the grace heuristic below and still routes
-    // through a confirm dialog the user can decline), `overMax` skips both
-    // guards outright — there is no dialog for this one. The same-occurrence
-    // hard block above is untouched and still the only thing that can reject
-    // an `overMax` write (a genuine duplicate, never a refusal to give).
-    if (!input.overMax) {
-      // F1: the hard floor beneath `allowWithinGrace` — a confirmed early give
-      // must still not double-log within `EARLY_GIVE_FLOOR_MIN` minutes of ANY
-      // live dose already on this course. Checked unconditionally, ahead of the
-      // bypassable grace-window heuristic below, so no caller can route around
-      // it — see `errors.ts`'s `TooSoonSinceLastDoseError`.
-      // Strictly LESS than the floor — "under EARLY_GIVE_FLOOR_MIN minutes" is
-      // refused; "at or past" it is documented to behave as already built
-      // (ordinary, bypassable grace-window rules), so the boundary itself
-      // (`gap === floorMs`) must NOT be floor-blocked. `<=` here would make an
-      // exactly-10-minute confirmed retry impossible, contradicting that.
+    // floor and the grace window of that dose. The same-occurrence hard block
+    // above is untouched and still the only thing that can reject an
+    // `overMax` write (a genuine duplicate, never a refusal to give).
+    //
+    // SPEC §5: both remaining guards are HEURISTICS, and a heuristic asks —
+    // it never refuses. `confirmedGive` means the user already saw what this
+    // collides with and said give it anyway, so both are skipped; `overMax`
+    // skips them without even asking (see `repo.types.ts`). What is left when
+    // neither is set is a first attempt, and throwing is how this layer opens
+    // the conversation, not how it ends one.
+    if (!input.overMax && !input.confirmedGive) {
+      // The floor: a dose landing within `EARLY_GIVE_FLOOR_MIN` minutes of ANY
+      // live dose on this course. Distinguished from the grace window below by
+      // its own error type, because it is the case where "you gave one a
+      // moment ago" is the whole story and no occurrence comparison helps —
+      // see `errors.ts`'s `TooSoonSinceLastDoseError`.
+      // Strictly LESS than the floor, so the boundary itself (`gap ===
+      // floorMs`) falls through to the ordinary grace-window rules below.
       const tooSoon = liveEvents.find(
         (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
       );
@@ -669,16 +673,12 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       }
 
       // The grace-window heuristic — a collision with a DIFFERENT occurrence
-      // logged recently — is exactly what a confirmed early give (SPEC §3b:
-      // "logging a dose early ... is intended") is allowed to bypass; the two
-      // guards above never are. See `idbRepo.ts`'s identical guard.
-      if (!input.allowWithinGrace) {
-        const duplicate = liveEvents.find(
-          (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
-        );
-        if (duplicate) {
-          throw new DuplicateDoseError(duplicate);
-        }
+      // logged recently. See `idbRepo.ts`'s identical guard.
+      const duplicate = liveEvents.find(
+        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
+      );
+      if (duplicate) {
+        throw new DuplicateDoseError(duplicate);
       }
     }
 
