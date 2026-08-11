@@ -523,7 +523,10 @@ describe("TodayPage", () => {
     expect(within(card).queryByText(/of \d+ doses/)).toBeNull();
     expect(pathname()).toBe("/today");
 
-    await user.click(within(card).getByRole("button", { name: "Give anyway" }));
+    // Defect 2: only the ghost action is offered on a capped row.
+    expect(within(card).queryByRole("button", { name: "Give" })).toBeNull();
+    // Defect 4: its accessible name includes the medication.
+    await user.click(within(card).getByRole("button", { name: "Give Metoclopramide anyway" }));
 
     await waitFor(async () => {
       expect(await repo.listDoseEvents({})).toHaveLength(before.length + 1);
@@ -533,6 +536,73 @@ describe("TodayPage", () => {
     expect(created[0].courseId).toBe(course.id);
     expect(created[0].status).toBe("given");
     expect(created[0].overMax).toBe(true);
+
+    expect(pathname()).toBe("/today");
+  });
+
+  // Defect 1 (SPEC §3b-i) — a live-tested regression. The test above proves
+  // the WIRING (a click writes an `overMax` event); this one proves the
+  // WRITE PATH's real guards do not refuse it. `before` there has NO real
+  // prior events on this course, so the pre-fix floor/grace guards had
+  // nothing to collide with and passed for the wrong reason — exactly why
+  // "the existing unit tests all passed while the feature was completely
+  // broken in the app". Here two REAL given events are seeded seconds
+  // before FIXTURE_NOW (mirroring the live report: two doses logged, then
+  // an immediate "Give anyway" attempt), so the unfixed floor
+  // (`TooSoonSinceLastDoseError`) and grace-window guard
+  // (`DuplicateDoseError`, "Already given") both fire on the current code.
+  it("Defect 1 regression: Give anyway succeeds even seconds after the capping dose, with real prior events and real guards in place", async () => {
+    const user = userEvent.setup();
+    const { data, repo } = household();
+    const course = courseOf(data, "Clover", "Metoclopramide");
+
+    // This course's fixture already carries one real given event (the chain
+    // start, two days before FIXTURE_NOW — see fixtures.ts). A SECOND real
+    // given dose, seconds before FIXTURE_NOW (07:00:00 UTC), is what
+    // reproduces the report: the capping dose lands well inside both
+    // EARLY_GIVE_FLOOR_MIN (10 min) and the grace window of the very next
+    // "Give anyway" tap.
+    await repo.logDose({
+      courseId: course.id,
+      status: "given",
+      scheduledFor: "2026-08-08T06:55:00.000Z",
+      amount: course.doseAmount,
+      givenAt: "2026-08-08T06:55:00.000Z",
+    });
+
+    const occurrence: Occurrence = {
+      ...makeOccurrence(course, { day: DAY, scheduledFor: "2026-08-09T00:00:00.000Z" }),
+      maxPerDay: 2,
+      givenToday: 2,
+    };
+    await register(repo, [occurrence]);
+    setState(occurrence.key, "capped");
+
+    const before = await repo.listDoseEvents({ courseId: course.id });
+    expect(before).toHaveLength(2);
+    renderToday(repo);
+    const card = await cardFor("Clover");
+
+    // Only the ghost action is offered (Defect 2) — the primary Give button
+    // is not also rendered on this capped row.
+    expect(within(card).queryByRole("button", { name: "Give" })).toBeNull();
+
+    // FIXTURE_NOW is 07:00:00 UTC — 5 and 10 minutes after the two seeded
+    // doses, well inside both guards a not-yet-fixed `logDose` would apply.
+    await user.click(within(card).getByRole("button", { name: "Give Metoclopramide anyway" }));
+
+    await waitFor(async () => {
+      expect(await repo.listDoseEvents({ courseId: course.id })).toHaveLength(before.length + 1);
+    });
+    const created = newEvents(before, await repo.listDoseEvents({ courseId: course.id }));
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("given");
+    expect(created[0].overMax).toBe(true);
+
+    // No error toast ("Already given" / "wait a little") — the write
+    // succeeded outright, the way SPEC §3b-i requires.
+    expect(screen.queryByText(/already given/i)).toBeNull();
+    expect(screen.queryByText(/wait a little/i)).toBeNull();
 
     expect(pathname()).toBe("/today");
   });

@@ -155,6 +155,15 @@ export interface Repo {
      * nothing (the event carries no `overMax` key at all — never an explicit
      * `false`). Never inferred here — the caller (the capped-row wiring) is
      * the one place that knows the occurrence was actually capped.
+     *
+     * "The cap warns, it does not lock": `overMax: true` also makes this
+     * write skip the `EARLY_GIVE_FLOOR_MIN` floor and the grace-window
+     * duplicate heuristic outright — no dialog, no possible refusal, unlike
+     * `allowWithinGrace` above. The same-occurrence hard block (this
+     * course's `scheduledFor`) still applies, but only against another
+     * live `overMax` row at that exact key — never against the real
+     * (non-`overMax`) occurrence that key legitimately becomes once the cap
+     * resets. See `memoryRepo.ts`/`idbRepo.ts`'s `logDose` for the guard.
      */
     overMax?: boolean;
   }): Promise<DoseEvent>;

@@ -336,9 +336,9 @@ Computed per occurrence, in this precedence order:
 
 | `skipped` | a `skipped` DoseEvent exists | 55% opacity, "Skipped" in place of the time |
 
-| `overdue` | due time + grace has passed, no event | berry; card header tinted |
-
 | `capped` | course **has** `maxPerDay` set and `givenToday >= maxPerDay` | amber `N of M max` pill on the detail line, ghost **Give anyway** (§3b-i) |
+
+| `overdue` | due time + grace has passed, no event | berry; card header tinted |
 
 Every dose row carries a quiet **per-medication day count** pill on its detail line —
 `N of M doses`, where M is that course's own scheduled occurrences for the day, so "how many

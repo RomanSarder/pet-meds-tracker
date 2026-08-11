@@ -226,6 +226,16 @@ export function TodayPage(): ReactElement {
         toastMessage: t("today.toast.logged", {
           medicationName: dose.medicationName,
         }),
+        // SPEC §3b-i / Defect 1: the "log at a different time" sheet is
+        // reachable from a capped row's overflow menu independently of the
+        // primary/ghost button (`TodayDoseRow.tsx`'s menu is not gated on
+        // `cap`), and `give`'s own comment above is explicit that ANY give
+        // of a capped occurrence is flagged `overMax` — not only the ones
+        // that go through Give/Give anyway. Without this, logging a capped
+        // dose through the sheet would both miss the `overMax` flag SPEC
+        // §3b-i requires AND, unfixed, still be refused outright by the
+        // floor/grace guards this same defect fixes for `give`.
+        overMax: dose.state === "capped",
       }),
     [log, t],
   );

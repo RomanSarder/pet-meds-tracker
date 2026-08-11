@@ -12,6 +12,15 @@ export interface DoseRowCap {
   label: string;
   /** Already-localized ghost action label, e.g. "Give anyway". */
   giveAnywayLabel: string;
+  /**
+   * Already-localized accessible name for the ghost action, e.g. "Give
+   * Metacam anyway" — several capped courses on one screen render the
+   * identical `giveAnywayLabel` text, so a screen reader needs the
+   * medication folded into the NAME, not just the visible label. Falls back
+   * to `giveAnywayLabel` when a caller omits it, so existing callers keep
+   * their previous (weaker) accessible name rather than breaking.
+   */
+  giveAnywayAriaLabel?: string;
   onGiveAnyway: () => void;
 }
 
@@ -106,6 +115,7 @@ export function DoseRow({
               <Button
                 variant="ghost"
                 size="sm"
+                aria-label={cap.giveAnywayAriaLabel ?? cap.giveAnywayLabel}
                 onClick={(e) => {
                   e.stopPropagation();
                   cap.onGiveAnyway();
@@ -120,6 +130,15 @@ export function DoseRow({
       </div>
       {given ? (
         <div style={{ fontSize: 13, color: "var(--ink-3)" }}>{time}</div>
+      ) : cap ? (
+        // SPEC §4's precedence table gives a capped row the ghost **Give
+        // anyway** action as ITS action — the ghost REPLACES the ordinary
+        // primary Give button, it does not sit next to it (Defect 2: two
+        // give controls on one row is one control too many, same reasoning
+        // as the count-pill/cap-pill exclusivity above). The ghost button
+        // above is still rendered from the SAME `cap` prop, on the detail
+        // line; nothing renders here instead.
+        null
       ) : (
         <Button
           size="sm"

@@ -77,6 +77,14 @@ export interface TodayMessages {
    * `overMax` — this catalogue entry only supplies the label.
    */
   "today.pill.giveAnyway": () => string;
+  /**
+   * Defect 4: the ghost action's own accessible name — its visible label
+   * (`today.pill.giveAnyway`) is the bare "Give anyway" on every capped row,
+   * so a screen-reader user with several capped courses hears identical
+   * buttons with no way to tell which medication each belongs to.
+   * `medicationName` is DATA, interpolated verbatim (never translated).
+   */
+  "today.pill.giveAnyway.aria": (p: { medicationName: string }) => string;
 
   // --- empty state --------------------------------------------------------
   "today.emptyTitle": () => string;
@@ -337,6 +345,7 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.pill.count": (p) => `${p.given} of ${p.total} doses`,
   "today.pill.cap": (p) => `${p.given} of ${p.max} max`,
   "today.pill.giveAnyway": () => "Give anyway",
+  "today.pill.giveAnyway.aria": (p) => `Give ${p.medicationName} anyway`,
 
   "today.emptyTitle": () => "Nothing due today.",
   "today.nextDose.today": (p) => `Next dose at ${p.time}`,
@@ -488,6 +497,7 @@ export const ukToday = (f: Formatters): TodayMessages => ({
   // "макс." is an invariant abbreviation, the same convention `today.logAtTime.offsetMinutes`/`offsetHours` already use — never declined.
   "today.pill.cap": (p) => `${p.given} з ${p.max} макс.`,
   "today.pill.giveAnyway": () => "Все одно дати",
+  "today.pill.giveAnyway.aria": (p) => `Все одно дати ${p.medicationName}`,
 
   "today.emptyTitle": () => "Сьогодні нічого не заплановано.",
   "today.nextDose.today": (p) => `Наступна доза о ${p.time}`,

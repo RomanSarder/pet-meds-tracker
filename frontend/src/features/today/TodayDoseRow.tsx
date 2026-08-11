@@ -246,6 +246,13 @@ export function TodayDoseRow({
     ? {
         label: t("today.pill.cap", { given: cap.given, max: cap.max }),
         giveAnywayLabel: t("today.pill.giveAnyway"),
+        // Defect 4: the visible label stays the short "Give anyway" every
+        // capped row shares, but the accessible name folds in the
+        // medication so a screen-reader user with several capped courses
+        // can tell the rows apart.
+        giveAnywayAriaLabel: t("today.pill.giveAnyway.aria", {
+          medicationName: dose.medicationName,
+        }),
         onGiveAnyway: cap.onGiveAnyway,
       }
     : undefined;

@@ -697,35 +697,44 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
     // `allowWithinGrace`, and keyed on `scheduledFor` alone, INCLUDING when it
     // is `null` (the "chain never started" sentinel): a course cannot be
     // started twice from that sentinel either. See `memoryRepo.ts`'s
-    // identical guard for the full reasoning.
-    const sameOccurrence = liveEvents.find((e) => e.scheduledFor === input.scheduledFor);
+    // identical guard for the full reasoning, including the Defect 1 /
+    // SPEC §3b-i `overMax` awareness below.
+    const sameOccurrence = liveEvents.find(
+      (e) => e.scheduledFor === input.scheduledFor && (input.overMax || !e.overMax),
+    );
     if (sameOccurrence) {
       throw new DuplicateDoseError(sameOccurrence);
     }
 
-    // F1: the hard floor beneath `allowWithinGrace` — see `memoryRepo.ts`'s
-    // identical guard and `errors.ts`'s `TooSoonSinceLastDoseError`.
-    // Strictly LESS than the floor — see `memoryRepo.ts`'s identical guard
-    // for why the boundary itself must not be floor-blocked.
-    const tooSoon = liveEvents.find(
-      (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
-    );
-    if (tooSoon) {
-      throw new TooSoonSinceLastDoseError(
-        Math.round(Math.abs(givenAtMs - new Date(tooSoon.givenAt).getTime()) / 60_000),
+    // SPEC §3b-i: "the cap warns, it does not lock" — see `memoryRepo.ts`'s
+    // identical guard for the full reasoning. An `overMax` write skips both
+    // the floor and the grace-window heuristic outright; the same-occurrence
+    // hard block above is untouched.
+    if (!input.overMax) {
+      // F1: the hard floor beneath `allowWithinGrace` — see `memoryRepo.ts`'s
+      // identical guard and `errors.ts`'s `TooSoonSinceLastDoseError`.
+      // Strictly LESS than the floor — see `memoryRepo.ts`'s identical guard
+      // for why the boundary itself must not be floor-blocked.
+      const tooSoon = liveEvents.find(
+        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) < floorMs,
       );
-    }
+      if (tooSoon) {
+        throw new TooSoonSinceLastDoseError(
+          Math.round(Math.abs(givenAtMs - new Date(tooSoon.givenAt).getTime()) / 60_000),
+        );
+      }
 
-    // The grace-window heuristic — a collision with a DIFFERENT occurrence
-    // logged recently — is exactly what a confirmed early give (SPEC §3b:
-    // "logging a dose early ... is intended") is allowed to bypass; the two
-    // guards above never are.
-    if (!input.allowWithinGrace) {
-      const duplicate = liveEvents.find(
-        (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
-      );
-      if (duplicate) {
-        throw new DuplicateDoseError(duplicate);
+      // The grace-window heuristic — a collision with a DIFFERENT occurrence
+      // logged recently — is exactly what a confirmed early give (SPEC §3b:
+      // "logging a dose early ... is intended") is allowed to bypass; the two
+      // guards above never are.
+      if (!input.allowWithinGrace) {
+        const duplicate = liveEvents.find(
+          (e) => Math.abs(givenAtMs - new Date(e.givenAt).getTime()) <= graceMs,
+        );
+        if (duplicate) {
+          throw new DuplicateDoseError(duplicate);
+        }
       }
     }
 
