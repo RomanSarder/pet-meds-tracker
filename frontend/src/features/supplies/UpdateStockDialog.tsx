@@ -102,6 +102,13 @@ export function UpdateStockDialog({
         <Dialog.Popup
           onClick={stopBubbling}
           onPointerDown={stopBubbling}
+          // `Dialog.Portal` moves this popup to the end of `<body>` — outside
+          // the `.ds-root` wrapper it renders under. Every DS token is declared
+          // on `.ds-root`, never `:root` (`components/ds/tokens/colors.css`),
+          // so without this class the `var(--surface)`/`var(--line-quiet)`
+          // below resolve to nothing and the dialog paints as bare text over
+          // the page. Same fix, same reason, as `LogAtTimeSheet.tsx`.
+          className="ds-root"
           style={{
             position: "fixed",
             left: "50%",

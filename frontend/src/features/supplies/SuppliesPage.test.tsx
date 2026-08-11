@@ -273,6 +273,23 @@ describe("SuppliesPage", () => {
     expect(screen.getByText("Metacam · 1 more pack · Clover, Nugget")).toBeInTheDocument();
   });
 
+  it("keeps the portalled shopping-list dialog inside a .ds-root token scope, so it is not painted with unresolved tokens", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText("Buy now");
+
+    await user.click(screen.getByRole("button", { name: "Add Metacam to list" }));
+    await user.click(screen.getByRole("button", { name: /Shopping list · 1 item$/ }));
+
+    const dialog = await screen.findByRole("dialog");
+
+    // `Dialog.Portal` moves the popup to the end of `<body>`, outside the
+    // `DsRoot` the app mounts inside `#root`. Every DS token is declared on
+    // `.ds-root` rather than `:root`, so a popup that lands outside one paints
+    // `var(--surface)`/`var(--line-quiet)` as nothing.
+    expect(dialog.closest(".ds-root")).not.toBeNull();
+  });
+
   it("'Update stock' opens the dialog for the right medication", async () => {
     const user = userEvent.setup();
     renderPage();
