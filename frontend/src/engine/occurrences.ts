@@ -209,25 +209,41 @@ function buildFixedTimesOccurrence(
  * sorted copy must never leak into this positional pairing, or slot i would
  * stop meaning "the same slot before and after the edit".)
  *
- * Slot i keeps `times[i]` while that time had not yet arrived at the moment
- * of this transition; it moves to `newTimes[i]` once it had (SPEC §3c: an
- * occurrence is generated from the schedule in effect at its OWN due
- * instant, not the day's). A slot-count change pairs to the shorter array,
- * then a surplus NEW slot appears once due, and a surplus OLD slot keeps
- * firing until the transition.
+ * Slot i moves to `newTimes[i]` unless it is PINNED, and a slot is pinned
+ * only when both halves hold: its old time had already arrived at the moment
+ * of this transition, AND a live dose is already logged against it
+ * (`hasLoggedDose`). A slot-count change pairs to the shorter array, then a
+ * surplus NEW slot appears once due, and a surplus OLD slot survives the
+ * transition only while it is pinned by the same two-part test.
+ *
+ * The `hasLoggedDose` half is what keeps an edit VISIBLE on the day it is
+ * made. SPEC §3c's forward-only rule exists so that editing a schedule can
+ * never orphan a dose someone already logged — the occurrence key a stored
+ * DoseEvent points at has to keep being generated, or the row it belongs to
+ * silently disappears. Time alone is a much wider test than that goal needs:
+ * it also froze every UNTOUCHED past slot, so a carer who moved this
+ * morning's 08:00 dose to 09:00 at lunchtime saw Today keep saying 08:00
+ * with no explanation, while the dose amount they changed in the same save
+ * updated immediately (occurrences read `doseAmount` live). That mixed
+ * reading is what "my course edit isn't reflected on Today" actually was.
+ * An unlogged past slot has no history to protect, so it now follows the
+ * edit like every other slot.
  */
 function foldFixedTimesStep(
   day: LocalDate,
   times: LocalTime[],
   newTimes: LocalTime[],
   changedAt: Date,
+  hasLoggedDose: (t: LocalTime) => boolean,
 ): LocalTime[] {
   const pairedLength = Math.min(times.length, newTimes.length);
   const result: LocalTime[] = [];
 
+  const isPinned = (t: LocalTime): boolean =>
+    atLocalTime(day, t).getTime() < changedAt.getTime() && hasLoggedDose(t);
+
   for (let i = 0; i < pairedLength; i++) {
-    const dueAt = atLocalTime(day, times[i]);
-    result.push(dueAt.getTime() >= changedAt.getTime() ? newTimes[i] : times[i]);
+    result.push(isPinned(times[i]) ? times[i] : newTimes[i]);
   }
   for (let i = pairedLength; i < newTimes.length; i++) {
     if (atLocalTime(day, newTimes[i]).getTime() >= changedAt.getTime()) {
@@ -235,12 +251,16 @@ function foldFixedTimesStep(
     }
   }
   for (let i = pairedLength; i < times.length; i++) {
-    if (atLocalTime(day, times[i]).getTime() < changedAt.getTime()) {
+    if (isPinned(times[i])) {
       result.push(times[i]);
     }
   }
 
-  return result;
+  // Two slots can land on the same clock time — a pinned old slot the edit
+  // also happens to move another slot onto, say. They would build the
+  // identical occurrence key, and the day would render the same dose twice.
+  // First writer wins, so a pinned slot keeps its position in the array.
+  return result.filter((t, i) => result.indexOf(t) === i);
 }
 
 function fixedTimesOccurrences(
@@ -289,9 +309,23 @@ function fixedTimesOccurrences(
   // threading each step's output into the next. With zero transitions this
   // is a no-op (`times` stays `oldSchedule.times`); with exactly one it is
   // exactly the old binary old/new split.
+  // "Is a dose already logged against this slot?" — the pin test's second
+  // half. Keyed on the occurrence key the slot WOULD build on `day`, which is
+  // exactly what `buildFixedTimesOccurrence` binds its `event` with, so the
+  // fold and the row it produces can never disagree about which slots carry
+  // history.
+  const hasLoggedDose = (t: LocalTime): boolean =>
+    liveEventFor(occurrenceKeyFor(course.id, atLocalTime(day, t).toISOString()), events) !== null;
+
   let times: LocalTime[] = fixedVersions[0].times;
   for (let k = 0; k < transitionsInDay.length; k++) {
-    times = foldFixedTimesStep(day, times, fixedVersions[k + 1].times, new Date(transitionsInDay[k].at));
+    times = foldFixedTimesStep(
+      day,
+      times,
+      fixedVersions[k + 1].times,
+      new Date(transitionsInDay[k].at),
+      hasLoggedDose,
+    );
   }
 
   // Eligibility (window/daysOfWeek/everyNDays) is evaluated PER SLOT, against
@@ -308,7 +342,14 @@ function fixedTimesOccurrences(
     const dueAt = atLocalTime(day, t);
     const governing = scheduleAt(dueAt);
     if (governing.kind !== "fixedTimes") continue; // defensive, see guard above
-    if (!fixedTimesDayEligible(day, course, governing)) continue;
+    // A slot that already carries a logged dose is emitted whatever the
+    // day-level rules say. Otherwise an edit that narrows `daysOfWeek` or
+    // `everyNDays` past today would delete the row a dose given this morning
+    // is attached to, and the dose would vanish from Today with no trace —
+    // the exact orphaning §3c's pinning exists to prevent, arriving through
+    // the eligibility gate instead of the time grid. History first,
+    // eligibility only for slots that have none.
+    if (!hasLoggedDose(t) && !fixedTimesDayEligible(day, course, governing)) continue;
     occurrences.push(buildFixedTimesOccurrence(day, course, t, events));
   }
   return occurrences;

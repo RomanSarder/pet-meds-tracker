@@ -310,6 +310,22 @@ exists to prevent. When the user does set one:
 
 - Editing a schedule never rewrites past DoseEvents.
 
+- **An edit takes effect immediately, including on the day it is made.** A `fixedTimes` slot
+
+  whose time has already passed today still moves to its new time, and a slot the edit removes
+
+  still disappears — the carer sees what they just saved, not tomorrow.
+
+- **The one exception is history.** A slot that already carries a live DoseEvent (`given` or
+
+  `skipped`) keeps its old time for the rest of that day, and is still shown even if the edit
+
+  makes the day itself ineligible under `daysOfWeek`/`everyNDays`. That is the whole purpose of
+
+  the forward-only rule: an edit must never orphan a dose someone already logged. It is not a
+
+  reason to freeze slots that carry nothing.
+
 ### 3d. Day boundary and time zone
 
 - All scheduling is in the device's local time zone. Store timestamps in UTC, render local.

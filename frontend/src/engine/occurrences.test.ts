@@ -777,6 +777,208 @@ describe("getOccurrences — fixedTimes schedule edits are forward-only (SPEC §
     );
   });
 
+  // The reported bug: "sometimes when I update a course, the change is not
+  // reflected on Today". Forward-only used to freeze EVERY past slot, logged
+  // or not, so a lunchtime edit to this morning's time was invisible until
+  // tomorrow — while the dose amount changed in the same save updated at
+  // once, because occurrences read `doseAmount` live. Pinning is now what
+  // §3c actually needs it to be: protection for slots that carry history.
+  it("edit at 14:00 moving an UNLOGGED 08:00 slot to 09:00: the new time shows today", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["09:00", "18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "14:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["09:00", "18:00"],
+    });
+    const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString())).toEqual(
+      ["09:00", "18:00"].map((t) => atLocalTime(day, t).toISOString()),
+    );
+  });
+
+  it("the same edit with 08:00 already given: that slot stays pinned at 08:00 and keeps its event", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["09:00", "18:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "14:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["09:00", "18:00"],
+    });
+    const given0800 = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime(day, "08:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [given0800],
+      courseEvents: [edited],
+    };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString())).toEqual(
+      ["08:00", "18:00"].map((t) => atLocalTime(day, t).toISOString()),
+    );
+    expect(occs[0].event?.id).toBe(given0800.id);
+  });
+
+  // A skip is history too — the pin test asks whether the slot carries a live
+  // DoseEvent, not whether the dose was actually swallowed.
+  it("a SKIPPED past slot is pinned exactly as a given one is", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["09:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "14:00").toISOString(),
+      before: ["08:00"],
+      after: ["09:00"],
+    });
+    const skipped0800 = makeEvent({
+      courseId: course.id,
+      status: "skipped",
+      scheduledFor: atLocalTime(day, "08:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [skipped0800],
+      courseEvents: [edited],
+    };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "08:00").toISOString());
+    expect(occs[0].event?.id).toBe(skipped0800.id);
+  });
+
+  it("a RETRACTED dose stops pinning its slot — the edit lands once the history is gone", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["09:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "14:00").toISOString(),
+      before: ["08:00"],
+      after: ["09:00"],
+    });
+    const deleted0800 = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime(day, "08:00").toISOString(),
+      deletedAt: atLocalTime(day, "13:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [deleted0800],
+      courseEvents: [edited],
+    };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "09:00").toISOString());
+  });
+
+  it("a removed slot that already carries a dose is not deleted out from under it", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "16:00").toISOString(),
+      before: ["08:00", "14:00"],
+      after: ["08:00"],
+    });
+    const given1400 = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime(day, "14:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [given1400],
+      courseEvents: [edited],
+    };
+
+    // Index pairing consumes the surviving "08:00" against slot 0, so the
+    // dropped "14:00" is the SURPLUS old slot — the branch that has to
+    // consult the pin test too, not just the paired one.
+    const occs = getOccurrences(day, ctx);
+    expect(occs.map((o) => o.dueAt?.toISOString())).toEqual(
+      ["08:00", "14:00"].map((t) => atLocalTime(day, t).toISOString()),
+    );
+    expect(occs[1].event?.id).toBe(given1400.id);
+  });
+
+  it("an edit that makes today ineligible still shows a dose already logged today", () => {
+    const day = "2026-08-10"; // Monday, ISO weekday 1
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["08:00"], daysOfWeek: [6] }, // Saturday only
+      startDate: "2026-08-01",
+    });
+    const edited = makeScheduleEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "14:00").toISOString(),
+      kind: "edited",
+      before: { kind: "fixedTimes", times: ["08:00"] },
+      after: { kind: "fixedTimes", times: ["08:00"], daysOfWeek: [6] },
+    });
+    const given0800 = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime(day, "08:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [given0800],
+      courseEvents: [edited],
+    };
+
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].event?.id).toBe(given0800.id);
+  });
+
+  it("never emits the same slot twice when a pinned time collides with a moved one", () => {
+    const day = "2026-08-10";
+    const course = makeCourse({
+      schedule: { kind: "fixedTimes", times: ["07:00", "08:00"] },
+      startDate: "2026-08-01",
+    });
+    const edited = makeEditedEvent({
+      courseId: course.id,
+      at: atLocalTime(day, "14:00").toISOString(),
+      before: ["08:00", "20:00"],
+      after: ["07:00", "08:00"],
+    });
+    const given0800 = makeEvent({
+      courseId: course.id,
+      scheduledFor: atLocalTime(day, "08:00").toISOString(),
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [given0800],
+      courseEvents: [edited],
+    };
+
+    // Slot 0 pins to 08:00 (given); slot 1 moves to 08:00 as well. One row.
+    const occs = getOccurrences(day, ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "08:00").toISOString());
+  });
+
   it("slot count 3→2 on the transition day: the removed slot vanishes without ever having fired", () => {
     const day = "2026-08-10";
     const course = makeCourse({
@@ -976,10 +1178,14 @@ describe("getOccurrences — fixedTimes, per-slot eligibility on a same-day tran
     expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "08:00").toISOString());
   });
 
+  // Slot 0's NEW time (08:30) is still earlier than the 09:00 edit, which is
+  // what keeps this a per-slot-eligibility case: the slot follows the edit
+  // (nothing is logged against it, so nothing pins it), and is then judged
+  // against the version governing 08:30 — the OLD one.
   it("daysOfWeek: ineligible under OLD, eligible under NEW — only the post-edit slot appears", () => {
     const day = "2026-08-10"; // Monday, ISO weekday 1
     const course = makeCourse({
-      schedule: { kind: "fixedTimes", times: ["10:00", "21:00"], daysOfWeek: [1] },
+      schedule: { kind: "fixedTimes", times: ["08:30", "21:00"], daysOfWeek: [1] },
       startDate: "2026-08-01",
     });
     const edited = makeScheduleEvent({
@@ -987,7 +1193,7 @@ describe("getOccurrences — fixedTimes, per-slot eligibility on a same-day tran
       at: atLocalTime(day, "09:00").toISOString(),
       kind: "edited",
       before: { kind: "fixedTimes", times: ["08:00", "20:00"], daysOfWeek: [2] }, // Tuesday only: ineligible
-      after: { kind: "fixedTimes", times: ["10:00", "21:00"], daysOfWeek: [1] }, // Monday: eligible
+      after: { kind: "fixedTimes", times: ["08:30", "21:00"], daysOfWeek: [1] }, // Monday: eligible
     });
     const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
 
@@ -1016,10 +1222,12 @@ describe("getOccurrences — fixedTimes, per-slot eligibility on a same-day tran
     expect(occs[0].dueAt?.toISOString()).toBe(atLocalTime(day, "08:00").toISOString());
   });
 
+  // Same construction as the daysOfWeek twin above: slot 0 moves to 08:30,
+  // still ahead of the 09:00 edit, so the OLD version judges it.
   it("everyNDays: ineligible under OLD, eligible under NEW — only the post-edit slot appears", () => {
     const day = "2026-08-04"; // offset 3 from startDate
     const course = makeCourse({
-      schedule: { kind: "fixedTimes", times: ["10:00", "21:00"], everyNDays: 3 },
+      schedule: { kind: "fixedTimes", times: ["08:30", "21:00"], everyNDays: 3 },
       startDate: "2026-08-01",
     });
     const edited = makeScheduleEvent({
@@ -1027,7 +1235,7 @@ describe("getOccurrences — fixedTimes, per-slot eligibility on a same-day tran
       at: atLocalTime(day, "09:00").toISOString(),
       kind: "edited",
       before: { kind: "fixedTimes", times: ["08:00", "20:00"], everyNDays: 2 }, // offset 3 % 2 !== 0: ineligible
-      after: { kind: "fixedTimes", times: ["10:00", "21:00"], everyNDays: 3 }, // offset 3 % 3 === 0: eligible
+      after: { kind: "fixedTimes", times: ["08:30", "21:00"], everyNDays: 3 }, // offset 3 % 3 === 0: eligible
     });
     const ctx: EngineContext = { courses: [course], events: [], courseEvents: [edited] };
 
