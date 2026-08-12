@@ -875,6 +875,35 @@ describe("buildTodayView — Ukrainian", () => {
     expect(UK.t("today.when.inDays", { days: 21 })).toBe("через 21 день");
   });
 
+  // An outstanding interval dose survives past its due day (SPEC §3b), so the
+  // detail line has to word a day that has already gone. Before those rows
+  // existed the negative branch was unreachable and rendered "in -2 days".
+  it("words a dose whose due day has already passed, in both languages", () => {
+    expect(EN.t("today.when.yesterday")).toBe("yesterday");
+    expect(EN.t("today.when.daysAgo", { days: 2 })).toBe("2 days ago");
+    expect(UK.t("today.when.yesterday")).toBe("вчора");
+    expect(UK.t("today.when.daysAgo", { days: 2 })).toBe("2 дні тому");
+    expect(UK.t("today.when.daysAgo", { days: 5 })).toBe("5 днів тому");
+  });
+
+  it("the dose detail line reads '2 days ago', never 'in -2 days', for a stale interval dose", () => {
+    // Anchored two days before the day being viewed, 8h interval, unlogged —
+    // exactly the row that used to vanish instead of being shown.
+    const course = courseOf(COURSE_CLOVER_METOCLOPRAMIDE);
+    const occ = makeOccurrence(course, {
+      day: DAY,
+      scheduledFor: atLocalTime(addLocalDays(DAY, -2), "07:00").toISOString(),
+    });
+    const snapshot = snapshotOf([occ]);
+    setOccurrences(DAY, [occ]);
+
+    const view = buildTodayView(snapshot, NOW, EN);
+    const detail = view.groups.flatMap((g) => g.body).find((d) => d.key === occ.key)!.detail;
+
+    expect(detail).toContain("2 days ago");
+    expect(detail).not.toContain("-2");
+  });
+
   it("localizes the card status, the counter and the empty state's date", () => {
     const given = occAt(COURSE_CLOVER_METACAM, "08:00");
     const pending = occAt(COURSE_CLOVER_METACAM, "20:00");

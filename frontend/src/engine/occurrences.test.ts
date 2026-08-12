@@ -270,9 +270,102 @@ describe("getOccurrences — fromLastDose", () => {
     expect(onDay).toHaveLength(1);
     expect(onDay[0].dueAt?.toISOString()).toBe("2026-08-06T06:00:00.000Z");
     expect(onDay[0].key).toBe(onAnchorDay[0].key);
-    // The window's upper bound stays at the due day: an unlogged chain does
-    // not keep generating past it (pre-existing behaviour, untouched here).
-    expect(getOccurrences("2026-08-07", ctx)).toHaveLength(0);
+    // Still outstanding the next day, so it survives — see the dedicated
+    // "does not vanish" cases below for why.
+    const dayAfter = getOccurrences("2026-08-07", ctx);
+    expect(dayAfter).toHaveLength(1);
+    expect(dayAfter[0].key).toBe(onDay[0].key);
+  });
+
+  // The reported bug: "a new day came and one of my pets did not reset — I
+  // can't give his meds, he shows as completed". An interval dose that came
+  // due yesterday and was never logged used to stop generating at midnight.
+  // The chain only re-anchors on a `given` event, so `dueAt` stayed put in
+  // the past and no later day produced anything: the course disappeared off
+  // Today entirely, leaving the pet with nothing to give.
+  it("keeps emitting an OUTSTANDING overdue dose on later days, so the course cannot vanish overnight", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 8 },
+      startDate: "2026-08-01",
+    });
+    const given = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      status: "given",
+      givenAt: "2026-08-05T13:00:00.000Z", // 14:00 BST on the 5th
+      loggedAt: "2026-08-05T13:00:00.000Z",
+    });
+    const ctx: EngineContext = { courses: [course], events: [given], courseEvents: [] };
+
+    // +8h = 21:00 UTC = 22:00 BST, still on the 5th. Nothing logged since.
+    const dueAtIso = "2026-08-05T21:00:00.000Z";
+    for (const day of ["2026-08-05", "2026-08-06", "2026-08-07", "2026-08-12"]) {
+      const occs = getOccurrences(day, ctx);
+      expect(occs, `expected an occurrence on ${day}`).toHaveLength(1);
+      expect(occs[0].dueAt?.toISOString()).toBe(dueAtIso);
+      expect(occs[0].event).toBeNull();
+    }
+    // And it reads as actionable, not as something already dealt with.
+    expect(getDoseState(getOccurrences("2026-08-07", ctx)[0], atLocalTime("2026-08-07", "09:00"))).toBe(
+      "overdue",
+    );
+  });
+
+  it("stops once that overdue dose is SKIPPED — a resolved row does not reappear forever", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 8 },
+      startDate: "2026-08-01",
+    });
+    const given = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      status: "given",
+      givenAt: "2026-08-05T13:00:00.000Z",
+      loggedAt: "2026-08-05T13:00:00.000Z",
+    });
+    const skipped = makeEvent({
+      courseId: course.id,
+      status: "skipped",
+      scheduledFor: "2026-08-05T21:00:00.000Z",
+      givenAt: "2026-08-05T21:30:00.000Z",
+      loggedAt: "2026-08-05T21:30:00.000Z",
+    });
+    const ctx: EngineContext = { courses: [course], events: [given, skipped], courseEvents: [] };
+
+    // Visible on its own day, carrying the skip…
+    const onDueDay = getOccurrences("2026-08-05", ctx);
+    expect(onDueDay).toHaveLength(1);
+    expect(onDueDay[0].event?.id).toBe(skipped.id);
+    // …and gone the next day, rather than repeating as a resolved row.
+    expect(getOccurrences("2026-08-06", ctx)).toHaveLength(0);
+  });
+
+  it("stops once that overdue dose is GIVEN — the chain re-anchors onto a new occurrence", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 8 },
+      startDate: "2026-08-01",
+    });
+    const first = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      status: "given",
+      givenAt: "2026-08-05T13:00:00.000Z",
+      loggedAt: "2026-08-05T13:00:00.000Z",
+    });
+    const late = makeEvent({
+      courseId: course.id,
+      status: "given",
+      scheduledFor: "2026-08-05T21:00:00.000Z",
+      givenAt: "2026-08-07T08:00:00.000Z", // finally given two days later
+      loggedAt: "2026-08-07T08:00:00.000Z",
+    });
+    const ctx: EngineContext = { courses: [course], events: [first, late], courseEvents: [] };
+
+    const occs = getOccurrences("2026-08-07", ctx);
+    expect(occs).toHaveLength(1);
+    // Anchored on the late dose, not still showing the old outstanding one.
+    expect(occs[0].dueAt?.toISOString()).toBe("2026-08-07T16:00:00.000Z");
+    expect(occs[0].event).toBeNull();
   });
 
   // Generic-arithmetic regression guard, NOT a test of the "Every 2h" UI

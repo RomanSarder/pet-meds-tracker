@@ -426,9 +426,19 @@ function emptyDetailFor(
   return earliest === null ? null : formatNextDose(earliest, now, tr);
 }
 
+/**
+ * Negative offsets are reachable now that an OUTSTANDING interval dose keeps
+ * being emitted past its due day (SPEC §3b) — a dose due two days ago used to
+ * be deleted rather than shown, so the past side of this was dead code and
+ * `inDays` rendered it as "in -2 days". `comingUpFor` only ever passes
+ * non-negative offsets; the dose detail line at `toDose` is what reaches
+ * back.
+ */
 function whenLabel(offsetDays: number, tr: Translator): string {
   if (offsetDays === 0) return tr.t("today.when.today");
   if (offsetDays === 1) return tr.t("today.when.tomorrow");
+  if (offsetDays === -1) return tr.t("today.when.yesterday");
+  if (offsetDays < -1) return tr.t("today.when.daysAgo", { days: -offsetDays });
   return tr.t("today.when.inDays", { days: offsetDays });
 }
 

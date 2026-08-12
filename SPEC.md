@@ -236,6 +236,18 @@ explicitly, not inferred.
 
 - Logging a dose early or late shifts the whole chain. This is intended — do not "correct" it.
 
+- **An outstanding interval dose never expires.** The chain re-anchors only on a `given` event,
+
+  so a dose that goes unlogged stays due — it keeps appearing, reading `overdue`, on every day
+
+  after its due day until it is given or skipped. It must not stop being generated at the end of
+
+  its own day: that would take the course off Today with nothing to give and no way back, and
+
+  the pet would read as done for the day. Once resolved it stops — a `given` event re-anchors
+
+  the chain onto a new occurrence, and a `skipped` one ends that occurrence where it stands.
+
 - `anchorTime` is optional and only used to seed the first occurrence if the user prefers.
 
 ### 3b-i. `maxPerDay` — an optional daily ceiling on an interval course

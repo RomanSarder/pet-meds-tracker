@@ -110,6 +110,15 @@ export interface TodayMessages {
   "today.when.today": () => string;
   "today.when.tomorrow": () => string;
   "today.when.inDays": (p: { days: number }) => string;
+  /**
+   * The past-facing twin of `inDays`, for a dose whose due day has already
+   * gone by. Reachable since an OUTSTANDING interval dose stopped being
+   * deleted at the end of its own day (SPEC §3b): before that, a row could
+   * only ever be due today or later, and a negative offset fell through to
+   * `inDays` and rendered the nonsense "in -2 days".
+   */
+  "today.when.yesterday": () => string;
+  "today.when.daysAgo": (p: { days: number }) => string;
 
   // --- page chrome --------------------------------------------------------
   "today.addCourse": () => string;
@@ -389,6 +398,14 @@ export const enToday = (f: Formatters): TodayMessages => ({
       one: `in ${p.days} day`,
       other: `in ${p.days} days`,
     }),
+  "today.when.yesterday": () => "yesterday",
+  // Same shape as `inDays`: only reached for n >= 2, `one` kept so this is a
+  // real plural rule.
+  "today.when.daysAgo": (p) =>
+    f.plural(p.days, {
+      one: `${p.days} day ago`,
+      other: `${p.days} days ago`,
+    }),
 
   "today.addCourse": () => "Add a course",
   "today.loadingDoses": () => "Loading today's doses",
@@ -549,6 +566,15 @@ export const ukToday = (f: Formatters): TodayMessages => ({
       few: `через ${p.days} дні`,
       many: `через ${p.days} днів`,
       other: `через ${p.days} дня`,
+    }),
+  "today.when.yesterday": () => "вчора",
+  // Same plural categories as `inDays` above, past-facing.
+  "today.when.daysAgo": (p) =>
+    f.plural(p.days, {
+      one: `${p.days} день тому`,
+      few: `${p.days} дні тому`,
+      many: `${p.days} днів тому`,
+      other: `${p.days} дня тому`,
     }),
 
   "today.addCourse": () => "Додати курс",

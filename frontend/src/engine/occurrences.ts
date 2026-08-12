@@ -441,18 +441,27 @@ function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEve
   // computed due instant happens to cross into the next local day (e.g. a
   // late-evening dose on a 4h+ interval). `getDoseState` still tells the
   // full story once this renders: "upcoming" while `day` precedes `dueDay`,
-  // "later"/"due"/"overdue" once `day` reaches it. The window's upper bound
-  // stays at `dueDay`, matching the PRE-EXISTING behaviour once the dose is
-  // overdue and unlogged past its own day — unrelated to this fix, and left
-  // untouched (`sweep.ts`'s `findMissedOccurrences` never sweeps a
-  // `fromLastDose` occurrence either, so "no future occurrence generated
-  // once a whole day has passed unlogged" is a pre-existing, separate
-  // question this change does not answer).
-  if (differenceInLocalDays(day, anchorDay) < 0 || differenceInLocalDays(dueDay, day) < 0) {
-    return [];
-  }
+  // "later"/"due"/"overdue" once `day` reaches it.
   const scheduledFor = dueAt.toISOString();
   const key = occurrenceKeyFor(course.id, scheduledFor);
+  const event = liveEventFor(key, events);
+  if (differenceInLocalDays(day, anchorDay) < 0) return [];
+  // PAST the due day, the occurrence survives only while it is still
+  // OUTSTANDING. The upper bound used to be `dueDay` flat, which silently
+  // deleted an interval dose that went unlogged past its own day: the chain
+  // does not re-anchor without a `given` event (`anchorFor`), so `dueAt`
+  // stayed put in the past and every later day generated nothing at all. The
+  // course vanished from Today — no row, nothing to give, and the pet read as
+  // done for the day. That is the "my pet did not reset overnight" report: an
+  // 8h dose that came due at 22:00 and was not logged took the whole course
+  // off the screen at midnight, with no way back short of giving a dose the
+  // UI no longer offered.
+  //
+  // A RESOLVED one still stops at its due day. A `given` event re-anchors the
+  // chain, so its key is never regenerated anyway; a `skipped` one does not
+  // re-anchor (SPEC §3b), and without this guard its row would reappear every
+  // day forever.
+  if (differenceInLocalDays(dueDay, day) < 0 && event !== null) return [];
   // SPEC §3b-i: present only when this course's schedule actually carries a
   // cap — an absent `maxPerDay` here is what keeps `getDoseState` from ever
   // computing `capped` for an uncapped course (the unset-case no-op).
@@ -478,7 +487,8 @@ function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEve
       doseAmount: course.doseAmount,
       doseUnit: course.doseUnit,
       instructions: course.instructions,
-      event: liveEventFor(key, events),
+      // Same lookup the survival guard above already made — resolved once.
+      event,
       ...capFields,
     },
   ];

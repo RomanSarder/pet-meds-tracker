@@ -71,11 +71,13 @@ describe("PetDetailView", () => {
     renderWithProviders(<PetDetailView petId={pet.id} />);
 
     // Clover has one active fixedTimes course with two configured times
-    // (08:00, 20:00, "due" and "later" respectively at FIXTURE_NOW) and one
-    // active fromLastDose course whose next due falls on a different day —
-    // two occurrences today, neither with a matching DoseEvent.
+    // (08:00, 20:00, "due" and "later" respectively at FIXTURE_NOW), plus an
+    // active fromLastDose course whose dose came due the PREVIOUS day and was
+    // never logged. That third one is still outstanding, so it is still
+    // listed — it used to be dropped once its due day passed, which is the
+    // "my pet did not reset overnight" bug (`engine/occurrences.ts`).
     const scheduleLabel = await screen.findByText("Schedule");
-    expect(await screen.findByText("2 today")).toBeInTheDocument();
+    expect(await screen.findByText("3 today")).toBeInTheDocument();
     const scheduleCard = scheduleLabel.closest("div")!.nextElementSibling as HTMLElement;
 
     // SPEC §5.3: the Schedule block is read-only — no "Give" text, and no
@@ -244,7 +246,11 @@ describe("PetDetailView", () => {
     expect(skippedName.style.textDecoration).not.toBe("line-through");
 
     // overdue: carries the literal word "Overdue" — not colour alone (SPEC §9).
-    expect(within(scheduleCard).getByText("Overdue")).toBeInTheDocument();
+    // `getAllByText`: Clover's own fromLastDose fixture course is also
+    // outstanding from the previous day, so the block legitimately holds more
+    // than one overdue row. The state's rendering is what is under test here,
+    // not how many rows happen to be in it.
+    expect(within(scheduleCard).getAllByText("Overdue").length).toBeGreaterThan(0);
 
     // due / later: their due time as plain text.
     expect(within(scheduleCard).getByText("08:00")).toBeInTheDocument();
@@ -406,7 +412,13 @@ describe("PetDetailView", () => {
     // The pre-data-flash defect this investigation ruled out: once settled,
     // this given-late row must never carry "Прострочено" — struckThrough and
     // overdue are structurally mutually exclusive in `ScheduleRow.tsx`.
-    expect(within(scheduleCard).queryByText("Прострочено")).not.toBeInTheDocument();
+    //
+    // Scoped to THIS ROW, not the whole block. Clover's own fromLastDose
+    // fixture course is outstanding from the previous day and correctly
+    // renders "Прострочено" of its own, which says nothing about the row
+    // under test — the card-wide form of this assertion only ever passed
+    // because that row used to be dropped from the schedule entirely.
+    expect(within(row).queryByText("Прострочено")).not.toBeInTheDocument();
   });
 
   it("shows a never-started fromLastDose course as read-only 'Not started' text, with no button of any label", async () => {
