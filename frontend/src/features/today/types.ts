@@ -32,6 +32,29 @@ export interface TodaySnapshot {
   occurrences: Occurrence[];
 }
 
+/**
+ * The row pill's numbers, discriminated by what the course's schedule makes
+ * countable (SPEC §4). Wording lives in `i18n/catalogue/today.ts`; this type
+ * only decides WHICH question the pill answers.
+ *
+ * - `occurrences` — a `fixedTimes` course: "N of M doses", M being that
+ *   course's own occurrences rendered today (resolved ∪ due-today), the same
+ *   test the pet card's `Y` uses. Never a schedule-derived guess.
+ * - `max` — a `fromLastDose` course with `maxPerDay` set (SPEC §3b-i):
+ *   "N of M max". Once N reaches M the row is `capped` and `TodayDose.cap`
+ *   re-renders the identical numbers in amber, so the pill never jumps.
+ * - `givenOnly` — a `fromLastDose` course with no maximum: "N doses given".
+ *   There is no denominator to show, because an interval course's daily total
+ *   is genuinely unknowable in advance (COMMON §6 item 8) — and counting
+ *   rendered occurrences instead would be worse than useless: a chain emits at
+ *   most ONE occurrence per day (the current head), so that count read "0 of
+ *   1" all day however many doses had been given.
+ */
+export type TodayCountPill =
+  | { kind: "occurrences"; given: number; total: number }
+  | { kind: "max"; given: number; max: number }
+  | { kind: "givenOnly"; given: number };
+
 /** One dose line as the screen renders it. */
 export interface TodayDose {
   /** Stable React key and the join key back to the engine's occurrence. */
@@ -55,31 +78,21 @@ export interface TodayDose {
   /** "08:00", or null for a `notStarted` occurrence, which has no due time. */
   time: string | null;
   /**
-   * That COURSE's own day count (SPEC §4's row pill: "N of M doses").
-   * `total` counts every rendered occurrence of THIS course today that is
-   * resolved or due today — the same "resolved ∪ (pending ∩ isDueToday)"
-   * test the pet card's own `Y` uses, never a schedule-derived guess: for a
-   * `fromLastDose` course that means `total` comes from what is actually
-   * rendered today, NEVER `24 / intervalHours` (SPEC's denominator rule). At
-   * most one `fromLastDose` occurrence is ever rendered per course per day
-   * (`getOccurrences`), so `total` is usually 1 for one — that is the
-   * correct, honest answer, not a bug: an interval course's daily count is
-   * genuinely unknowable in advance (SPEC §4 / COMMON §6 item 8).
+   * That COURSE's own day count — SPEC §4's row pill, in the one shape that
+   * course's schedule can honestly support. `given` always means the same
+   * thing in all three: this course's live `given` events today, never
+   * `skipped` — the pill answers "how many times have I given this", not "how
+   * many are resolved" (contrast the pet card counter and the day progress
+   * headline, which both fold `skipped` into "done").
    *
-   * `given` counts this course's `given` events only, never `skipped` — the
-   * pill answers "how many times have I given this", not "how many are
-   * resolved" (contrast the pet card counter and the day progress headline,
-   * which both fold `skipped` into "done").
-   *
-   * `null`/absent when `total` is 0 — nothing to divide by (a `notStarted`
-   * row, or an early-reachable `upcoming` one) — so the row renders no pill
-   * at all rather than a contentless "0 of 0" (SPEC §4: "a pill claiming an
-   * occurrence the user cannot see is worse than no pill"). Optional rather
-   * than required: `buildTodayView` always sets it, but other fixtures that
-   * hand-build a `TodayDose` (outside this wave's scope) do not need to know
-   * this field exists at all.
+   * `null`/absent when there is nothing to say (a `notStarted` row, or a
+   * `fixedTimes` course with no rendered occurrence today), so the row renders
+   * no pill at all rather than a contentless "0 of 0" (SPEC §4: "a pill
+   * claiming an occurrence the user cannot see is worse than no pill").
+   * Optional rather than required: `buildTodayView` always sets it, but other
+   * fixtures that hand-build a `TodayDose` do not need to know it exists.
    */
-  courseCount?: { given: number; total: number } | null;
+  courseCount?: TodayCountPill | null;
   /**
    * SPEC §3b-i's `capped` state, numbers only — `given`/`max` mirror the
    * occurrence's own `givenToday`/`maxPerDay` verbatim, never recomputed

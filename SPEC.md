@@ -386,11 +386,31 @@ Computed per occurrence, in this precedence order:
 
 | `overdue` | due time + grace has passed, no event | berry; card header tinted |
 
-Every dose row carries a quiet **per-medication day count** pill on its detail line —
-`N of M doses`, where M is that course's own scheduled occurrences for the day, so "how many
-times have I given Metacam?" is answerable without opening history. When a course has
-`maxPerDay` set, the `N of M max` pill replaces it rather than sitting beside it: two count
-pills on one row is one number too many.
+Every dose row carries a quiet **per-medication day count** pill on its detail line, so "how
+many times have I given Metacam?" is answerable without opening history. Its shape follows the
+schedule kind, because the two kinds can honestly count different things:
+
+| Schedule | Pill | N | M |
+
+| --- | --- | --- | --- |
+
+| `fixedTimes` | `N of M doses` | that course's `given` doses today | its own scheduled occurrences for the day |
+
+| `fromLastDose`, `maxPerDay` set | `N of M max` | same | the course's `maxPerDay` |
+
+| `fromLastDose`, no maximum | `N doses given` | same | — none shown |
+
+An interval chain renders at most ONE occurrence at a time — the current head — so counting
+rendered occurrences there answers `0 of 1` all day however many doses have been given. N comes
+off the DoseEvent ledger instead (live `given` events for that course on the local day), and the
+denominator is either a number the user actually chose (`maxPerDay`) or absent: an interval
+course's daily total is unknowable in advance, and inventing one (`24 / intervalHours`) is
+exactly what the denominator rule below forbids.
+
+`N of M max` is the same sentence in both its states — quiet while the course is under its
+maximum, amber once `capped` reaches it (§3b-i) — so the pill never re-words itself at the
+moment it changes colour, and it never sits beside a second count pill: two count pills on one
+row is one number too many.
 
 **Three nested day counts appear on Today, and their wording must keep them apart:**
 
@@ -398,14 +418,15 @@ pills on one row is one number too many.
 
 | --- | --- | --- |
 
-| One medication | dose row pill | `N of M doses` — never "today" |
+| One medication | dose row pill | `N of M doses` / `N of M max` / `N doses given` — never "today" |
 
 | One pet | pet card header | `N of M today` |
 
 | The household | day progress under the header | `N of M given today` (§6.1) |
 
-Each denominator must be derivable from what is on screen: a row's M counts that course's
-occurrences for the day, and a pet card's M counts that pet's occurrences. Do not compute a
+Each denominator must be derivable from what is on screen or from a limit the user set: a
+`fixedTimes` row's M counts that course's occurrences for the day, an interval row's M is its own
+`maxPerDay` or nothing at all, and a pet card's M counts that pet's occurrences. Do not compute a
 denominator from a course definition the list does not render — a pill claiming an occurrence
 the user cannot see is worse than no pill.
 
@@ -1095,9 +1116,15 @@ Each slice is independently assignable and ends in something testable.
 
 - Nothing is due for an interval course that has never been started.
 
-- An interval course with **no** maximum set behaves exactly as before: no pill, no `capped`
+- An interval course with **no** maximum set has no `capped` state and no amber pill, and a
 
-  state, and a fourth dose in one day is logged without comment.
+  fourth dose in one day is logged without comment — its row pill reads `4 doses given`, counted
+
+  off the ledger, with no denominator.
+
+- Three doses of an `every 4h` course given today all count toward that row's pill, even though
+
+  only the chain's current head is on screen.
 
 - An `every 8h, max 3 per day` course logged at 06:00, 14:00 and 22:00 has nothing due at 06:00
 

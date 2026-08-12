@@ -14,7 +14,13 @@
 // typecheck` finds them all. `scheduleTimelineFor`, the helper that reads
 // the ledger, is intentionally NOT added here — it stays private to
 // occurrences.ts and is exercised only through `getOccurrences`.
-export { getOccurrences } from "./occurrences";
+// ADDED (purely additive — no existing name changed, so branches compiling
+// against this barrel are unaffected): `countGivenOnDay`, the engine's own
+// "live `given` events for this course on this local day" count. Today's row
+// pill reads it for `fromLastDose` courses, where rendered occurrences cannot
+// answer "how many have I given today" (see its doc comment in
+// occurrences.ts).
+export { getOccurrences, countGivenOnDay } from "./occurrences";
 export { getDoseState, summariseDay } from "./state";
 export { nextDueAt, findMissedOccurrences, findCoursesToFinish } from "./sweep";
 export { describeSchedule, courseProgress } from "./describe";

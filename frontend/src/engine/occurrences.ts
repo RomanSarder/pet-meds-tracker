@@ -383,8 +383,19 @@ function liveGivenEventsForCourse(courseId: string, events: DoseEvent[]): DoseEv
   );
 }
 
-/** SPEC §3b-i/§3d: how many `given` events for this course fall in local calendar day `day`. */
-function countGivenOnDay(courseId: string, day: LocalDate, events: DoseEvent[]): number {
+/**
+ * SPEC §3b-i/§3d: how many `given` events for this course fall in local
+ * calendar day `day`.
+ *
+ * Exported (and re-exported from `@/engine`) because Today's row pill needs
+ * exactly this number for a `fromLastDose` course — a chain renders at most
+ * one occurrence per day, so counting rendered rows can only ever answer
+ * "0 of 1" no matter how many doses were actually given (SPEC §4). The count
+ * has to come from the ledger, and it has to come from the ENGINE's own
+ * definition of a live given dose: `deletedAt === null` and not superseded, a
+ * rule slice 5 must not restate (SPEC §10).
+ */
+export function countGivenOnDay(courseId: string, day: LocalDate, events: DoseEvent[]): number {
   return liveGivenEventsForCourse(courseId, events).filter(
     (e) => localDayKey(new Date(e.givenAt)) === day,
   ).length;

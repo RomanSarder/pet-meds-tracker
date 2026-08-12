@@ -24,6 +24,7 @@ import {
 } from "@/domain";
 import type { DoseState, Occurrence } from "@/engine";
 import {
+  countGivenOnDay,
   courseProgress,
   describeSchedule,
   getDoseState,
@@ -255,20 +256,38 @@ function toDose(
 }
 
 /**
- * The row pill's per-course `N of M doses` (SPEC §4). Mutates `doses` in
- * place and returns it, purely as a bookkeeping convenience for its one
- * caller (`buildTodayView`) — every `TodayDose` in the array is already a
- * fresh object `toDose` built for this render, never a cached/shared one, so
- * there is nothing else this could alias.
+ * The row pill's per-course day count (SPEC §4). Mutates `doses` in place and
+ * returns it, purely as a bookkeeping convenience for its one caller
+ * (`buildTodayView`) — every `TodayDose` in the array is already a fresh
+ * object `toDose` built for this render, never a cached/shared one, so there
+ * is nothing else this could alias.
  *
- * `total` per course is "resolved ∪ (pending ∩ isDueToday)" — the SAME test
- * `groupFor`'s own `Y` uses for the pet card counter, so a `fromLastDose`
- * course's total is exactly what is rendered today, never a schedule-derived
- * guess (SPEC's denominator rule). `given` counts only `state === "given"`,
- * never `skipped` — SPEC §4's rationale is literally "how many times have I
- * given Metacam", not "how many are resolved".
+ * TWO SOURCES, chosen by the course's schedule kind — see `TodayCountPill`:
+ *
+ * `fixedTimes` counts RENDERED OCCURRENCES: `total` per course is "resolved ∪
+ * (pending ∩ isDueToday)", the SAME test `groupFor`'s own `Y` uses for the pet
+ * card counter, so the denominator stays derivable from what is on screen
+ * (SPEC's denominator rule). Unchanged.
+ *
+ * `fromLastDose` counts LEDGER EVENTS, via the engine's own `countGivenOnDay`.
+ * Occurrences cannot answer the question there: a chain emits at most one
+ * occurrence per day — the current head — so every dose already given today
+ * has left the list, and the occurrence-derived pill read "0 of 1 doses" all
+ * day however many had been given. The denominator rule is still honoured,
+ * just from the other direction: `maxPerDay` when the course sets one (a real
+ * number the user chose, SPEC §3b-i), and NO denominator at all otherwise
+ * rather than an invented one.
+ *
+ * `given` counts only `given` doses, never `skipped`, on both paths — SPEC
+ * §4's rationale is literally "how many times have I given Metacam", not "how
+ * many are resolved". (`countGivenOnDay` applies the same rule to the ledger:
+ * `status === "given"`, live, not superseded.)
  */
-function attachCourseCounts(doses: TodayDose[]): TodayDose[] {
+function attachCourseCounts(
+  doses: TodayDose[],
+  coursesById: Map<string, Course>,
+  snapshot: TodaySnapshot,
+): TodayDose[] {
   const totals = new Map<string, { given: number; total: number }>();
   for (const d of doses) {
     const counted = RESOLVED_STATES.has(d.state) || (isPendingDose(d) && isDueToday(d));
@@ -278,9 +297,41 @@ function attachCourseCounts(doses: TodayDose[]): TodayDose[] {
     if (d.state === "given") entry.given += 1;
     totals.set(d.courseId, entry);
   }
+  // Counted once per course, not once per row: `countGivenOnDay` walks the
+  // whole ledger, and several rows can share a course.
+  const givenTodayByCourse = new Map<string, number>();
   for (const d of doses) {
+    const course = coursesById.get(d.courseId);
+    if (course === undefined || course.schedule.kind !== "fromLastDose") continue;
+    if (givenTodayByCourse.has(d.courseId)) continue;
+    givenTodayByCourse.set(
+      d.courseId,
+      countGivenOnDay(d.courseId, snapshot.day, snapshot.events),
+    );
+  }
+  for (const d of doses) {
+    const course = coursesById.get(d.courseId);
+    const schedule = course?.schedule;
+    if (schedule !== undefined && schedule.kind === "fromLastDose") {
+      // A `notStarted` row keeps its `null`: the chain has never run, so
+      // there is nothing given today by construction, and that row renders
+      // **Start course** rather than a `DoseRow` at all (`TodayDoseRow`).
+      if (d.state === "notStarted") {
+        d.courseCount = null;
+        continue;
+      }
+      const given = givenTodayByCourse.get(d.courseId) ?? 0;
+      d.courseCount =
+        schedule.maxPerDay !== undefined
+          ? { kind: "max", given, max: schedule.maxPerDay }
+          : { kind: "givenOnly", given };
+      continue;
+    }
     const entry = totals.get(d.courseId);
-    d.courseCount = entry && entry.total > 0 ? entry : null;
+    d.courseCount =
+      entry && entry.total > 0
+        ? { kind: "occurrences", given: entry.given, total: entry.total }
+        : null;
   }
   return doses;
 }
@@ -620,7 +671,7 @@ export function buildTodayView(
     if (!course || !medication) continue;
     doses.push(toDose(occ, course, medication, snapshot, now, tr));
   }
-  attachCourseCounts(doses);
+  attachCourseCounts(doses, coursesById, snapshot);
 
   const groups = snapshot.pets
     .filter((pet) => !pet.archived)

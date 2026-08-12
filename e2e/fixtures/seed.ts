@@ -47,13 +47,19 @@ export const SEED = {
   intervalDueTime: "12:00",
 } as const;
 
+/**
+ * The seeded `fromLastDose` course. Exported so a spec can give it a second
+ * dose for the day, or a daily maximum, without restating the whole payload.
+ */
+export const INTERVAL_COURSE_ID = "55555555-5555-4555-8555-000000000002";
+
 const HOUSEHOLD_ID = "11111111-1111-4111-8111-000000000001";
 const USER_ID = "22222222-2222-4222-8222-000000000001";
 const PET_ID = "33333333-3333-4333-8333-000000000001";
 const MED_FIXED_ID = "44444444-4444-4444-8444-000000000001";
 const MED_INTERVAL_ID = "44444444-4444-4444-8444-000000000002";
 const COURSE_FIXED_ID = "55555555-5555-4555-8555-000000000001";
-const COURSE_INTERVAL_ID = "55555555-5555-4555-8555-000000000002";
+const COURSE_INTERVAL_ID = INTERVAL_COURSE_ID;
 const ANCHOR_EVENT_ID = "66666666-6666-4666-8666-000000000001";
 
 const CREATED = "2026-08-01T09:00:00.000Z";
@@ -203,6 +209,64 @@ export function buildSeedBackup() {
     // null, it would run mid-test and write `missed` rows / flip courses to
     // `finished` under the assertions.
     meta: { tintCursor: 1, lastSweepDay: SEED_DAY },
+  };
+}
+
+type SeedBackup = ReturnType<typeof buildSeedBackup>;
+type IsoLike = string;
+
+/**
+ * A second (third, …) `given` dose of the interval course, on the seed day.
+ *
+ * `givenAt` is what the day-count reads; `scheduledFor` is the occurrence it
+ * resolves — the chain head the previous dose created, exactly as the app
+ * writes it. Keep successive doses more than the 8h interval's 90-minute
+ * grace apart (and more than `EARLY_GIVE_FLOOR_MIN` from the spec's own
+ * `now`), or a later give in the same spec is met with the confirm dialog.
+ */
+export function intervalDoseGivenAt(
+  backup: SeedBackup,
+  opts: { id: string; givenAt: IsoLike; scheduledFor: IsoLike | null },
+): SeedBackup {
+  return {
+    ...backup,
+    doseEvents: [
+      ...backup.doseEvents,
+      {
+        id: opts.id,
+        courseId: COURSE_INTERVAL_ID,
+        scheduledFor: opts.scheduledFor,
+        status: "given",
+        loggedAt: opts.givenAt,
+        givenAt: opts.givenAt,
+        amount: 0.5,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(COURSE_INTERVAL_ID, opts.scheduledFor),
+        supersedesId: null,
+        actorId: USER_ID,
+        createdAt: opts.givenAt,
+        updatedAt: opts.givenAt,
+        deletedAt: null,
+      },
+    ],
+  };
+}
+
+/** SPEC §3b-i's optional daily cap, applied to the seeded interval course. */
+export function withIntervalMaxPerDay(backup: SeedBackup, maxPerDay: number): SeedBackup {
+  return {
+    ...backup,
+    courses: backup.courses.map((course) =>
+      course.id === COURSE_INTERVAL_ID
+        ? {
+            ...course,
+            // Rebuilt rather than spread: the seeded interval schedule is
+            // `{ kind: "fromLastDose", intervalHours: 8 }`, and restating it
+            // keeps this a `Schedule` rather than a widened object.
+            schedule: { kind: "fromLastDose", intervalHours: 8, maxPerDay },
+          }
+        : course,
+    ),
   };
 }
 

@@ -46,7 +46,7 @@ import { Button, DoseRow, IconButton } from "@/components/ds";
 import { useT } from "@/i18n";
 import type { T } from "@/i18n";
 import { LogAtTimeSheet } from "./LogAtTimeSheet";
-import type { LogAtTimeContext, TodayDose } from "./types";
+import type { LogAtTimeContext, TodayCountPill, TodayDose } from "./types";
 
 /** SPEC §5.1's long-press, and the slop a real thumb needs before it counts as a drag. */
 const LONG_PRESS_MS = 500;
@@ -126,6 +126,29 @@ function notStartedDetail(detail: string, t: T): string {
   return detail.toLowerCase().includes(phrase.toLowerCase())
     ? detail
     : `${phrase} · ${detail}`;
+}
+
+/**
+ * SPEC §4's row pill, worded per the shape `todayModel` chose for this
+ * course's schedule (`TodayCountPill`). One switch, three catalogue entries —
+ * the decision of WHICH question the pill answers was already made in the
+ * model; this only says it.
+ *
+ * `max` deliberately reuses `today.pill.cap`, the entry the amber capped pill
+ * already uses: an under-cap "1 of 3 max" and an at-cap "3 of 3 max" are the
+ * same sentence about the same two numbers, and wording them separately would
+ * make the pill appear to change its mind at the moment it turns amber.
+ */
+function pillLabelFor(count: TodayCountPill | null, t: T): string | undefined {
+  if (count === null) return undefined;
+  switch (count.kind) {
+    case "occurrences":
+      return t("today.pill.count", { given: count.given, total: count.total });
+    case "max":
+      return t("today.pill.cap", { given: count.given, max: count.max });
+    case "givenOnly":
+      return t("today.pill.givenCount", { given: count.given });
+  }
 }
 
 const MENU_ITEM_STYLE = {
@@ -230,15 +253,10 @@ export function TodayDoseRow({
   };
 
   // SPEC §4's row pill — already localized here, never inside the DS
-  // component (I18N-DESIGN.md's PURITY RULE). `null` when the course has
-  // nothing to divide by (`toDose`/`attachCourseCounts` in `todayModel.ts`),
+  // component (I18N-DESIGN.md's PURITY RULE). `undefined` when
+  // `attachCourseCounts` (todayModel.ts) found nothing to say for this course,
   // so the row renders no pill at all.
-  const countLabel = dose.courseCount
-    ? t("today.pill.count", {
-        given: dose.courseCount.given,
-        total: dose.courseCount.total,
-      })
-    : undefined;
+  const countLabel = pillLabelFor(dose.courseCount ?? null, t);
   // SPEC §3b-i's `capped` state — NOT wired on this branch (see this file's
   // `cap` prop doc). `DoseRow` itself decides that `cap` replaces
   // `countLabel` rather than sitting beside it.

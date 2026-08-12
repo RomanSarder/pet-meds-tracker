@@ -409,8 +409,8 @@ describe("buildTodayView — courseCount (row pill, SPEC §4)", () => {
 
     // Both rows belong to the same course, so both report the SAME M — the
     // course's own day total, not something scoped to the individual row.
-    expect(givenDose.courseCount).toEqual({ given: 1, total: 2 });
-    expect(pendingDose.courseCount).toEqual({ given: 1, total: 2 });
+    expect(givenDose.courseCount).toEqual({ kind: "occurrences", given: 1, total: 2 });
+    expect(pendingDose.courseCount).toEqual({ kind: "occurrences", given: 1, total: 2 });
   });
 
   it("counts only `given` events toward N, never `skipped`", () => {
@@ -427,10 +427,12 @@ describe("buildTodayView — courseCount (row pill, SPEC §4)", () => {
     // M still counts the skipped dose (it is a scheduled occurrence for the
     // day) — only N (given) excludes it.
     expect(clover.resolved.find((d) => d.key === given.key)!.courseCount).toEqual({
+      kind: "occurrences",
       given: 1,
       total: 2,
     });
     expect(clover.resolved.find((d) => d.key === skipped.key)!.courseCount).toEqual({
+      kind: "occurrences",
       given: 1,
       total: 2,
     });
@@ -448,23 +450,6 @@ describe("buildTodayView — courseCount (row pill, SPEC §4)", () => {
     expect(dose.courseCount).toBeNull();
   });
 
-  // SPEC's denominator rule: a `fromLastDose` course's M comes from what is
-  // actually rendered today, never `24 / intervalHours` — at most one
-  // occurrence is ever rendered per `fromLastDose` course per day
-  // (`getOccurrences`), so a single due-today row reports M = 1, not a
-  // schedule-derived guess.
-  it("reports M = 1 for a single rendered fromLastDose occurrence, never a schedule-derived count", () => {
-    const occ = occAt(COURSE_BISCUIT_METOCLOPRAMIDE, "14:00");
-    setState(occ.key, "later");
-
-    const dose = groupNamed(
-      buildTodayView(snapshotOf([occ]), NOW, EN),
-      "Biscuit",
-    ).pending[0];
-
-    expect(dose.courseCount).toEqual({ given: 0, total: 1 });
-  });
-
   it("keeps two different courses' counts independent even for the same pet", () => {
     const metacam = occAt(COURSE_CLOVER_METACAM, "08:00");
     const metoclopramide = occAt(COURSE_CLOVER_METOCLOPRAMIDE, "09:00");
@@ -476,14 +461,132 @@ describe("buildTodayView — courseCount (row pill, SPEC §4)", () => {
       "Clover",
     );
 
+    // Metacam is `fixedTimes` — occurrence-counted, as before.
     expect(clover.resolved.find((d) => d.key === metacam.key)!.courseCount).toEqual({
+      kind: "occurrences",
       given: 1,
       total: 1,
     });
+    // Metoclopramide is `fromLastDose` — ledger-counted, and nothing was
+    // given for it TODAY (its one fixture event is two days old).
     expect(clover.pending.find((d) => d.key === metoclopramide.key)!.courseCount).toEqual({
+      kind: "givenOnly",
       given: 0,
-      total: 1,
     });
+  });
+});
+
+// The bug this replaced: an interval chain emits at most ONE occurrence per
+// day (the current head), so counting rendered rows answered "0 of 1 doses"
+// all day however many doses had actually been given. The count now comes off
+// the ledger, and the denominator is the course's own `maxPerDay` or nothing.
+describe("buildTodayView — courseCount on a fromLastDose course (row pill, SPEC §4)", () => {
+  /** A live `given` event for `courseId` at `time` on the snapshot day. */
+  function givenAt(courseId: string, time: LocalTime, id: string): DoseEvent {
+    const at = atLocalTime(DAY, time).toISOString();
+    return {
+      id,
+      courseId,
+      scheduledFor: null,
+      status: "given",
+      loggedAt: at,
+      givenAt: at,
+      amount: 0.5,
+      note: null,
+      occurrenceKey: occurrenceKeyFor(courseId, null),
+      supersedesId: null,
+      actorId: "a0000000-0000-4000-8000-000000000001",
+      createdAt: at,
+      updatedAt: at,
+      deletedAt: null,
+    };
+  }
+
+  function intervalDose(events: DoseEvent[]) {
+    // One rendered row — exactly what an interval chain ever emits — while
+    // the ledger holds however many doses `events` says.
+    const occ = occAt(COURSE_CLOVER_METOCLOPRAMIDE, "22:00");
+    setState(occ.key, "later");
+    return groupNamed(buildTodayView(snapshotOf([occ], { events }), NOW, EN), "Clover")
+      .pending.find((d) => d.key === occ.key)!;
+  }
+
+  it("counts today's given events off the ledger, not the single rendered row", () => {
+    const dose = intervalDose([
+      givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "06:00", "e1"),
+      givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "14:00", "e2"),
+    ]);
+
+    expect(dose.courseCount).toEqual({ kind: "givenOnly", given: 2 });
+  });
+
+  it("counts only THIS course's doses, and only the ones given TODAY", () => {
+    const yesterday = givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "06:00", "e-old");
+    const at = atLocalTime(addLocalDays(DAY, -1), "06:00").toISOString();
+    const dose = intervalDose([
+      { ...yesterday, loggedAt: at, givenAt: at },
+      givenAt(COURSE_CLOVER_METACAM, "07:00", "e-other-course"),
+      givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "14:00", "e-today"),
+    ]);
+
+    expect(dose.courseCount).toEqual({ kind: "givenOnly", given: 1 });
+  });
+
+  it("excludes a skipped dose and a retracted (deleted) one — N is doses GIVEN", () => {
+    const skipped: DoseEvent = {
+      ...givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "06:00", "e-skipped"),
+      status: "skipped",
+    };
+    const deleted: DoseEvent = {
+      ...givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "10:00", "e-deleted"),
+      deletedAt: atLocalTime(DAY, "10:05").toISOString(),
+    };
+    const dose = intervalDose([
+      skipped,
+      deleted,
+      givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "14:00", "e-live"),
+    ]);
+
+    expect(dose.courseCount).toEqual({ kind: "givenOnly", given: 1 });
+  });
+
+  it("shows the course's own maxPerDay as the denominator when it has one", () => {
+    // The cap lives on the COURSE's schedule, so the pill can show it before
+    // the cap is reached — `Occurrence.givenToday`/`maxPerDay` only describe
+    // the at-cap state.
+    const capped = data.courses.map((c) =>
+      c.id === COURSE_CLOVER_METOCLOPRAMIDE
+        ? { ...c, schedule: { kind: "fromLastDose" as const, intervalHours: 8, maxPerDay: 3 } }
+        : c,
+    );
+    const occ = occAt(COURSE_CLOVER_METOCLOPRAMIDE, "22:00");
+    setState(occ.key, "later");
+
+    const dose = groupNamed(
+      buildTodayView(
+        snapshotOf([occ], {
+          courses: capped,
+          events: [givenAt(COURSE_CLOVER_METOCLOPRAMIDE, "06:00", "e1")],
+        }),
+        NOW,
+        EN,
+      ),
+      "Clover",
+    ).pending.find((d) => d.key === occ.key)!;
+
+    expect(dose.courseCount).toEqual({ kind: "max", given: 1, max: 3 });
+  });
+
+  it("stays null on a notStarted chain — nothing has been given, and the row shows Start course", () => {
+    const none = occNotStarted(COURSE_BISCUIT_METOCLOPRAMIDE);
+    setState(none.key, "notStarted");
+
+    const dose = groupNamed(
+      buildTodayView(snapshotOf([none]), NOW, EN),
+      "Biscuit",
+    ).pending.find((d) => d.key === none.key)!;
+
+    expect(dose.courseCount).toBeNull();
   });
 });
 
@@ -511,7 +614,7 @@ describe("buildTodayView — cap (SPEC §3b-i)", () => {
     expect(dose!.cap).toBeNull();
     // Ordinary pill data is untouched — nothing about the cap wiring
     // interferes with the fourth-dose-with-no-comment case.
-    expect(dose!.courseCount).toEqual({ given: 0, total: 1 });
+    expect(dose!.courseCount).toEqual({ kind: "occurrences", given: 0, total: 1 });
   });
 
   it("computes cap.given/max verbatim from the capped occurrence's own givenToday/maxPerDay, and keeps the row in the pending list rather than dropping it", () => {
@@ -847,6 +950,31 @@ describe("buildTodayView — Ukrainian", () => {
     expect(UK.t("today.pill.count", { given: 1, total: 1 })).toBe("1 з 1 доза");
     expect(UK.t("today.pill.count", { given: 0, total: 3 })).toBe("0 з 3 дози");
     expect(UK.t("today.pill.count", { given: 2, total: 5 })).toBe("2 з 5 доз");
+  });
+
+  // The denominator-less interval pill. "дано" governs the accusative, so the
+  // noun declines with the only number there is — including n = 0, which
+  // Ukrainian puts in the same `many` form as 5, and n = 21, which takes the
+  // singular exactly as `today.subtitle` does.
+  it("declines the Ukrainian given-count pill: n = 0, 1, 2, 5, 21", () => {
+    expect(UK.t("today.pill.givenCount", { given: 0 })).toBe("дано 0 доз");
+    expect(UK.t("today.pill.givenCount", { given: 1 })).toBe("дано 1 дозу");
+    expect(UK.t("today.pill.givenCount", { given: 2 })).toBe("дано 2 дози");
+    expect(UK.t("today.pill.givenCount", { given: 5 })).toBe("дано 5 доз");
+    expect(UK.t("today.pill.givenCount", { given: 21 })).toBe("дано 21 дозу");
+  });
+
+  it("renders an interval course's Ukrainian pill from the ledger count", () => {
+    const occ = occAt(COURSE_CLOVER_METOCLOPRAMIDE, "22:00");
+    setState(occ.key, "later");
+
+    const dose = groupNamed(
+      buildTodayView(snapshotOf([occ]), NOW, UK),
+      "Clover",
+    ).pending.find((d) => d.key === occ.key)!;
+
+    expect(dose.courseCount).toEqual({ kind: "givenOnly", given: 0 });
+    expect(UK.t("today.pill.givenCount", { given: 0 })).toBe("дано 0 доз");
   });
 
   // The overdue banner's own count (`today.banner.overdueCount`), at every

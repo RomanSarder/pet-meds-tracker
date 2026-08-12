@@ -163,11 +163,54 @@ describe("TodayDoseRow", () => {
   it("renders the row pill from dose.courseCount, on both a pending and a resolved row", async () => {
     renderWithProviders(
       <TodayDoseRow
-        dose={makeDose("due", { courseCount: { given: 1, total: 2 } })}
+        dose={makeDose("due", { courseCount: { kind: "occurrences", given: 1, total: 2 } })}
         {...handlers()}
       />,
     );
     expect(await screen.findByText("1 of 2 doses")).toBeInTheDocument();
+  });
+
+  // An interval course with no daily maximum: there is no denominator to
+  // show, so the pill states the count on its own.
+  it("renders the bare given count for a `givenOnly` pill, with no denominator", async () => {
+    renderWithProviders(
+      <TodayDoseRow
+        dose={makeDose("due", { courseCount: { kind: "givenOnly", given: 2 } })}
+        {...handlers()}
+      />,
+    );
+    expect(await screen.findByText("2 doses given")).toBeInTheDocument();
+    // No "N of M" anywhere in the pill — the detail line's own "day 3 of 7"
+    // is course progress, not a count, so the assertion is scoped to a pill
+    // shaped like a count.
+    expect(screen.queryByText(/^\d+ of \d+/)).not.toBeInTheDocument();
+  });
+
+  it("singularizes the `givenOnly` pill at one dose", async () => {
+    renderWithProviders(
+      <TodayDoseRow
+        dose={makeDose("due", { courseCount: { kind: "givenOnly", given: 1 } })}
+        {...handlers()}
+      />,
+    );
+    expect(await screen.findByText("1 dose given")).toBeInTheDocument();
+  });
+
+  // The under-cap half of SPEC §3b-i: same sentence the amber capped pill
+  // uses, so the row does not re-word itself when it reaches the maximum.
+  it("renders a `max` pill as `N of M max`, quietly, while the row is still giveable", async () => {
+    renderWithProviders(
+      <TodayDoseRow
+        dose={makeDose("due", { courseCount: { kind: "max", given: 1, max: 3 } })}
+        {...handlers()}
+      />,
+    );
+    expect(await screen.findByText("1 of 3 max")).toBeInTheDocument();
+    // Not capped, so the ordinary Give button is still the row's action.
+    expect(screen.getByRole("button", { name: "Give" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Give Metacam anyway/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders no pill when dose.courseCount is null", async () => {
@@ -187,7 +230,7 @@ describe("TodayDoseRow", () => {
     const props = handlers();
     renderWithProviders(
       <TodayDoseRow
-        dose={makeDose("due", { courseCount: { given: 3, total: 5 } })}
+        dose={makeDose("due", { courseCount: { kind: "occurrences", given: 3, total: 5 } })}
         {...props}
         cap={{ given: 3, max: 3, onGiveAnyway }}
       />,

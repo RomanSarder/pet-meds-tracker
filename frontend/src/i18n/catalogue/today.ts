@@ -64,10 +64,25 @@ export interface TodayMessages {
    */
   "today.pill.count": (p: { given: number; total: number }) => string;
   /**
-   * "3 of 3 max" — the amber pill SPEC §3b-i's `capped` state replaces
-   * `today.pill.count` with, never alongside it. `given`/`max` come from
-   * `todayModel.ts`'s `toDose`, which reads them off the occurrence's own
-   * `givenToday`/`maxPerDay` verbatim.
+   * "2 doses given" — the row pill for a `fromLastDose` course with NO daily
+   * maximum (SPEC §4). `given` is that course's live `given` events for the
+   * local day, counted off the ledger by the engine's `countGivenOnDay`, not
+   * off rendered rows: an interval chain shows at most one occurrence at a
+   * time, so `today.pill.count` could only ever say "0 of 1" there.
+   *
+   * No denominator, by design — an interval course's daily total is
+   * unknowable in advance (COMMON §6 item 8) — and no "today" either, which
+   * SPEC §4 reserves for the pet card's `today.counter`.
+   */
+  "today.pill.givenCount": (p: { given: number }) => string;
+  /**
+   * "3 of 3 max" — the daily-maximum pill (SPEC §3b-i), in BOTH its states:
+   * the ordinary quiet pill while a capped-schedule course is still under its
+   * maximum, and the amber one `capped` shows once it is reached. Same
+   * sentence either way, so the pill does not re-word itself at the moment it
+   * changes colour. `given`/`max` come from `todayModel.ts` — from
+   * `countGivenOnDay`/`schedule.maxPerDay` under the cap, and from the
+   * occurrence's own `givenToday`/`maxPerDay` verbatim at it.
    */
   "today.pill.cap": (p: { given: number; max: number }) => string;
   /**
@@ -376,6 +391,13 @@ export const enToday = (f: Formatters): TodayMessages => ({
   "today.counter": (p) => `${p.done} of ${p.total} today`,
 
   "today.pill.count": (p) => `${p.given} of ${p.total} doses`,
+  // Reaches n = 0 ("0 doses given" on a course nothing has been given for
+  // today yet), which English pluralizes as `other` — the same form as 2+.
+  "today.pill.givenCount": (p) =>
+    f.plural(p.given, {
+      one: `${p.given} dose given`,
+      other: `${p.given} doses given`,
+    }),
   "today.pill.cap": (p) => `${p.given} of ${p.max} max`,
   "today.pill.giveAnyway": () => "Give anyway",
   "today.pill.giveAnyway.aria": (p) => `Give ${p.medicationName} anyway`,
@@ -538,6 +560,17 @@ export const ukToday = (f: Formatters): TodayMessages => ({
       few: `${p.given} з ${p.total} дози`,
       many: `${p.given} з ${p.total} доз`,
       other: `${p.given} з ${p.total} дози`,
+    }),
+  // "дано" is the impersonal past passive and governs the accusative, so the
+  // noun declines with `given`: 1 дозу / 2 дози / 5 доз. `many` also covers
+  // 0 ("дано 0 доз"), which is the form this reaches on a course nothing has
+  // been given for today yet.
+  "today.pill.givenCount": (p) =>
+    f.plural(p.given, {
+      one: `дано ${p.given} дозу`,
+      few: `дано ${p.given} дози`,
+      many: `дано ${p.given} доз`,
+      other: `дано ${p.given} дози`,
     }),
   // "макс." is an invariant abbreviation, the same convention `today.logAtTime.offsetMinutes`/`offsetHours` already use — never declined.
   "today.pill.cap": (p) => `${p.given} з ${p.max} макс.`,
