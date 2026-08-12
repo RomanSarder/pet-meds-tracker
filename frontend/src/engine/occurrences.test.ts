@@ -311,7 +311,7 @@ describe("getOccurrences — fromLastDose", () => {
     );
   });
 
-  it("stops once that overdue dose is SKIPPED — a resolved row does not reappear forever", () => {
+  it("moves past a SKIPPED dose rather than repeating it — the skipped slot is never re-emitted", () => {
     const course = makeCourse({
       schedule: { kind: "fromLastDose", intervalHours: 8 },
       startDate: "2026-08-01",
@@ -323,21 +323,67 @@ describe("getOccurrences — fromLastDose", () => {
       givenAt: "2026-08-05T13:00:00.000Z",
       loggedAt: "2026-08-05T13:00:00.000Z",
     });
+    const skippedSlot = "2026-08-05T21:00:00.000Z";
     const skipped = makeEvent({
       courseId: course.id,
       status: "skipped",
-      scheduledFor: "2026-08-05T21:00:00.000Z",
+      scheduledFor: skippedSlot,
       givenAt: "2026-08-05T21:30:00.000Z",
       loggedAt: "2026-08-05T21:30:00.000Z",
     });
     const ctx: EngineContext = { courses: [course], events: [given, skipped], courseEvents: [] };
 
-    // Visible on its own day, carrying the skip…
-    const onDueDay = getOccurrences("2026-08-05", ctx);
-    expect(onDueDay).toHaveLength(1);
-    expect(onDueDay[0].event?.id).toBe(skipped.id);
-    // …and gone the next day, rather than repeating as a resolved row.
-    expect(getOccurrences("2026-08-06", ctx)).toHaveLength(0);
+    // The chain has advanced one interval past the skipped slot, and what it
+    // now offers is outstanding rather than a resolved row shown again.
+    for (const day of ["2026-08-05", "2026-08-06", "2026-08-09"]) {
+      const occs = getOccurrences(day, ctx);
+      expect(occs, `expected an occurrence on ${day}`).toHaveLength(1);
+      expect(occs[0].dueAt?.toISOString()).toBe("2026-08-06T05:00:00.000Z");
+      expect(occs[0].event).toBeNull();
+      expect(occs[0].key).not.toBe(occurrenceKeyFor(course.id, skippedSlot));
+    }
+  });
+
+  // Reported from a real household, reconstructed exactly: Corneregel every
+  // 2h. 23:12 give (next dose 01:12), then a 23:42 skip of that 01:12 slot.
+  // The chain used to advance ONLY on a `given` event, so `dueAt` stayed
+  // pinned at 01:12 with a skip bound to it — resolved, forever. The course
+  // could never offer another dose: the pet read "all done" on both days and
+  // there was no Give button anywhere to bring it back.
+  it("a SKIPPED dose still advances the chain, so the course can never dead-end", () => {
+    const course = makeCourse({
+      schedule: { kind: "fromLastDose", intervalHours: 2 },
+      startDate: "2026-08-01",
+    });
+    const given2312 = makeEvent({
+      courseId: course.id,
+      scheduledFor: null,
+      status: "given",
+      givenAt: "2026-08-11T20:12:00.000Z", // 21:12 BST on the 11th
+      loggedAt: "2026-08-11T20:12:00.000Z",
+    });
+    // The 01:12 slot that give produced, skipped half an hour later.
+    const skippedSlot = "2026-08-11T22:12:00.000Z"; // 23:12 BST — +2h
+    const skipped = makeEvent({
+      courseId: course.id,
+      status: "skipped",
+      scheduledFor: skippedSlot,
+      givenAt: "2026-08-11T20:42:00.000Z",
+      loggedAt: "2026-08-11T20:42:00.000Z",
+    });
+    const ctx: EngineContext = {
+      courses: [course],
+      events: [given2312, skipped],
+      courseEvents: [],
+    };
+
+    // The next day the course must still be offering a dose.
+    const occs = getOccurrences("2026-08-12", ctx);
+    expect(occs).toHaveLength(1);
+    expect(occs[0].event).toBeNull();
+    // One interval on from the slot that was skipped — the grid continues.
+    expect(occs[0].dueAt?.toISOString()).toBe("2026-08-12T00:12:00.000Z");
+    expect(getDoseState(occs[0], atLocalTime("2026-08-12", "09:59"))).toBe("overdue");
   });
 
   it("stops once that overdue dose is GIVEN — the chain re-anchors onto a new occurrence", () => {

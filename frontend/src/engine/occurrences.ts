@@ -154,25 +154,46 @@ function scheduleTimelineFor(course: Course, courseEvents: CourseEvent[]): (t: D
 }
 
 /**
- * The anchor instant for a `fromLastDose` chain: the later of the newest
- * live (non-deleted, non-superseded) `given` event's `givenAt` and
- * `course.resumedAt`, whichever exist. `null` when the chain has never
- * started (SPEC §3b) — `skipped`/`missed` events never anchor it.
+ * The anchor instant for a `fromLastDose` chain: the latest of the newest
+ * live (non-deleted, non-superseded) `given` event's `givenAt`, the slot a
+ * live `skipped` event resolved, and `course.resumedAt`. `null` when none
+ * exists — the chain has never started (SPEC §3b).
+ *
+ * A SKIP ADVANCES THE CHAIN. It used to be ignored here, which dead-ended
+ * the course: skipping meant the chain kept pointing at the slot that was
+ * skipped, `getOccurrences` bound the skip to it, and that occurrence was
+ * resolved from then on. No later occurrence was ever computed, so the
+ * course silently stopped offering doses — the pet read "all done" every
+ * day with no Give button anywhere, and nothing short of editing the data
+ * could revive it. Reported from a real household on an every-2h course:
+ * a 23:12 give, then a 23:42 skip of the 01:12 slot it produced, and the
+ * course was finished for good.
+ *
+ * A skip anchors on its `scheduledFor` — the SLOT it resolved — not on
+ * `givenAt`, the wall-clock moment someone tapped Skip. The next dose is
+ * then one interval on from where the grid already was, so deciding at
+ * 23:42 to skip the 01:12 dose does not drag the whole schedule back half
+ * an hour. A skip with no `scheduledFor` (the "chain never started"
+ * sentinel) has no slot to advance from and is ignored, exactly as before.
  */
 export function anchorFor(course: Course, events: DoseEvent[]): Date | null {
-  let newestGivenAt: Date | null = null;
+  let newest: Date | null = null;
+  const consider = (candidate: Date): void => {
+    if (newest === null || candidate.getTime() > newest.getTime()) newest = candidate;
+  };
   for (const e of events) {
-    if (e.courseId !== course.id || e.status !== "given" || e.deletedAt !== null) continue;
+    if (e.courseId !== course.id || e.deletedAt !== null) continue;
     if (isSuperseded(e.id, events)) continue;
-    const givenAt = new Date(e.givenAt);
-    if (newestGivenAt === null || givenAt.getTime() > newestGivenAt.getTime()) {
-      newestGivenAt = givenAt;
+    if (e.status === "given") {
+      consider(new Date(e.givenAt));
+    } else if (e.status === "skipped" && e.scheduledFor !== null) {
+      consider(new Date(e.scheduledFor));
     }
   }
   const resumedAt = course.resumedAt !== null ? new Date(course.resumedAt) : null;
-  if (newestGivenAt === null) return resumedAt;
-  if (resumedAt === null) return newestGivenAt;
-  return newestGivenAt.getTime() >= resumedAt.getTime() ? newestGivenAt : resumedAt;
+  if (newest === null) return resumedAt;
+  if (resumedAt === null) return newest;
+  return (newest as Date).getTime() >= resumedAt.getTime() ? newest : resumedAt;
 }
 
 function buildFixedTimesOccurrence(
@@ -457,11 +478,15 @@ function fromLastDoseOccurrences(day: LocalDate, course: Course, events: DoseEve
   // off the screen at midnight, with no way back short of giving a dose the
   // UI no longer offered.
   //
-  // A RESOLVED one still stops at its due day. A `given` event re-anchors the
-  // chain, so its key is never regenerated anyway; a `skipped` one does not
-  // re-anchor (SPEC §3b), and without this guard its row would reappear every
-  // day forever.
-  if (differenceInLocalDays(dueDay, day) < 0 && event !== null) return [];
+  // A RESOLVED one still stops at its due day. Both resolving statuses now
+  // advance the chain — `given` on its own instant, `skipped` on the slot it
+  // resolved (`anchorFor`) — so in practice a resolved key is behind the
+  // anchor and never regenerated. The guard tests the two RESOLVING statuses
+  // by name rather than `event !== null`, because a `missed` event resolves
+  // nothing (SPEC §4 leaves the occurrence `overdue`) and must not be a
+  // reason to stop emitting an outstanding dose.
+  const resolved = event !== null && (event.status === "given" || event.status === "skipped");
+  if (differenceInLocalDays(dueDay, day) < 0 && resolved) return [];
   // SPEC §3b-i: present only when this course's schedule actually carries a
   // cap — an absent `maxPerDay` here is what keeps `getDoseState` from ever
   // computing `capped` for an uncapped course (the unset-case no-op).

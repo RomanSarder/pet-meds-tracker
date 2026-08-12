@@ -236,17 +236,35 @@ explicitly, not inferred.
 
 - Logging a dose early or late shifts the whole chain. This is intended — do not "correct" it.
 
-- **An outstanding interval dose never expires.** The chain re-anchors only on a `given` event,
+- **An outstanding interval dose never expires.** A dose that goes unlogged stays due — it keeps
 
-  so a dose that goes unlogged stays due — it keeps appearing, reading `overdue`, on every day
+  appearing, reading `overdue`, on every day after its due day until it is resolved. It must not
 
-  after its due day until it is given or skipped. It must not stop being generated at the end of
+  stop being generated at the end of its own day: that would take the course off Today with
 
-  its own day: that would take the course off Today with nothing to give and no way back, and
+  nothing to give and no way back, and the pet would read as done for the day.
 
-  the pet would read as done for the day. Once resolved it stops — a `given` event re-anchors
+- **Both resolving actions advance the chain.** A `given` event anchors on the instant it was
 
-  the chain onto a new occurrence, and a `skipped` one ends that occurrence where it stands.
+  given. A `skipped` event anchors on the SLOT it resolved (its `scheduledFor`), not on the
+
+  moment Skip was tapped — so deciding at 23:42 to skip the 01:12 dose leaves the grid where it
+
+  was instead of dragging it back half an hour. A skip that carries no slot (the "chain never
+
+  started" sentinel) anchors nothing.
+
+  A skip **must** advance it. While skips were ignored, skipping one dose ended the course
+
+  permanently: the chain stayed pointing at the skipped slot, that occurrence was resolved from
+
+  then on, no later one was ever computed, and the course stopped offering doses for good with
+
+  no way back through the UI.
+
+- `missed` is not a resolving status (§4 leaves the occurrence `overdue`), so it neither anchors
+
+  the chain nor stops the dose being offered.
 
 - `anchorTime` is optional and only used to seed the first occurrence if the user prefers.
 
