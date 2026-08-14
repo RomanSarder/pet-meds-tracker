@@ -1,13 +1,16 @@
 // The once-per-local-day sweep: SPEC §4's missed-dose backfill and SPEC §3c's
 // auto-transition to `finished`, plus the `lastSweepDay` guard that keeps both
 // from running twice in one day.
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import type { Course, LocalDate } from "@/domain";
 import { FIXTURE_NOW, occurrenceKeyFor } from "@/domain";
 import type { Repo } from "@/data/repo.types";
 import { createMemoryRepo } from "@/data/memoryRepo";
-import { renderWithProviders } from "@/test/renderWithProviders";
+import { clearSessionEstablished, markSessionEstablished } from "@/shared/session";
+import { markSyncedSinceLoad, resetSyncedSinceLoad } from "@/sync/freshness";
+import { renderWithProviders, userEvent } from "@/test/renderWithProviders";
 import { engineStore, makeOccurrence, resetEngineStore } from "./testEngine";
 import { useDailySweep } from "./useDailySweep";
 
@@ -30,6 +33,21 @@ function SweepHarness() {
   return <div data-testid="sweep-harness">mounted</div>;
 }
 
+/**
+ * The same harness with a `now` the test can advance, standing in for the 30s
+ * `useNow` tick that re-runs the effect in the app. Needed to show that a
+ * DEFERRED sweep is retried rather than lost.
+ */
+function TickingSweepHarness() {
+  const [now, setNow] = useState(NOW);
+  useDailySweep(now);
+  return (
+    <button data-testid="tick" onClick={() => setNow(new Date(NOW.getTime() + 30_000))}>
+      tick
+    </button>
+  );
+}
+
 async function seed(): Promise<{ repo: Repo; fixedTimesCourse: Course; intervalCourse: Course }> {
   const repo = createMemoryRepo();
   const courses = await repo.listCourses();
@@ -50,6 +68,10 @@ async function seed(): Promise<{ repo: Repo; fixedTimesCourse: Course; intervalC
 
 beforeEach(() => {
   resetEngineStore();
+  // No session and no completed cycle: the local store is the whole household,
+  // which is the state every pre-existing case here was written against.
+  clearSessionEstablished();
+  resetSyncedSinceLoad();
 });
 
 describe("useDailySweep", () => {
@@ -123,6 +145,70 @@ describe("useDailySweep", () => {
 
     expect(recordMissed).toHaveBeenCalledTimes(1);
     expect(await repo.listDoseEvents({})).toEqual(eventsAfterFirst);
+  });
+
+  // A signed-in device renders from IndexedDB before its first `/sync/pull`
+  // lands. Sweeping there marks another member's already-given dose as missed
+  // — permanently, since the ledger is append-only.
+  describe("before the first sync cycle of this page load", () => {
+    it("writes nothing and leaves the day unswept while a session exists but no cycle has completed", async () => {
+      const { repo, fixedTimesCourse } = await seed();
+      markSessionEstablished();
+      engineStore.missed = [
+        makeOccurrence(fixedTimesCourse, { day: DAY, scheduledFor: SCHEDULED_FOR }),
+      ];
+      const recordMissed = vi.spyOn(repo, "recordMissed");
+      const before = await repo.listDoseEvents({});
+
+      renderWithProviders(<SweepHarness />, { repo });
+      await screen.findByTestId("sweep-harness");
+
+      // Nothing to wait FOR — assert the absence settles rather than racing it.
+      await waitFor(() => {
+        expect(screen.getByTestId("sweep-harness")).toBeInTheDocument();
+      });
+      expect(recordMissed).not.toHaveBeenCalled();
+      expect(await repo.listDoseEvents({})).toEqual(before);
+      expect(await repo.getMeta("lastSweepDay")).toBeNull();
+    });
+
+    it("sweeps once a cycle completes — the deferral holds the day open rather than consuming it", async () => {
+      const { repo, fixedTimesCourse } = await seed();
+      markSessionEstablished();
+      engineStore.missed = [
+        makeOccurrence(fixedTimesCourse, { day: DAY, scheduledFor: SCHEDULED_FOR }),
+      ];
+
+      const before = await repo.listDoseEvents({});
+      renderWithProviders(<TickingSweepHarness />, { repo });
+      await screen.findByTestId("tick");
+      expect(await repo.getMeta("lastSweepDay")).toBeNull();
+
+      markSyncedSinceLoad();
+      await userEvent.click(screen.getByTestId("tick"));
+
+      await waitFor(async () => {
+        expect(await repo.getMeta("lastSweepDay")).toBe(DAY);
+      });
+      const created = (await repo.listDoseEvents({})).filter(
+        (e) => !before.some((b) => b.id === e.id),
+      );
+      expect(created).toHaveLength(1);
+      expect(created[0].occurrenceKey).toBe(occurrenceKeyFor(fixedTimesCourse.id, SCHEDULED_FOR));
+    });
+
+    it("sweeps immediately on a device with no session — there is no pull to wait for", async () => {
+      const { repo, fixedTimesCourse } = await seed();
+      engineStore.missed = [
+        makeOccurrence(fixedTimesCourse, { day: DAY, scheduledFor: SCHEDULED_FOR }),
+      ];
+
+      renderWithProviders(<SweepHarness />, { repo });
+
+      await waitFor(async () => {
+        expect(await repo.getMeta("lastSweepDay")).toBe(DAY);
+      });
+    });
   });
 
   it("finishes the courses the engine nominates", async () => {

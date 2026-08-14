@@ -34,13 +34,34 @@ function compareEvents(a: DoseEvent, b: DoseEvent): number {
 /**
  * The live DoseEvent for an occurrence key: newest non-deleted,
  * non-superseded event for that key, or `null` when nothing is logged.
+ *
+ * A RESOLVING event (`given`/`skipped`) always outranks a `missed` one for the
+ * same key, whatever the timestamps say — newest-wins applies only WITHIN a
+ * rank. `missed` is not a report about the dose; it is the sweep's record that
+ * nothing was logged (SPEC §4), so it can only ever be true in the absence of
+ * a resolution. Ranking it purely by `loggedAt` let a later `missed` MASK an
+ * earlier `given`, and the two readers of an occurrence then disagreed: the
+ * screen (which reads the event through this function) rendered the dose as
+ * overdue with a Give button, while `logDose`'s same-occurrence block (which
+ * scans `given`/`skipped` by `scheduledFor`) refused the write as a duplicate
+ * — an action offered that could not succeed, however often it was retried.
+ *
+ * That is not hypothetical: a household hit it when one device's daily sweep
+ * ran against local data that did not yet hold another member's give from the
+ * same morning, and wrote `missed` over an occurrence already given. The
+ * offending row cannot be unwritten on devices that already hold it (the
+ * ledger is append-only, and `applyRemoteChanges` inserts rather than
+ * overwrites), so this precedence is also what REPAIRS such data in place.
+ * `useDailySweep` separately stops the write from happening again.
  */
 export function liveEventFor(key: string, events: DoseEvent[]): DoseEvent | null {
   const candidates = events.filter(
     (e) => e.deletedAt === null && e.occurrenceKey === key && !isSuperseded(e.id, events),
   );
   if (candidates.length === 0) return null;
-  return candidates.reduce((newest, e) => (compareEvents(e, newest) > 0 ? e : newest));
+  const resolving = candidates.filter((e) => e.status === "given" || e.status === "skipped");
+  const ranked = resolving.length > 0 ? resolving : candidates;
+  return ranked.reduce((newest, e) => (compareEvents(e, newest) > 0 ? e : newest));
 }
 
 /** A course generates occurrences only while it is live and active (SPEC §3c). */

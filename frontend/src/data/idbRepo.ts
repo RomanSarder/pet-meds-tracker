@@ -1061,39 +1061,66 @@ export function createIdbRepo(opts?: { dbName?: string }): Repo {
       return count;
     }
 
-    /** Insert if the id is unheld; never overwrite an id already present. Returns the rows actually inserted. */
-    async function applyLedger<T extends { id: string }>(
-      store: { get(id: string): Promise<T | undefined>; add(row: T): Promise<unknown> },
+    /**
+     * Insert if the id is unheld; never overwrite the CONTENT of an id already
+     * present. Returns the rows actually written.
+     *
+     * The one exception is a TOMBSTONE — an incoming row whose `deletedAt` is
+     * set where the local copy's is not. Append-only protects what a ledger
+     * row SAYS, so that no device can rewrite another's history; it is not a
+     * reason for a retraction to be unable to travel. Without this, a row
+     * deleted at the source stayed live forever on every device that had
+     * already pulled it, and the only devices that ever saw the correction
+     * were the ones that had never seen the row at all.
+     *
+     * Deliberately one-way: a tombstone can land on a live row, never the
+     * reverse, so this cannot resurrect a row any device has already deleted
+     * and cannot turn into a content-overwrite channel. `deletedAt` is the
+     * only field the transition touches by construction — the whole row is
+     * replaced, but the sender is the same ledger row, unchanged apart from
+     * its deletion.
+     */
+    async function applyLedger<T extends { id: string; deletedAt: IsoDateTime | null }>(
+      store: { get(id: string): Promise<T | undefined>; add(row: T): Promise<unknown>; put(row: T): Promise<unknown> },
       incoming: T[] | undefined,
-    ): Promise<T[]> {
-      if (!incoming) return [];
+    ): Promise<{ written: T[]; inserted: T[] }> {
+      if (!incoming) return { written: [], inserted: [] };
+      const written: T[] = [];
       const inserted: T[] = [];
       for (const row of incoming) {
         const existing = await store.get(row.id);
         if (existing) {
+          if (row.deletedAt !== null && existing.deletedAt === null) {
+            await store.put(row);
+            written.push(row);
+            continue;
+          }
           ignored += 1;
           continue;
         }
         await store.add(row);
+        written.push(row);
         inserted.push(row);
       }
-      return inserted;
+      return { written, inserted };
     }
 
     applied.pets = await applyMutable(petsStore, changes.pets);
     applied.medications = await applyMutable(medsStore, changes.medications?.map(toStoredMedication));
     applied.courses = await applyMutable(coursesStore, changes.courses);
 
-    const insertedDoseEvents = await applyLedger(doseStore, changes.doseEvents);
-    applied.doseEvents = insertedDoseEvents.length;
-    const insertedStock = await applyLedger(stockStore, changes.stockAdjustments);
-    applied.stockAdjustments = insertedStock.length;
-    const insertedCourseEvents = await applyLedger(courseEventsStore, changes.courseEvents);
-    applied.courseEvents = insertedCourseEvents.length;
+    applied.doseEvents = (await applyLedger(doseStore, changes.doseEvents)).written.length;
+    applied.stockAdjustments = (await applyLedger(stockStore, changes.stockAdjustments)).written.length;
+    const courseEventResult = await applyLedger(courseEventsStore, changes.courseEvents);
+    applied.courseEvents = courseEventResult.written.length;
+    const insertedCourseEvents = courseEventResult.inserted;
 
     // The Lamport counter jumps to max(local, max seq among the rows just
     // inserted) — never derived from rows we ignored, since an ignored
     // ledger row's id was already held and its seq already accounted for.
+    // A tombstoned row is in the same position: its seq was accounted for
+    // when the row itself first arrived, so `inserted` (not `written`) is
+    // what feeds this.
     if (insertedCourseEvents.length > 0) {
       const maxIncomingSeq = Math.max(...insertedCourseEvents.map((e) => e.seq));
       const seqRec = await metaStore.get("courseEventSeq");

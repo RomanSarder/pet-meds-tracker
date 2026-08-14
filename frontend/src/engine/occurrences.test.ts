@@ -736,6 +736,106 @@ describe("liveEventFor", () => {
   it("returns null when there is no live candidate for the key", () => {
     expect(liveEventFor(occurrenceKeyFor("course-x", null), [])).toBeNull();
   });
+
+  // The reported defect: one device's sweep wrote `missed` over an occurrence
+  // another member had already given hours earlier, and newest-wins let the
+  // placeholder outrank the real dose.
+  it("keeps a `given` event ahead of a `missed` one logged later for the same key", () => {
+    const courseId = "course-masked";
+    const scheduledFor = "2026-08-13T05:00:00.000Z";
+    const key = occurrenceKeyFor(courseId, scheduledFor);
+
+    const given = makeEvent({
+      id: "e-given",
+      courseId,
+      scheduledFor,
+      status: "given",
+      givenAt: "2026-08-13T08:40:48.350Z",
+      loggedAt: "2026-08-13T08:40:48.350Z",
+    });
+    const missed = makeEvent({
+      id: "e-missed",
+      courseId,
+      scheduledFor,
+      status: "missed",
+      givenAt: "2026-08-13T17:22:30.850Z",
+      loggedAt: "2026-08-13T17:22:30.850Z",
+    });
+
+    expect(liveEventFor(key, [given, missed])?.id).toBe("e-given");
+    expect(liveEventFor(key, [missed, given])?.id).toBe("e-given");
+  });
+
+  it("keeps a `skipped` event ahead of a later `missed` one for the same key", () => {
+    const courseId = "course-masked-skip";
+    const scheduledFor = "2026-08-12T06:00:00.000Z";
+    const key = occurrenceKeyFor(courseId, scheduledFor);
+
+    const skipped = makeEvent({
+      id: "e-skipped",
+      courseId,
+      scheduledFor,
+      status: "skipped",
+      loggedAt: "2026-08-12T10:33:20.430Z",
+    });
+    const missed = makeEvent({
+      id: "e-missed",
+      courseId,
+      scheduledFor,
+      status: "missed",
+      loggedAt: "2026-08-13T17:22:30.848Z",
+    });
+
+    expect(liveEventFor(key, [skipped, missed])?.id).toBe("e-skipped");
+  });
+
+  it("still takes the newest WITHIN a rank — a later `missed` wins when nothing resolves the key", () => {
+    const courseId = "course-two-missed";
+    const scheduledFor = "2026-08-12T06:00:00.000Z";
+    const key = occurrenceKeyFor(courseId, scheduledFor);
+
+    const older = makeEvent({
+      id: "e-missed-older",
+      courseId,
+      scheduledFor,
+      status: "missed",
+      loggedAt: "2026-08-12T20:00:00.000Z",
+    });
+    const newer = makeEvent({
+      id: "e-missed-newer",
+      courseId,
+      scheduledFor,
+      status: "missed",
+      loggedAt: "2026-08-13T20:00:00.000Z",
+    });
+
+    expect(liveEventFor(key, [older, newer])?.id).toBe("e-missed-newer");
+  });
+
+  it("ranks a superseded `given` out entirely rather than preferring it to a live `missed`", () => {
+    const courseId = "course-superseded-given";
+    const scheduledFor = "2026-08-13T05:00:00.000Z";
+    const key = occurrenceKeyFor(courseId, scheduledFor);
+
+    const given = makeEvent({
+      id: "e-given",
+      courseId,
+      scheduledFor,
+      status: "given",
+      loggedAt: "2026-08-13T08:00:00.000Z",
+    });
+    // Corrects the give into a retraction-by-status: the course was not given.
+    const correction = makeEvent({
+      id: "e-correction",
+      courseId,
+      scheduledFor,
+      status: "missed",
+      loggedAt: "2026-08-13T09:00:00.000Z",
+      supersedesId: "e-given",
+    });
+
+    expect(liveEventFor(key, [given, correction])?.id).toBe("e-correction");
+  });
 });
 
 // SPEC §3c: editing a fixedTimes schedule is forward-only. An occurrence is

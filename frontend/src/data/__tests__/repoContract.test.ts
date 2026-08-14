@@ -1603,6 +1603,51 @@ describe.each(implementations)("Repo contract — %s", (_name, makeRepo) => {
       ).toBe("paused");
     });
 
+    it("applies a remote TOMBSTONE to a ledger row it already holds, but never the reverse and never a content change", async () => {
+      const repo = makeRepo();
+      const { courseId } = await setupCourse(repo);
+      const ts = "2026-08-13T08:40:48.350Z";
+      const remoteDose: DoseEvent = {
+        id: crypto.randomUUID(),
+        courseId,
+        scheduledFor: null,
+        status: "missed",
+        loggedAt: ts,
+        givenAt: ts,
+        amount: 0.4,
+        note: null,
+        occurrenceKey: occurrenceKeyFor(courseId, null),
+        supersedesId: null,
+        actorId: "z0000000-0000-4000-8000-00000000ffff",
+        createdAt: ts,
+        updatedAt: ts,
+        deletedAt: null,
+      };
+      await repo.applyRemoteChanges({ doseEvents: [remoteDose] });
+      expect((await repo.listDoseEvents({ courseId })).some((e) => e.id === remoteDose.id)).toBe(true);
+
+      // The deletion travels: without this, a row retracted at the source stays
+      // live forever on every device that had already pulled it.
+      const deletedAt = "2026-08-14T09:00:00.000Z";
+      const tombstoned = { ...remoteDose, deletedAt, updatedAt: deletedAt };
+      const report = await repo.applyRemoteChanges({ doseEvents: [tombstoned] });
+      expect(report.applied.doseEvents).toBe(1);
+      expect((await repo.listDoseEvents({ courseId })).some((e) => e.id === remoteDose.id)).toBe(false);
+
+      // One-way only: a live copy arriving afterwards cannot resurrect it, and
+      // the tombstone is not a back door for rewriting the row's content.
+      const resurrection = { ...remoteDose, amount: 999, updatedAt: "2026-08-15T09:00:00.000Z" };
+      const second = await repo.applyRemoteChanges({ doseEvents: [resurrection] });
+      expect(second.applied.doseEvents).toBe(0);
+      expect(second.ignored).toBe(1);
+      expect((await repo.listDoseEvents({ courseId })).some((e) => e.id === remoteDose.id)).toBe(false);
+
+      // And a second delivery of the same tombstone changes nothing further.
+      const third = await repo.applyRemoteChanges({ doseEvents: [tombstoned] });
+      expect(third.applied.doseEvents).toBe(0);
+      expect(third.ignored).toBe(1);
+    });
+
     it("bumps the local courseEventSeq counter to at least the incoming seq, so the device's own next write always sorts after what it just learned", async () => {
       const repo = makeRepo();
       const { courseId } = await setupCourse(repo); // one local "started" CourseEvent, seq 1

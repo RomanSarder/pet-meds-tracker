@@ -17,6 +17,7 @@ import { queryClient } from "@/queryClient";
 import { ApiError } from "@/shared/api";
 import { isSessionEstablished } from "@/shared/session";
 import { createSyncEngine } from "./engine";
+import { markSyncedSinceLoad, resetSyncedSinceLoad } from "./freshness";
 import { createSyncScheduler } from "./scheduler";
 import { httpTransport } from "./transport";
 import type { SyncEngine, SyncScheduler, Timers } from "./types";
@@ -56,6 +57,11 @@ export function startBackgroundSync(): void {
     const engine: SyncEngine = {
       syncOnce: async () => {
         const changed = await rawEngine.syncOnce();
+        // Set only on the success path, and only after the pull loop inside
+        // `syncOnce` has drained every page: `useDailySweep` treats this as
+        // "local data now reflects the household", which a cycle that threw
+        // (offline, 5xx) has not established. See `freshness.ts`.
+        markSyncedSinceLoad();
         if (changed) {
           void queryClient.invalidateQueries();
         }
@@ -82,6 +88,10 @@ export function startBackgroundSync(): void {
  */
 export function stopBackgroundSync(): void {
   try {
+    // Whatever is in IndexedDB after this belongs to a session that is over,
+    // and the next one may be a different account: nothing here has been
+    // confirmed against the household this device will sync with next.
+    resetSyncedSinceLoad();
     running?.stop();
   } catch {
     // Same reasoning as above: teardown must never break the caller's flow

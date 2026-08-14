@@ -363,8 +363,55 @@ export function buildLogEntries(src: LogSource): LogEntry[] {
   );
   const entries: LogEntry[] = [];
 
+  // Which occurrence keys a live, non-superseded `given`/`skipped` row already
+  // resolves. Same precedence `liveEventFor` applies on Today (SPEC §4): a
+  // `missed` row is the sweep's record that NOTHING was logged, so a slot that
+  // demonstrably was given or deliberately skipped has no missed row to tell —
+  // whichever was written first. Without this, History was the one screen that
+  // still narrated the contradiction, listing a dose as both given and missed.
+  //
+  // Keyed on rows with a REAL slot only. `scheduledFor === null` builds the
+  // `courseId|-` sentinel, which every unanchored dose on an interval course
+  // shares — it identifies no single occurrence, so nothing carrying it can
+  // contradict anything. (The sweep never writes a `missed` row with a null
+  // `scheduledFor` anyway: an occurrence with no scheduled instant has no
+  // moment to have been missed at. This does not depend on that.)
+  const resolvedKeys = new Set(
+    src.doseEvents
+      .filter(
+        (e) =>
+          e.deletedAt === null &&
+          !superseded.has(e.id) &&
+          e.scheduledFor !== null &&
+          (e.status === "given" || e.status === "skipped"),
+      )
+      .map((e) => e.occurrenceKey),
+  );
+
+  // The one `missed` row that speaks for an occurrence: earliest by
+  // (loggedAt, id). Two devices whose sweeps cross before either has pulled
+  // the other's rows each write their own — `recordMissed`'s idempotence check
+  // can only see its own store — and the same skipped dose was then listed
+  // twice. Corrections (`supersedesId !== null`) are somebody's deliberate
+  // statement about a specific row, so they are never collapsed away here.
+  const canonicalMissed = new Map<string, DoseEvent>();
+  for (const e of src.doseEvents) {
+    if (e.deletedAt !== null || superseded.has(e.id)) continue;
+    if (e.status !== "missed" || e.supersedesId !== null || e.scheduledFor === null) continue;
+    const held = canonicalMissed.get(e.occurrenceKey);
+    const earlier =
+      held === undefined ||
+      e.loggedAt < held.loggedAt ||
+      (e.loggedAt === held.loggedAt && e.id < held.id);
+    if (earlier) canonicalMissed.set(e.occurrenceKey, e);
+  }
+
   for (const de of src.doseEvents) {
     if (de.deletedAt !== null || superseded.has(de.id)) continue;
+    if (de.status === "missed" && de.supersedesId === null && de.scheduledFor !== null) {
+      if (resolvedKeys.has(de.occurrenceKey)) continue;
+      if (canonicalMissed.get(de.occurrenceKey)?.id !== de.id) continue;
+    }
     const course = courseById.get(de.courseId);
     if (!course) continue;
     const medication = medicationById.get(course.medicationId);

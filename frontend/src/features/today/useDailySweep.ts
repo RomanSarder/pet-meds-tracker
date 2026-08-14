@@ -20,7 +20,37 @@ import { localDayKey, qk } from "@/domain";
 import { getRepo } from "@/data";
 import type { EngineContext } from "@/engine";
 import { findCoursesToFinish, findMissedOccurrences } from "@/engine";
+import { isSessionEstablished } from "@/shared/session";
+import { hasSyncedSinceLoad } from "@/sync/freshness";
 import { scheduledForOf } from "./todayModel";
+
+/**
+ * Whether this device's local store may be used to decide that a dose was
+ * NEVER LOGGED — the one judgement the sweep makes that another member's
+ * device can already have answered differently.
+ *
+ * A signed-in device that has not completed a sync cycle since this page load
+ * may be a full day behind the household: the app renders from IndexedDB
+ * immediately and `startBackgroundSync()` is fire-and-forget, so the first
+ * paint (and the sweep effect with it) always beats the first pull. Sweeping
+ * there writes `missed` over doses other members gave hours ago — a permanent
+ * row, since the ledger is append-only and `applyRemoteChanges` inserts rather
+ * than overwrites. Reported from a real household: a morning dose given by one
+ * member at 11:40 was marked missed by another member's device that evening,
+ * which then showed the dose as overdue and refused every attempt to give it.
+ *
+ * Returning false only DEFERS the sweep — `now` ticks every 30s, so the effect
+ * re-runs and the sweep happens as soon as the first pull lands. A device that
+ * stays offline all day simply backfills its missed rows later, which is the
+ * right trade: `missed` exists so history reads completely (SPEC §4), and a
+ * late-but-true row beats a prompt invented one.
+ *
+ * With no session established there is nothing to wait for — sync never runs
+ * on a local-only device, and this local store is the whole household.
+ */
+function localStoreIsAuthoritative(): boolean {
+  return !isSessionEstablished() || hasSyncedSinceLoad();
+}
 
 export function useDailySweep(now: Date): void {
   const queryClient = useQueryClient();
@@ -34,6 +64,9 @@ export function useDailySweep(now: Date): void {
 
   useEffect(() => {
     if (sweptDayRef.current === day) return;
+    // Checked BEFORE the ref is claimed, so a deferral leaves the day
+    // unswept and the next `now` tick retries it.
+    if (!localStoreIsAuthoritative()) return;
     sweptDayRef.current = day;
 
     void (async () => {

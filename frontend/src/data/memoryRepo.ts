@@ -1051,26 +1051,40 @@ export function createMemoryRepo(seed?: Partial<FixtureData>): Repo {
       return Array.from(byId.values());
     }
 
-    /** Append-only ledgers: insert if the id is unheld, never overwrite an id already present. */
-    function applyLedger<T extends { id: string }>(
+    /**
+     * Append-only ledgers: insert if the id is unheld, never overwrite the
+     * content of an id already present — with the single exception of a
+     * TOMBSTONE landing on a live row. See `idbRepo.ts`'s `applyLedger` for
+     * the full reasoning; the two must stay in lockstep.
+     */
+    function applyLedger<T extends { id: string; deletedAt: IsoDateTime | null }>(
       current: T[],
       incoming: T[] | undefined,
       key: keyof RemoteChanges,
     ): { rows: T[]; inserted: T[] } {
       if (!incoming) return { rows: current, inserted: [] };
-      const ids = new Set(current.map((r) => r.id));
+      const byId = new Map(current.map((r) => [r.id, r]));
       const rows = [...current];
       const inserted: T[] = [];
+      let written = 0;
       for (const row of incoming) {
-        if (ids.has(row.id)) {
+        const existing = byId.get(row.id);
+        if (existing) {
+          if (row.deletedAt !== null && existing.deletedAt === null) {
+            rows[rows.indexOf(existing)] = structuredClone(row);
+            byId.set(row.id, row);
+            written += 1;
+            continue;
+          }
           ignored += 1;
           continue;
         }
-        ids.add(row.id);
+        byId.set(row.id, row);
         rows.push(structuredClone(row));
         inserted.push(row);
+        written += 1;
       }
-      applied[key] = inserted.length;
+      applied[key] = written;
       return { rows, inserted };
     }
 

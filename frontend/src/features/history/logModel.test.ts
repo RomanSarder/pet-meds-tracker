@@ -166,6 +166,129 @@ describe("buildLogEntries", () => {
     expect(summarise(entries)).toEqual({ given: 1, skipped: 0, missed: 0 });
   });
 
+  // The sweep writes `missed` from one device's local view of the ledger. Two
+  // ways that view can be wrong reached History as contradictory rows.
+  describe("a `missed` row the ledger contradicts", () => {
+    const SLOT = "2026-08-13T05:00:00.000Z";
+    const KEY = "course-1|2026-08-13T05:00:00.000Z";
+
+    it("is dropped when the same occurrence carries a live `given` row", () => {
+      const given = makeDoseEvent({
+        id: "dose-given",
+        status: "given",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        givenAt: "2026-08-13T08:40:48.350Z",
+        loggedAt: "2026-08-13T08:40:48.350Z",
+      });
+      const missed = makeDoseEvent({
+        id: "dose-missed",
+        status: "missed",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        givenAt: "2026-08-13T17:22:30.850Z",
+        loggedAt: "2026-08-13T17:22:30.850Z",
+      });
+
+      const entries = buildLogEntries(
+        srcOf({ courses: [makeCourse()], medications: [makeMedication()], doseEvents: [given, missed] }),
+      );
+
+      expect(entries.map((e) => e.id)).toEqual(["dose-given"]);
+      expect(summarise(entries)).toEqual({ given: 1, skipped: 0, missed: 0 });
+    });
+
+    it("is dropped when the same occurrence carries a live `skipped` row", () => {
+      const skipped = makeDoseEvent({
+        id: "dose-skipped",
+        status: "skipped",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        loggedAt: "2026-08-13T07:00:00.000Z",
+      });
+      const missed = makeDoseEvent({
+        id: "dose-missed",
+        status: "missed",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        loggedAt: "2026-08-13T17:22:30.850Z",
+      });
+
+      const entries = buildLogEntries(
+        srcOf({ courses: [makeCourse()], medications: [makeMedication()], doseEvents: [skipped, missed] }),
+      );
+
+      expect(entries.map((e) => e.id)).toEqual(["dose-skipped"]);
+    });
+
+    it("collapses two devices' `missed` rows for one slot to the earliest", () => {
+      const first = makeDoseEvent({
+        id: "dose-missed-a",
+        status: "missed",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        loggedAt: "2026-08-13T21:00:23.863Z",
+      });
+      const second = makeDoseEvent({
+        id: "dose-missed-b",
+        status: "missed",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        loggedAt: "2026-08-13T22:17:40.818Z",
+      });
+
+      const entries = buildLogEntries(
+        srcOf({ courses: [makeCourse()], medications: [makeMedication()], doseEvents: [second, first] }),
+      );
+
+      expect(entries.map((e) => e.id)).toEqual(["dose-missed-a"]);
+      expect(summarise(entries)).toEqual({ given: 0, skipped: 0, missed: 1 });
+    });
+
+    it("still shows a lone `missed` row, and a `missed` CORRECTION of a given dose", () => {
+      const lone = makeDoseEvent({
+        id: "dose-missed",
+        status: "missed",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        loggedAt: "2026-08-13T17:22:30.850Z",
+      });
+      expect(
+        buildLogEntries(
+          srcOf({ courses: [makeCourse()], medications: [makeMedication()], doseEvents: [lone] }),
+        ).map((e) => e.id),
+      ).toEqual(["dose-missed"]);
+
+      // "It was not actually given" — a deliberate statement about that row,
+      // not a stale sweep guess, so the resolving row it supersedes is gone
+      // and the correction stands.
+      const given = makeDoseEvent({
+        id: "dose-given",
+        status: "given",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        loggedAt: "2026-08-13T08:00:00.000Z",
+      });
+      const correction = makeDoseEvent({
+        id: "dose-correction",
+        status: "missed",
+        scheduledFor: SLOT,
+        occurrenceKey: KEY,
+        loggedAt: "2026-08-13T09:00:00.000Z",
+        supersedesId: "dose-given",
+      });
+      expect(
+        buildLogEntries(
+          srcOf({
+            courses: [makeCourse()],
+            medications: [makeMedication()],
+            doseEvents: [given, correction],
+          }),
+        ).map((e) => e.id),
+      ).toEqual(["dose-correction"]);
+    });
+  });
+
   it("says on the row that the time was edited, and what it used to be", () => {
     const original = makeDoseEvent({ id: "dose-original", givenAt: "2026-08-05T07:00:00.000Z" });
     const correction = makeDoseEvent({
